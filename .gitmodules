@@ -1,6 +1,6 @@
 [submodule "dependencies/lerobot"]
 	path = dependencies/lerobot
-	url = https://github.com/DuyKhongCay/lerobot_v0.5.1.git
+	url = https://github.com/huggingface/lerobot.git
 [submodule "dependencies/lekiwi_labs"]
 	path = dependencies/lekiwi_labs
 	url = https://github.com/DuyKhongCay/lerobot-lekiwi-labs.git
