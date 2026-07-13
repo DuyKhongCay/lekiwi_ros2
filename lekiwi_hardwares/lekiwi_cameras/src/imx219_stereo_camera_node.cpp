@@ -23,6 +23,7 @@
 #include <functional>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <cstdlib>
 
 // ROS2 Headers
 #include "rclcpp/rclcpp.hpp"
@@ -236,8 +237,8 @@ private:
 
     auto const &planes = mapped_buffers_[buffer];
     if (!planes.empty()) {
-      // Create cv::Mat referencing the mapped buffer directly (no copy yet)
-      cv::Mat raw_img(1232, 1640, CV_8UC3, planes[0].mem);
+      // Create cv::Mat referencing the mapped buffer directly (no copy yet), passing stride to handle padding
+      cv::Mat raw_img(1232, 1640, CV_8UC3, planes[0].mem, stream_cfg_.stride);
       
       // Pass the frame to callback, which handles thread safety and memory clone
       callback_(raw_img, ts_ns);
@@ -608,6 +609,11 @@ private:
 };
 
 int main(int argc, char *argv[]) {
+  // Set environment variable to explicitly point to the camera tuning file
+  setenv("LIBCAMERA_RPI_TUNING_FILE", "/usr/share/libcamera/ipa/rpi/pisp/imx219.json", 1);
+  // Set IPA configuration path to avoid conda environment mismatch
+  setenv("LIBCAMERA_IPA_CONFIG_PATH", "/usr/share/libcamera/ipa", 1);
+
   rclcpp::init(argc, argv);
   auto node = std::make_shared<IMX219StereoCameraNode>();
   rclcpp::spin(node);
