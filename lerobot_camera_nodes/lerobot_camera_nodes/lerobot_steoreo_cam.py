@@ -81,8 +81,8 @@ class LeRobotStereoCamNode(Node):
         # Subscribe to left and right image topics
         if HAS_MESSAGE_FILTERS:
             self.get_logger().info("Using message_filters for synchronized image subscription")
-            self.left_sub = message_filters.Subscriber(self, Image, '/stereo/left/image_raw')
-            self.right_sub = message_filters.Subscriber(self, Image, '/stereo/right/image_raw')
+            self.left_sub = message_filters.Subscriber(self, Image, '/cameras/stereo_left/image_raw/compressed')
+            self.right_sub = message_filters.Subscriber(self, Image, '/cameras/stereo_right/image_raw/compressed')
 
             # Synchronize within 50 milliseconds using approximate time synchronizer
             self.ts = message_filters.ApproximateTimeSynchronizer(
@@ -94,10 +94,10 @@ class LeRobotStereoCamNode(Node):
                 "message_filters package is not available. Falling back to manual synchronization."
             )
             self.left_sub = self.create_subscription(
-                Image, '/stereo/left/image_raw', self.left_callback, 10
+                Image, '/cameras/stereo_left/image_raw/compressed', self.left_callback, 10
             )
             self.right_sub = self.create_subscription(
-                Image, '/stereo/right/image_raw', self.right_callback, 10
+                Image, 'cameras/stereo_right/image_raw/compressed', self.right_callback, 10
             )
 
     def sync_image_callback(self, left_msg, right_msg):
