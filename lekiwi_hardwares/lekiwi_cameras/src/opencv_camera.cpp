@@ -30,14 +30,20 @@
 // OpenCV Headers
 #include <opencv2/opencv.hpp>
 
+// Base Class
+#include "lekiwi_cameras/base_camera_node.hpp"
+
 using namespace std::chrono_literals;
 
-class OpenCVCameraNode : public rclcpp::Node {
+namespace lekiwi_cameras {
+
+class OpenCVCamera : public BaseCameraNode {
 public:
-  OpenCVCameraNode() : Node("opencv_camera_node") {
+  explicit OpenCVCamera(const rclcpp::NodeOptions & options) 
+  : BaseCameraNode("opencv_camera", options) {
     // Declare parameters with default values
     this->declare_parameter<std::string>("camera_name", "camera1");
-    this->declare_parameter<int>("device_id", 0);
+    this->declare_parameter<std::string>("device_id", "0");
     this->declare_parameter<std::string>("device_path", "");
     this->declare_parameter<int>("capture_width", 640);
     this->declare_parameter<int>("capture_height", 480);
@@ -59,7 +65,12 @@ public:
     this->get_parameter("frame_id", frame_id_);
     this->get_parameter("camera_info_url", camera_info_url_);
 
-    RCLCPP_INFO(this->get_logger(), "Initializing OpenCV Camera Node");
+    // Populate base class parameters
+    common_params_.width = width_;
+    common_params_.height = height_;
+    common_params_.fps = fps_;
+
+    RCLCPP_INFO(this->get_logger(), "Initializing OpenCV Camera Component");
     RCLCPP_INFO(this->get_logger(), "Params: CameraName=%s, Capture=%dx%d, Publish=%dx%d, FPS=%.1f",
                 camera_name_.c_str(), capture_width_, capture_height_, width_, height_, fps_);
 
@@ -83,10 +94,10 @@ public:
 
     // Start background capture thread to prevent blocking the ROS executor
     running_ = true;
-    capture_thread_ = std::thread(&OpenCVCameraNode::captureLoop, this);
+    capture_thread_ = std::thread(&OpenCVCamera::captureLoop, this);
   }
 
-  ~OpenCVCameraNode() override {
+  ~OpenCVCamera() override {
     // Stop capture thread and release camera resources
     running_ = false;
     if (capture_thread_.joinable()) {
@@ -95,17 +106,30 @@ public:
     if (cap_.isOpened()) {
       cap_.release();
     }
-    RCLCPP_INFO(this->get_logger(), "Camera node shut down successfully");
+    RCLCPP_INFO(this->get_logger(), "Camera component shut down successfully");
   }
 
 private:
+  bool is_integer(const std::string & s) const {
+    if (s.empty()) return false;
+    for (char const & c : s) {
+      if (!std::isdigit(c)) return false;
+    }
+    return true;
+  }
+
   bool openCamera() {
-    // Attempt to open device using path (e.g. /dev/video0 or pipeline string) if provided, otherwise use device index
+    // Attempt to open device using path (e.g. /dev/video0 or pipeline string) if provided, 
+    // otherwise auto-detect if device_id is an index or path
     if (!device_path_.empty()) {
       RCLCPP_INFO(this->get_logger(), "Opening camera using device path: %s", device_path_.c_str());
       cap_.open(device_path_, cv::CAP_ANY);
+    } else if (is_integer(device_id_)) {
+      int idx = std::stoi(device_id_);
+      RCLCPP_INFO(this->get_logger(), "Opening camera using device ID index: %d", idx);
+      cap_.open(idx, cv::CAP_ANY);
     } else {
-      RCLCPP_INFO(this->get_logger(), "Opening camera using device ID: %d", device_id_);
+      RCLCPP_INFO(this->get_logger(), "Opening camera using device ID path: %s", device_id_.c_str());
       cap_.open(device_id_, cv::CAP_ANY);
     }
 
@@ -178,35 +202,14 @@ private:
       frame = resized_frame;
     }
 
-    // Prepare message header
+    // Prepare message header and publish
     auto stamp = this->now();
-    std_msgs::msg::Header header;
-    header.stamp = stamp;
-    header.frame_id = frame_id_;
-
-    // Publish Image message
-    auto img_msg = cv_bridge::CvImage(header, "bgr8", frame).toImageMsg();
-    image_pub_.publish(img_msg);
-
-    // Publish CameraInfo message
-    if (info_manager_->isCalibrated()) {
-      auto info = info_manager_->getCameraInfo();
-      info.header.stamp = stamp;
-      info.header.frame_id = frame_id_;
-      info_pub_->publish(info);
-    } else {
-      sensor_msgs::msg::CameraInfo info;
-      info.header.stamp = stamp;
-      info.header.frame_id = frame_id_;
-      info.width = width_;
-      info.height = height_;
-      info_pub_->publish(info);
-    }
+    publishImageAndInfo(frame, image_pub_, info_pub_, info_manager_, frame_id_, stamp);
   }
 
   // Node parameters
   std::string camera_name_;
-  int device_id_;
+  std::string device_id_;
   std::string device_path_;
   int capture_width_;
   int capture_height_;
@@ -227,10 +230,19 @@ private:
   std::unique_ptr<camera_info_manager::CameraInfoManager> info_manager_;
 };
 
-int main(int argc, char *argv[]) {
+} // namespace lekiwi_cameras
+
+#include "rclcpp_components/register_node_macro.hpp"
+RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_cameras::OpenCVCamera)
+
+#ifdef STANDALONE_MAIN
+int main(int argc, char * argv[])
+{
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<OpenCVCameraNode>();
+  rclcpp::NodeOptions options;
+  auto node = std::make_shared<lekiwi_cameras::OpenCVCamera>(options);
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;
 }
+#endif
