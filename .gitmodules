@@ -1,9 +1,10 @@
-[submodule "dependencies/lekiwi_labs"]
-	path = dependencies/lekiwi_labs
-	url = https://github.com/DuyKhongCay/lerobot-lekiwi-labs.git
+
 [submodule "dependencies/lerobot"]
 	path = dependencies/lerobot
 	url = https://github.com/huggingface/lerobot.git
 [submodule "dependencies/libcamera"]
 	path = dependencies/libcamera
 	url = https://github.com/raspberrypi/libcamera.git
+[submodule "dependencies/gstreamer"]
+	path = dependencies/gstreamer
+	url = https://github.com/GStreamer/gstreamer.git

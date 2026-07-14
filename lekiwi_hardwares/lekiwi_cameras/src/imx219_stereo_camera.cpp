@@ -651,8 +651,8 @@ public:
       right_image_pub_ = image_transport::create_publisher(this, "/cameras/stereo_right/image_raw");
     }
     if (cfg_.publish_compressed) {
-      left_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/cameras/stereo_left/image_raw/compressed", 10);
-      right_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/cameras/stereo_right/image_raw/compressed", 10);
+      left_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/cameras/stereo_left/image_compressed", 10);
+      right_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/cameras/stereo_right/image_compressed", 10);
     }
 
     left_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/cameras/stereo_left/camera_info", 10);

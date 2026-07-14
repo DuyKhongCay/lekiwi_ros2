@@ -26,11 +26,19 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBCAMERA REQUIRED IMPORTED_TARGET libcamera)
 
-# Build Components Library
+# Find GStreamer libraries (built from source and installed into conda prefix)
+pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET
+  gstreamer-1.0
+  gstreamer-video-1.0
+  gstreamer-app-1.0
+)
+
+# Build Components Library (includes libcamera, OpenCV, and GStreamer camera nodes)
 add_library(lekiwi_cameras_components SHARED
   src/base_camera_node.cpp
   src/opencv_camera.cpp
   src/imx219_stereo_camera.cpp
+  src/gstreamer_imx219_camera.cpp
 )
 
 target_include_directories(lekiwi_cameras_components PUBLIC
@@ -42,6 +50,7 @@ target_include_directories(lekiwi_cameras_components PUBLIC
 target_link_libraries(lekiwi_cameras_components
   ${OpenCV_LIBRARIES}
   PkgConfig::LIBCAMERA
+  PkgConfig::GSTREAMER
 )
 
 # ROS2 Dependencies for Component Library
@@ -58,6 +67,7 @@ ament_target_dependencies(lekiwi_cameras_components
 rclcpp_components_register_nodes(lekiwi_cameras_components
   "lekiwi_cameras::OpenCVCamera"
   "lekiwi_cameras::IMX219StereoCamera"
+  "lekiwi_cameras::GStreamerIMX219Camera"
 )
 
 # Build Standalone Executables
@@ -104,6 +114,31 @@ ament_target_dependencies(opencv_camera
   camera_info_manager
 )
 
+# GStreamer IMX219 stereo camera standalone executable
+# Links with libcamera to query unique camera IDs for selector index resolution at startup
+add_executable(gstreamer_imx219_camera
+  src/base_camera_node.cpp
+  src/gstreamer_imx219_camera.cpp
+)
+target_compile_definitions(gstreamer_imx219_camera PRIVATE STANDALONE_MAIN)
+target_include_directories(gstreamer_imx219_camera PRIVATE
+  include
+  ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(gstreamer_imx219_camera
+  ${OpenCV_LIBRARIES}
+  PkgConfig::GSTREAMER
+  PkgConfig::LIBCAMERA
+)
+ament_target_dependencies(gstreamer_imx219_camera
+  rclcpp
+  rclcpp_components
+  sensor_msgs
+  cv_bridge
+  image_transport
+  camera_info_manager
+)
+
 # Install targets
 install(TARGETS lekiwi_cameras_components
   ARCHIVE DESTINATION lib
@@ -111,7 +146,7 @@ install(TARGETS lekiwi_cameras_components
   RUNTIME DESTINATION bin
 )
 
-install(TARGETS imx219_stereo_camera opencv_camera
+install(TARGETS imx219_stereo_camera opencv_camera gstreamer_imx219_camera
   DESTINATION lib/${PROJECT_NAME}
 )
 
