@@ -27,7 +27,7 @@ def generate_stereo_node(context, *args, **kwargs):
         # GStreamer-based node: libcamerasrc plugin, camera-index selection,
         # hardware sync via extra-controls, compressed images on /cameras/stereo_*/image_compressed
         stereo_node = ComposableNode(
-            package='lekiwi_cameras',
+            package='imx219_stereo_camera',
             plugin='lekiwi_cameras::GStreamerIMX219Camera',
             name='gstreamer_imx219_camera',
             parameters=[{
@@ -46,7 +46,7 @@ def generate_stereo_node(context, *args, **kwargs):
     else:
         # libcamera-based node: direct libcamera C++ API with hardware GPIO sync
         stereo_node = ComposableNode(
-            package='lekiwi_cameras',
+            package='imx219_stereo_camera',
             plugin='lekiwi_cameras::IMX219StereoCamera',
             name='imx219_stereo_camera',
             parameters=[{
@@ -71,8 +71,8 @@ def generate_stereo_node(context, *args, **kwargs):
         composable_node_descriptions=[
             # OpenCV USB Camera Node Component
             ComposableNode(
-                package='lekiwi_cameras',
-                plugin='lekiwi_cameras::OpenCVCamera',
+                package='opencv_cameras',
+                plugin='opencv_cameras::OpenCVCamera',
                 name='opencv_camera',
                 parameters=[{
                     'camera_name': LaunchConfiguration('opencv_camera_name'),

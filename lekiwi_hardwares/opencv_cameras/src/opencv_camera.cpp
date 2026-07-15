@@ -30,17 +30,14 @@
 // OpenCV Headers
 #include <opencv2/opencv.hpp>
 
-// Base Class
-#include "lekiwi_cameras/base_camera_node.hpp"
-
 using namespace std::chrono_literals;
 
-namespace lekiwi_cameras {
+namespace opencv_cameras {
 
-class OpenCVCamera : public BaseCameraNode {
+class OpenCVCamera : public rclcpp::Node {
 public:
   explicit OpenCVCamera(const rclcpp::NodeOptions & options) 
-  : BaseCameraNode("opencv_camera", options) {
+  : rclcpp::Node("opencv_camera", options) {
     // Declare parameters with default values
     this->declare_parameter<std::string>("camera_name", "camera1");
     this->declare_parameter<std::string>("device_id", "0");
@@ -64,11 +61,6 @@ public:
     this->get_parameter("fps", fps_);
     this->get_parameter("frame_id", frame_id_);
     this->get_parameter("camera_info_url", camera_info_url_);
-
-    // Populate base class parameters
-    common_params_.width = width_;
-    common_params_.height = height_;
-    common_params_.fps = fps_;
 
     RCLCPP_INFO(this->get_logger(), "Initializing OpenCV Camera Component");
     RCLCPP_INFO(this->get_logger(), "Params: CameraName=%s, Capture=%dx%d, Publish=%dx%d, FPS=%.1f",
@@ -207,6 +199,46 @@ private:
     publishImageAndInfo(frame, image_pub_, info_pub_, info_manager_, frame_id_, stamp);
   }
 
+  sensor_msgs::msg::Image::SharedPtr convertFrameToMsg(
+    const cv::Mat & frame,
+    const std::string & frame_id,
+    const rclcpp::Time & stamp,
+    const std::string & encoding = "bgr8")
+  {
+    std_msgs::msg::Header hdr;
+    hdr.stamp = stamp;
+    hdr.frame_id = frame_id;
+    return cv_bridge::CvImage(hdr, encoding, frame).toImageMsg();
+  }
+
+  void publishImageAndInfo(
+    const cv::Mat & frame,
+    image_transport::Publisher & image_pub,
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr & info_pub,
+    std::unique_ptr<camera_info_manager::CameraInfoManager> & info_manager,
+    const std::string & frame_id,
+    const rclcpp::Time & stamp)
+  {
+    // 1. Publish Image
+    auto image_msg = convertFrameToMsg(frame, frame_id, stamp, "bgr8");
+    image_pub.publish(image_msg);
+
+    // 2. Publish Camera Info
+    if (info_manager && info_manager->isCalibrated()) {
+      auto info_msg = info_manager->getCameraInfo();
+      info_msg.header.stamp = stamp;
+      info_msg.header.frame_id = frame_id;
+      info_pub->publish(info_msg);
+    } else {
+      sensor_msgs::msg::CameraInfo info_msg;
+      info_msg.header.stamp = stamp;
+      info_msg.header.frame_id = frame_id;
+      info_msg.width = frame.cols;
+      info_msg.height = frame.rows;
+      info_pub->publish(info_msg);
+    }
+  }
+
   // Node parameters
   std::string camera_name_;
   std::string device_id_;
@@ -230,19 +262,7 @@ private:
   std::unique_ptr<camera_info_manager::CameraInfoManager> info_manager_;
 };
 
-} // namespace lekiwi_cameras
+} // namespace opencv_cameras
 
 #include "rclcpp_components/register_node_macro.hpp"
-RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_cameras::OpenCVCamera)
-
-#ifdef STANDALONE_MAIN
-int main(int argc, char * argv[])
-{
-  rclcpp::init(argc, argv);
-  rclcpp::NodeOptions options;
-  auto node = std::make_shared<lekiwi_cameras::OpenCVCamera>(options);
-  rclcpp::spin(node);
-  rclcpp::shutdown();
-  return 0;
-}
-#endif
+RCLCPP_COMPONENTS_REGISTER_NODE(opencv_cameras::OpenCVCamera)

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef LEKIWI_CAMERAS__BASE_CAMERA_NODE_HPP_
-#define LEKIWI_CAMERAS__BASE_CAMERA_NODE_HPP_
+#ifndef IMX219_STEREO_CAMERA__BASE_CAMERA_NODE_HPP_
+#define IMX219_STEREO_CAMERA__BASE_CAMERA_NODE_HPP_
 
 #include <memory>
 #include <string>
@@ -91,4 +91,4 @@ protected:
 
 }  // namespace lekiwi_cameras
 
-#endif  // LEKIWI_CAMERAS__BASE_CAMERA_NODE_HPP_
+#endif  // IMX219_STEREO_CAMERA__BASE_CAMERA_NODE_HPP_

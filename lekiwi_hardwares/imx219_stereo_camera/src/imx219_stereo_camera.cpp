@@ -51,7 +51,7 @@
 #include <libcamera/formats.h>
 
 // Base Class
-#include "lekiwi_cameras/base_camera_node.hpp"
+#include "imx219_stereo_camera/base_camera_node.hpp"
 
 using namespace std::chrono_literals;
 using namespace libcamera;
@@ -954,18 +954,4 @@ private:
 #include "rclcpp_components/register_node_macro.hpp"
 RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_cameras::IMX219StereoCamera)
 
-#ifdef STANDALONE_MAIN
-int main(int argc, char * argv[])
-{
-  rclcpp::init(argc, argv);
-  rclcpp::NodeOptions options;
-  try {
-    auto node = std::make_shared<lekiwi_cameras::IMX219StereoCamera>(options);
-    rclcpp::spin(node);
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(rclcpp::get_logger("imx219_stereo_camera_main"), "Exception caught in main: %s", e.what());
-  }
-  rclcpp::shutdown();
-  return 0;
-}
-#endif
+

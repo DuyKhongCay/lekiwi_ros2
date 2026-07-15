@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "lekiwi_cameras/base_camera_node.hpp"
+#include "imx219_stereo_camera/base_camera_node.hpp"
 
 namespace lekiwi_cameras {
 
