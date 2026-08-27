@@ -219,11 +219,11 @@ void MultiCameraHubComponent::declare_parameters()
   const std::array<std::string, kStreamCount> selectors = {
     "/base/axi/pcie@1000120000/rp1/i2c@88000/imx219@10",
     "/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10",
-    "/dev/v4l/by-id/usb-DECXIN_CAMERA_DECXIN_CAMERA_01.00.00-video-index0",
-    "/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0"};
+    "/dev/wrist",
+    "/dev/side"};
   const std::array<std::string, kStreamCount> frame_ids = {
-    "stereo_left_optical_frame", "stereo_right_optical_frame",
-    "wrist_cam_optical_frame", "side_cam_optical_frame"};
+    "stereo_left_optical", "stereo_right_optical",
+    "wrist_camera_optical", "side_camera_optical"};
   const std::array<int, kStreamCount> capture_widths = {3280, 1640, 1280, 1280};
   const std::array<int, kStreamCount> capture_heights = {2464, 2464, 720, 720};
   const std::array<int, kStreamCount> output_widths = {640, 640, 640, 640};

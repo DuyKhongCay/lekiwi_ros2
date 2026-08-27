@@ -1,0 +1,14 @@
+{
+    "configuration": "default",
+    "documentId": "5286774bc9ec8e5b75bbe2ab",
+    "documentMicroversion": "a795d457d8fe6f58e43bc940",
+    "documentVersion": "b40fd76e71e226ff58a4cd4c",
+    "elementId": "c28709df29b28e72998fdccd",
+    "fullConfiguration": "default",
+    "id": "M0NyUD1kPTwzWvPdQ",
+    "isStandardContent": false,
+    "name": "stereo_camera_mount <2>",
+    "partId": "JFT",
+    "suppressed": false,
+    "type": "Part"
+}

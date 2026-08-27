@@ -1,0 +1,8 @@
+# LeKiwi USB devices. Rules are applied on the Raspberry Pi host, not by ROS.
+
+# USB serial adapter identified by its factory serial number.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{serial}=="5B14033437", SYMLINK+="lekiwi_serial", MODE="0660", GROUP="dialout"
+
+# Capture node only (index 0) for each UVC camera.
+SUBSYSTEM=="video4linux", ATTR{index}=="0", ATTRS{idVendor}=="4c4a", ATTRS{idProduct}=="4a55", SYMLINK+="usb_wrist", MODE="0660", GROUP="video"
+SUBSYSTEM=="video4linux", ATTR{index}=="0", ATTRS{idVendor}=="1bcf", ATTRS{idProduct}=="2cd1", SYMLINK+="usb_side", MODE="0660", GROUP="video"

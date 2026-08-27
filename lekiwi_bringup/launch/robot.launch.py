@@ -15,6 +15,14 @@ def generate_launch_description():
     use_test_sources = LaunchConfiguration('use_test_sources')
     run_demo = LaunchConfiguration('run_camera_demo')
 
+    description = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([
+                FindPackageShare('lekiwi_description'), 'launch', 'description.launch.py'
+            ])
+        ),
+    )
+
     data_plane = ComposableNodeContainer(
         name=container_name,
         namespace='',
@@ -58,6 +66,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('use_test_sources', default_value='false'),
         DeclareLaunchArgument('run_camera_demo', default_value='false'),
+        description,
         data_plane,
         cameras,
         control,

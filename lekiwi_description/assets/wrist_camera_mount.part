@@ -1,0 +1,14 @@
+{
+    "configuration": "default",
+    "documentId": "2ee09bd2b640b278185fb731",
+    "documentMicroversion": "dc4c5bb0bdb3e7e8af68ed89",
+    "documentVersion": "cd9f581ab6445ac368a92c3a",
+    "elementId": "e0025829afcb6f71ff0283b5",
+    "fullConfiguration": "default",
+    "id": "MLmUxyzq+XGYZ8Yl/",
+    "isStandardContent": false,
+    "name": "wrist_camera_mount <1>",
+    "partId": "JHD",
+    "suppressed": false,
+    "type": "Part"
+}

@@ -1,0 +1,14 @@
+{
+    "configuration": "default",
+    "documentId": "94c7102bf75bcf002b2722aa",
+    "documentMicroversion": "896f1ea0d1eba5adbcd09390",
+    "documentVersion": "f2bf2bdb9cbaa74a24c8ff6c",
+    "elementId": "7de9ade1a91826ffece46b41",
+    "fullConfiguration": "default",
+    "id": "Mb+jebhh3tw7EKW9/",
+    "isStandardContent": false,
+    "name": "generic_usb_camera <1>",
+    "partId": "JGD",
+    "suppressed": false,
+    "type": "Part"
+}

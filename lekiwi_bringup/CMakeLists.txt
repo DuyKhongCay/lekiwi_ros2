@@ -7,4 +7,8 @@ install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(FILES udev/99-lekiwi.rules
+  DESTINATION share/${PROJECT_NAME}/udev
+)
+
 ament_package()

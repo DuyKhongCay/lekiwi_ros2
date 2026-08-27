@@ -7,8 +7,8 @@
     hailo.publish_debug_image: true
     hailo.vdevice_group_id: "lekiwi_chess"
 
-    cameras.stereo_left.selector: "/base/axi/pcie@1000120000/rp1/i2c@88000/imx219@10"
-    cameras.stereo_left.frame_id: "stereo_left_optical_frame"
+    cameras.stereo_left.selector: "/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10"
+    cameras.stereo_left.frame_id: "stereo_left_optical"
     cameras.stereo_left.calibration_url: ""
     cameras.stereo_left.capture_width: 3280
     cameras.stereo_left.capture_height: 2464
@@ -17,8 +17,8 @@
     cameras.stereo_left.fps: 20
     cameras.stereo_left.rotation: 180
 
-    cameras.stereo_right.selector: "/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10"
-    cameras.stereo_right.frame_id: "stereo_right_optical_frame"
+    cameras.stereo_right.selector: "/base/axi/pcie@1000120000/rp1/i2c@88000/imx219@10"
+    cameras.stereo_right.frame_id: "stereo_right_optical"
     cameras.stereo_right.calibration_url: ""
     cameras.stereo_right.capture_width: 1640
     cameras.stereo_right.capture_height: 1232
@@ -27,8 +27,8 @@
     cameras.stereo_right.fps: 30
     cameras.stereo_right.rotation: 0
 
-    cameras.usb_wrist.selector: "/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0"
-    cameras.usb_wrist.frame_id: "wrist_cam_optical_frame"
+    cameras.usb_wrist.selector: "/dev/wrist"
+    cameras.usb_wrist.frame_id: "wrist_camera_optical"
     cameras.usb_wrist.calibration_url: ""
     cameras.usb_wrist.capture_width: 1280
     cameras.usb_wrist.capture_height: 720
@@ -37,8 +37,8 @@
     cameras.usb_wrist.fps: 30
     cameras.usb_wrist.rotation: 0
 
-    cameras.usb_side.selector: "/dev/v4l/by-id/usb-DECXIN_CAMERA_DECXIN_CAMERA_01.00.00-video-index0"
-    cameras.usb_side.frame_id: "side_cam_optical_frame"
+    cameras.usb_side.selector: "/dev/side"
+    cameras.usb_side.frame_id: "side_camera_optical"
     cameras.usb_side.calibration_url: ""
     cameras.usb_side.capture_width: 1280
     cameras.usb_side.capture_height: 720

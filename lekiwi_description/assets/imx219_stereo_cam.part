@@ -1,0 +1,14 @@
+{
+    "configuration": "default",
+    "documentId": "e3ef6c0012767a03fbfd66ea",
+    "documentMicroversion": "1b5015a7e47afa4eca563eed",
+    "documentVersion": "fa55c7585a478c8858335794",
+    "elementId": "fa6fa501a487eb0960b9d7fe",
+    "fullConfiguration": "default",
+    "id": "M1+XqGtsjFbPSBPcO",
+    "isStandardContent": false,
+    "name": "imx219_stereo_cam <1>",
+    "partId": "JFD",
+    "suppressed": false,
+    "type": "Part"
+}

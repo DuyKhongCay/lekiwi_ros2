@@ -1,0 +1,14 @@
+{
+    "configuration": "default",
+    "documentId": "7f2ccd2e76867e8fbd4ad0ce",
+    "documentMicroversion": "9cae83f6f5bfb4634fac18c9",
+    "documentVersion": "a31f62a48b4f05681ce963e9",
+    "elementId": "a25f770698cf71c3d74c6164",
+    "fullConfiguration": "default",
+    "id": "Mp6qOXZnkgQfTkh39",
+    "isStandardContent": false,
+    "name": "stereo_cam_mount <1>",
+    "partId": "JFD",
+    "suppressed": false,
+    "type": "Part"
+}
