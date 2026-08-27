@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+
+import sys
+
+from lekiwi_control.mode_demo_client import main
+
+
+if __name__ == '__main__':
+    sys.exit(main())

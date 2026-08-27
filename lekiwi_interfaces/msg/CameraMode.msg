@@ -1,0 +1,8 @@
+# Copyright 2026 LeKiwi Labs
+
+uint8 STANDBY=0
+uint8 NAVIGATING=1
+uint8 CHESS_THINKING=2
+uint8 MANIPULATION_LEROBOT=3
+
+uint8 value

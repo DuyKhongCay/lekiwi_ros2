@@ -1,0 +1,6 @@
+/**:
+  ros__parameters:
+    cam_hub_node: "/multi_camera_hub"
+    cam_hub_srv: "/camera_hub/set_mode"
+    orchestrator_service: "/orchestrator/set_mode"
+    lifecycle_poll_period_sec: 0.5

@@ -1,0 +1,7 @@
+# Copyright 2026 LeKiwi Labs
+
+CameraMode requested_mode
+---
+bool success
+CameraMode applied_mode
+string message
