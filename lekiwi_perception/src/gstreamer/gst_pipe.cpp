@@ -46,21 +46,6 @@ void SampleGate::wait_drained()
   condition_.wait(lock, [this]() {return callbacks_ == 0U;});
 }
 
-CallbackGuard::CallbackGuard(std::shared_ptr<SampleGate> gate)
-{
-  gate_ = std::move(gate);
-  if (gate_) {
-    accepted_ = gate_->enter_callback();
-    active_ = true;
-  }
-}
-
-CallbackGuard::~CallbackGuard()
-{
-  if (active_) {
-    gate_->leave_callback();
-  }
-}
 
 struct GstPipeController::SinkBinding
 {
@@ -227,12 +212,13 @@ bool GstPipeController::poll_error(std::string & error)
 GstFlowReturn GstPipeController::on_new_sample(GstAppSink * sink, gpointer user_data)
 {
   auto * binding = static_cast<SinkBinding *>(user_data);
-  CallbackGuard callback_guard(binding->gate);
-  if (!callback_guard) {
-    return GST_FLOW_FLUSHING;
-  }
   try {
-    binding->controller->sample_callback_(binding->stream, sink, binding->controller->pipe_);
+    if (!binding->gate->with_callback([binding, sink]() {
+        binding->controller->sample_callback_(binding->stream, sink, binding->controller->pipe_);
+      }))
+    {
+      return GST_FLOW_FLUSHING;
+    }
   } catch (...) {
     return GST_FLOW_ERROR;
   }

@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -28,9 +29,24 @@ public:
   [[nodiscard]] bool wait_drained(std::chrono::milliseconds timeout);
   void wait_drained();
 
-private:
-  friend class CallbackGuard;
+  template<typename CallbackT>
+  [[nodiscard]] bool with_callback(CallbackT && callback)
+  {
+    if (!enter_callback()) {
+      leave_callback();
+      return false;
+    }
+    try {
+      std::forward<CallbackT>(callback)();
+    } catch (...) {
+      leave_callback();
+      throw;
+    }
+    leave_callback();
+    return true;
+  }
 
+private:
   bool enter_callback();
   void leave_callback();
 
@@ -38,23 +54,6 @@ private:
   std::condition_variable condition_;
   bool accepting_{true};
   std::size_t callbacks_{0};
-};
-
-class CallbackGuard
-{
-public:
-  explicit CallbackGuard(std::shared_ptr<SampleGate> gate);
-  ~CallbackGuard();
-
-  CallbackGuard(const CallbackGuard &) = delete;
-  CallbackGuard & operator=(const CallbackGuard &) = delete;
-
-  [[nodiscard]] explicit operator bool() const noexcept {return accepted_;}
-
-private:
-  std::shared_ptr<SampleGate> gate_;
-  bool active_{false};
-  bool accepted_{false};
 };
 
 class GstPipeController

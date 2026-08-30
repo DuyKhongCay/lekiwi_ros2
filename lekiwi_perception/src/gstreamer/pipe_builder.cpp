@@ -109,6 +109,37 @@ std::string lerobot_transform(
 
 }  // namespace
 
+const char * stream_name(StreamId stream) noexcept
+{
+  switch (stream) {
+    case StreamId::kStereoLeft:
+      return "stereo_left";
+    case StreamId::kStereoRight:
+      return "stereo_right";
+    case StreamId::kUsbWrist:
+      return "usb_wrist";
+    case StreamId::kUsbSide:
+      return "usb_side";
+  }
+  return "unknown";
+}
+
+const char * mode_name(uint8_t mode) noexcept
+{
+  switch (mode) {
+    case 0:
+      return "STANDBY";
+    case 1:
+      return "NAVIGATING";
+    case 2:
+      return "CHESS_THINKING";
+    case 3:
+      return "MANIPULATION_LEROBOT";
+    default:
+      return "INVALID";
+  }
+}
+
 bool valid_rotation(int rotation) noexcept
 {
   return rotation == 0 || rotation == 90 || rotation == 180 || rotation == 270;

@@ -4,6 +4,7 @@
 #ifndef LEKIWI_PERCEPTION__PIPE_BUILDER_HPP_
 #define LEKIWI_PERCEPTION__PIPE_BUILDER_HPP_
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -17,6 +18,14 @@ enum class StreamId : uint8_t
   kUsbWrist = 2,
   kUsbSide = 3,
 };
+
+constexpr std::size_t stream_index(StreamId stream) noexcept
+{
+  return static_cast<std::size_t>(stream);
+}
+
+[[nodiscard]] const char * stream_name(StreamId stream) noexcept;
+[[nodiscard]] const char * mode_name(uint8_t mode) noexcept;
 
 struct CamStreamConfig
 {

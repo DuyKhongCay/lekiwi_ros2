@@ -3,175 +3,24 @@
 
 #include "multi_camera_hub_component.hpp"
 
-#include <gst/video/video.h>
-#include <opencv2/imgproc.hpp>
-
 #include <algorithm>
 #include <array>
-#include <cmath>
-#include <cstring>
-#include <filesystem>
-#include <limits>
+#include <chrono>
 #include <memory>
-#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
-#include "ament_index_cpp/get_package_share_directory.hpp"
+#include "camera_geometry.hpp"
+#include "camera_hub_config.hpp"
 #include "camera_info_manager/camera_info_manager.hpp"
-#include "gst_hailo_meta.hpp"
-#include "hailo/chess_vision_mapper.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
-#include "rcl_interfaces/msg/integer_range.hpp"
-#include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "rclcpp/qos.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
-#include "vision_msgs/msg/detection2_d.hpp"
 
 namespace lekiwi_perception
 {
-namespace
-{
-
-using Matrix3 = std::array<double, 9>;
-using Matrix34 = std::array<double, 12>;
-
-constexpr std::size_t stream_index(StreamId stream)
-{
-  return static_cast<std::size_t>(stream);
-}
-
-const char * stream_name(StreamId stream)
-{
-  switch (stream) {
-    case StreamId::kStereoLeft:
-      return "stereo_left";
-    case StreamId::kStereoRight:
-      return "stereo_right";
-    case StreamId::kUsbWrist:
-      return "usb_wrist";
-    case StreamId::kUsbSide:
-      return "usb_side";
-  }
-  return "unknown";
-}
-
-const char * mode_name(uint8_t mode)
-{
-  using CameraMode = lekiwi_interfaces::msg::CameraMode;
-  switch (mode) {
-    case CameraMode::STANDBY:
-      return "STANDBY";
-    case CameraMode::NAVIGATING:
-      return "NAVIGATING";
-    case CameraMode::CHESS_THINKING:
-      return "CHESS_THINKING";
-    case CameraMode::MANIPULATION_LEROBOT:
-      return "MANIPULATION_LEROBOT";
-    default:
-      return "INVALID";
-  }
-}
-
-rcl_interfaces::msg::ParameterDescriptor integer_descriptor(
-  const std::string & description,
-  int64_t minimum,
-  int64_t maximum)
-{
-  rcl_interfaces::msg::ParameterDescriptor descriptor;
-  descriptor.description = description;
-  descriptor.integer_range.resize(1);
-  descriptor.integer_range[0].from_value = minimum;
-  descriptor.integer_range[0].to_value = maximum;
-  descriptor.integer_range[0].step = 1;
-  return descriptor;
-}
-
-Matrix3 multiply(const Matrix3 & left, const Matrix3 & right)
-{
-  Matrix3 result{};
-  for (std::size_t row = 0; row < 3U; ++row) {
-    for (std::size_t column = 0; column < 3U; ++column) {
-      for (std::size_t inner = 0; inner < 3U; ++inner) {
-        result[row * 3U + column] += left[row * 3U + inner] * right[inner * 3U + column];
-      }
-    }
-  }
-  return result;
-}
-
-Matrix34 multiply(const Matrix3 & left, const Matrix34 & right)
-{
-  Matrix34 result{};
-  for (std::size_t row = 0; row < 3U; ++row) {
-    for (std::size_t column = 0; column < 4U; ++column) {
-      for (std::size_t inner = 0; inner < 3U; ++inner) {
-        result[row * 4U + column] += left[row * 3U + inner] * right[inner * 4U + column];
-      }
-    }
-  }
-  return result;
-}
-
-Matrix3 pixel_rotation(int rotation, uint32_t width, uint32_t height)
-{
-  switch (rotation) {
-    case 0:
-      return {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-    case 90:
-      return {0.0, -1.0, static_cast<double>(height - 1U),
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0};
-    case 180:
-      return {-1.0, 0.0, static_cast<double>(width - 1U),
-        0.0, -1.0, static_cast<double>(height - 1U), 0.0, 0.0, 1.0};
-    case 270:
-      return {0.0, 1.0, 0.0, -1.0, 0.0,
-        static_cast<double>(width - 1U), 0.0, 0.0, 1.0};
-    default:
-      throw std::invalid_argument("Unsupported camera rotation");
-  }
-}
-
-sensor_msgs::msg::CameraInfo transform_camera_info(
-  sensor_msgs::msg::CameraInfo info,
-  const std::string & frame_id,
-  uint32_t capture_width,
-  uint32_t capture_height,
-  const GeomPlan & geometry)
-{
-  const uint32_t calibration_width = info.width == 0U ? capture_width : info.width;
-  const uint32_t calibration_height = info.height == 0U ? capture_height : info.height;
-  if (info.k[0] != 0.0) {
-    const Matrix3 calibration_scale = {
-      static_cast<double>(capture_width) / calibration_width, 0.0, 0.0,
-      0.0, static_cast<double>(capture_height) / calibration_height, 0.0,
-      0.0, 0.0, 1.0};
-    const Matrix3 letterbox = {
-      geometry.scale, 0.0, static_cast<double>(geometry.pre_rotation_pad_x),
-      0.0, geometry.scale, static_cast<double>(geometry.pre_rotation_pad_y),
-      0.0, 0.0, 1.0};
-    const Matrix3 transform = multiply(
-      pixel_rotation(
-        geometry.rotation, geometry.pre_rotation_width, geometry.pre_rotation_height),
-      multiply(letterbox, calibration_scale));
-    info.k = multiply(transform, info.k);
-    info.p = multiply(transform, info.p);
-  }
-
-  info.header.frame_id = frame_id;
-  info.width = (geometry.rotation == 90 || geometry.rotation == 270) ?
-    geometry.pre_rotation_height : geometry.pre_rotation_width;
-  info.height = (geometry.rotation == 90 || geometry.rotation == 270) ?
-    geometry.pre_rotation_width : geometry.pre_rotation_height;
-  info.roi.x_offset = geometry.pad_x;
-  info.roi.y_offset = geometry.pad_y;
-  info.roi.width = geometry.active_width;
-  info.roi.height = geometry.active_height;
-  info.roi.do_rectify = false;
-  return info;
-}
-
-}  // namespace
 
 MultiCameraHubComponent::MultiCameraHubComponent(const rclcpp::NodeOptions & options)
 : LifecycleNode("multi_camera_hub", options)
@@ -179,7 +28,7 @@ MultiCameraHubComponent::MultiCameraHubComponent(const rclcpp::NodeOptions & opt
   if (!gst_is_initialized()) {
     gst_init(nullptr, nullptr);
   }
-  declare_parameters();
+  declare_hub_parameters(this);
   control_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   monitoring_group_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   RCLCPP_INFO(get_logger(), "MultiCameraHubComponent created with GStreamer %s",
@@ -198,71 +47,12 @@ MultiCameraHubComponent::~MultiCameraHubComponent()
   }
 }
 
-void MultiCameraHubComponent::declare_parameters()
-{
-  declare_parameter<bool>("use_test_sources", false);
-  declare_parameter<int>(
-    "trans_timeout_ms", 5000,
-    integer_descriptor("Maximum pipeline transition and buffer-drain time", 100, 30000));
-  declare_parameter<int>("transition_timeout_ms", -1);
-  declare_parameter<int>(
-    "status_period_ms", 1000,
-    integer_descriptor("Camera hub status publication period", 100, 10000));
-  declare_parameter<int>(
-    "skew_warning_ms", 35,
-    integer_descriptor("LeRobot inter-camera skew warning threshold", 1, 1000));
-  declare_parameter<bool>("hailo.publish_debug_image", true);
-  declare_parameter<std::string>("hailo.vdevice_group_id", "lekiwi_chess");
-
-  const std::array<std::string, kStreamCount> prefixes = {
-    "cameras.stereo_left", "cameras.stereo_right", "cameras.usb_wrist", "cameras.usb_side"};
-  const std::array<std::string, kStreamCount> selectors = {
-    "/base/axi/pcie@1000120000/rp1/i2c@88000/imx219@10",
-    "/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10",
-    "/dev/wrist",
-    "/dev/side"};
-  const std::array<std::string, kStreamCount> frame_ids = {
-    "stereo_left_optical", "stereo_right_optical",
-    "wrist_camera_optical", "side_camera_optical"};
-  const std::array<int, kStreamCount> capture_widths = {3280, 1640, 1280, 1280};
-  const std::array<int, kStreamCount> capture_heights = {2464, 2464, 720, 720};
-  const std::array<int, kStreamCount> output_widths = {640, 640, 640, 640};
-  const std::array<int, kStreamCount> output_heights = {640, 480, 480, 480};
-  const std::array<int, kStreamCount> frame_rates = {20, 30, 30, 30};
-  const std::array<int, kStreamCount> rotations = {180, 0, 0, 0};
-
-  for (std::size_t index = 0; index < kStreamCount; ++index) {
-    const auto & prefix = prefixes[index];
-    declare_parameter<std::string>(prefix + ".selector", selectors[index]);
-    declare_parameter<std::string>(prefix + ".frame_id", frame_ids[index]);
-    declare_parameter<std::string>(prefix + ".calibration_url", "");
-    declare_parameter<int>(
-      prefix + ".capture_width", capture_widths[index],
-      integer_descriptor("Native capture width", 2, 8192));
-    declare_parameter<int>(
-      prefix + ".capture_height", capture_heights[index],
-      integer_descriptor("Native capture height", 2, 8192));
-    declare_parameter<int>(
-      prefix + ".output_width", output_widths[index],
-      integer_descriptor("Published image width", 2, 4096));
-    declare_parameter<int>(
-      prefix + ".output_height", output_heights[index],
-      integer_descriptor("Published image height", 2, 4096));
-    declare_parameter<int>(
-      prefix + ".fps", frame_rates[index],
-      integer_descriptor("Requested capture frame rate", 1, 120));
-    declare_parameter<int>(
-      prefix + ".rotation", rotations[index],
-      integer_descriptor("Clockwise image rotation in degrees", 0, 270));
-  }
-}
-
 MultiCameraHubComponent::CallbackReturn MultiCameraHubComponent::on_configure(
   const rclcpp_lifecycle::State &)
 {
   std::lock_guard<std::mutex> trans_lock(trans_mutex_);
   std::string error;
-  if (!load_configuration(error)) {
+  if (!load_hub_configuration(this, hub_config_, error)) {
     RCLCPP_ERROR(get_logger(), "Configuration failed: %s", error.c_str());
     set_error(error);
     return CallbackReturn::FAILURE;
@@ -276,12 +66,12 @@ MultiCameraHubComponent::CallbackReturn MultiCameraHubComponent::on_configure(
     calibrate_clock_bridge();
     for (std::size_t index = 0; index < kStreamCount; ++index) {
       const bool require_even = index == stream_index(StreamId::kStereoLeft);
-      const auto & config = streams_[index];
+      const auto & config = hub_config_.streams[index];
       geometry_plans_[index] = make_geom_plan(config, require_even);
       sensor_msgs::msg::CameraInfo calibration;
       if (!config.calibration_url.empty()) {
-        camera_info_manager::CameraInfoManager manager(this, stream_name(static_cast<StreamId>(index)),
-          config.calibration_url);
+        camera_info_manager::CameraInfoManager manager(
+          this, stream_name(static_cast<StreamId>(index)), config.calibration_url);
         if (!manager.loadCameraInfo(config.calibration_url)) {
           throw std::runtime_error("Failed to load calibration URL: " + config.calibration_url);
         }
@@ -425,84 +215,6 @@ MultiCameraHubComponent::CallbackReturn MultiCameraHubComponent::on_error(
   return CallbackReturn::SUCCESS;
 }
 
-bool MultiCameraHubComponent::load_configuration(std::string & error)
-{
-  bool use_sim_time = false;
-  get_parameter("use_sim_time", use_sim_time);
-  if (use_sim_time) {
-    error = "Physical camera clock mapping requires use_sim_time=false";
-    return false;
-  }
-
-  use_test_sources_ = get_parameter("use_test_sources").as_bool();
-  publish_debug_image_ = get_parameter("hailo.publish_debug_image").as_bool();
-  hailo_config_.vdevice_group_id = get_parameter("hailo.vdevice_group_id").as_string();
-  const int legacy_trans_timeout_ms = get_parameter("transition_timeout_ms").as_int();
-  const int trans_timeout_ms = get_parameter("trans_timeout_ms").as_int();
-  if (legacy_trans_timeout_ms >= 100) {
-    RCLCPP_WARN(
-      get_logger(),
-      "Parameter transition_timeout_ms is deprecated; use trans_timeout_ms instead");
-    transition_timeout_ = std::chrono::milliseconds(legacy_trans_timeout_ms);
-  } else {
-    transition_timeout_ = std::chrono::milliseconds(trans_timeout_ms);
-  }
-  status_period_ = std::chrono::milliseconds(get_parameter("status_period_ms").as_int());
-  skew_warning_ms_ = static_cast<double>(get_parameter("skew_warning_ms").as_int());
-
-  const auto package_share = ament_index_cpp::get_package_share_directory("lekiwi_perception");
-  hailo_config_.board_hef_path = package_share + "/resources/models/yolov8n-seg.hef";
-  hailo_config_.pcs_hef_path = package_share + "/resources/models/yolo11n.hef";
-  for (const auto & path : {
-      hailo_config_.board_hef_path, hailo_config_.pcs_hef_path})
-  {
-    if (!std::filesystem::exists(path)) {
-      error = "Missing Hailo resource: " + path;
-      return false;
-    }
-  }
-
-  const std::array<std::string, kStreamCount> prefixes = {
-    "cameras.stereo_left", "cameras.stereo_right", "cameras.usb_wrist", "cameras.usb_side"};
-  for (std::size_t index = 0; index < kStreamCount; ++index) {
-    const auto & prefix = prefixes[index];
-    auto & config = streams_[index];
-    config.selector = get_parameter(prefix + ".selector").as_string();
-    config.frame_id = get_parameter(prefix + ".frame_id").as_string();
-    config.calibration_url = get_parameter(prefix + ".calibration_url").as_string();
-    config.capture_width = static_cast<uint32_t>(
-      get_parameter(prefix + ".capture_width").as_int());
-    config.capture_height = static_cast<uint32_t>(
-      get_parameter(prefix + ".capture_height").as_int());
-    config.output_width = static_cast<uint32_t>(
-      get_parameter(prefix + ".output_width").as_int());
-    config.output_height = static_cast<uint32_t>(
-      get_parameter(prefix + ".output_height").as_int());
-    config.fps = static_cast<uint32_t>(get_parameter(prefix + ".fps").as_int());
-    config.rotation = static_cast<int>(get_parameter(prefix + ".rotation").as_int());
-
-    if (!valid_rotation(config.rotation)) {
-      error = prefix + ".rotation must be one of 0, 90, 180, or 270";
-      return false;
-    }
-    if (!use_test_sources_ && config.selector.empty()) {
-      error = prefix + ".selector cannot be empty in hardware mode";
-      return false;
-    }
-    if (config.frame_id.empty()) {
-      error = prefix + ".frame_id cannot be empty";
-      return false;
-    }
-  }
-
-  const auto & left = streams_[stream_index(StreamId::kStereoLeft)];
-  if ((left.output_width % 2U) != 0U || (left.output_height % 2U) != 0U) {
-    error = "Hailo input dimensions must be even";
-    return false;
-  }
-  return true;
-}
-
 void MultiCameraHubComponent::create_ros_entities()
 {
   const auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile();
@@ -524,7 +236,7 @@ void MultiCameraHubComponent::create_ros_entities()
   fen_pub_ = create_publisher<std_msgs::msg::String>("chess/fen", sensor_qos);
   detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>(
     "chess/detections_2d", sensor_qos);
-  if (publish_debug_image_) {
+  if (hub_config_.publish_debug_image) {
     debug_image_pub_ = create_publisher<sensor_msgs::msg::Image>("chess/debug_image", sensor_qos);
     debug_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(
       "chess/camera_info", sensor_qos);
@@ -540,15 +252,17 @@ void MultiCameraHubComponent::create_ros_entities()
     rclcpp::ServicesQoS(),
     control_group_);
   status_timer_ = create_wall_timer(
-    status_period_, std::bind(&MultiCameraHubComponent::publish_status, this), monitoring_group_);
+    hub_config_.status_period, std::bind(&MultiCameraHubComponent::publish_status, this),
+    monitoring_group_);
   bus_timer_ = create_wall_timer(
     std::chrono::milliseconds(100),
     std::bind(&MultiCameraHubComponent::poll_pipe_errors, this), control_group_);
 
   stream_processor_ = std::make_unique<CamHubStreamProcessor>(
     CamHubStreamProcessor::Bindings{
-      get_logger(), get_clock(), streams_, camera_infos_, image_pubs_, info_pubs_, fen_pub_,
-      detections_pub_, debug_image_pub_, debug_info_pub_, gst_to_ros_offset_ns_, skew_warning_ms_});
+      get_logger(), get_clock(), hub_config_.streams, camera_infos_, image_pubs_, info_pubs_,
+      fen_pub_, detections_pub_, debug_image_pub_, debug_info_pub_, gst_to_ros_offset_ns_,
+      hub_config_.skew_warning_ms});
 }
 
 void MultiCameraHubComponent::reset_ros_entities()
@@ -712,12 +426,12 @@ bool MultiCameraHubComponent::start_hailo(std::string & error)
       {"hailo_appsink", StreamId::kStereoLeft}},
     callback);
   const auto description = build_hailo_pipe(
-    streams_[stream_index(StreamId::kStereoLeft)],
+    hub_config_.streams[stream_index(StreamId::kStereoLeft)],
     geometry_plans_[stream_index(StreamId::kStereoLeft)],
-    hailo_config_,
-    use_test_sources_);
+    hub_config_.hailo_config,
+    hub_config_.use_test_sources);
   RCLCPP_INFO(get_logger(), "Starting hailo_perception_pipeline: %s", description.c_str());
-  if (!hailo_pipe_->start(description, common_clock_, transition_timeout_, error)) {
+  if (!hailo_pipe_->start(description, common_clock_, hub_config_.transition_timeout, error)) {
     set_pipe_state(true, lekiwi_interfaces::msg::CamHubStatus::PIPELINE_ERROR);
     return false;
   }
@@ -751,15 +465,15 @@ bool MultiCameraHubComponent::start_lerobot(std::string & error)
       {"usb_side_sink", StreamId::kUsbSide}},
     callback);
   const auto description = build_lerobot_pipe(
-    streams_[stream_index(StreamId::kStereoRight)],
+    hub_config_.streams[stream_index(StreamId::kStereoRight)],
     geometry_plans_[stream_index(StreamId::kStereoRight)],
-    streams_[stream_index(StreamId::kUsbWrist)],
+    hub_config_.streams[stream_index(StreamId::kUsbWrist)],
     geometry_plans_[stream_index(StreamId::kUsbWrist)],
-    streams_[stream_index(StreamId::kUsbSide)],
+    hub_config_.streams[stream_index(StreamId::kUsbSide)],
     geometry_plans_[stream_index(StreamId::kUsbSide)],
-    use_test_sources_);
+    hub_config_.use_test_sources);
   RCLCPP_INFO(get_logger(), "Starting lerobot_perception_pipeline: %s", description.c_str());
-  if (!lerobot_pipe_->start(description, common_clock_, transition_timeout_, error)) {
+  if (!lerobot_pipe_->start(description, common_clock_, hub_config_.transition_timeout, error)) {
     set_pipe_state(false, lekiwi_interfaces::msg::CamHubStatus::PIPELINE_ERROR);
     return false;
   }
@@ -774,7 +488,7 @@ bool MultiCameraHubComponent::stop_hailo(std::string & error)
     return true;
   }
   set_pipe_state(true, lekiwi_interfaces::msg::CamHubStatus::PIPELINE_STOPPING);
-  const bool stopped = hailo_pipe_->stop(transition_timeout_, error);
+  const bool stopped = hailo_pipe_->stop(hub_config_.transition_timeout, error);
   if (stopped) {
     hailo_pipe_.reset();
   }
@@ -791,7 +505,7 @@ bool MultiCameraHubComponent::stop_lerobot(std::string & error)
     return true;
   }
   set_pipe_state(false, lekiwi_interfaces::msg::CamHubStatus::PIPELINE_STOPPING);
-  const bool stopped = lerobot_pipe_->stop(transition_timeout_, error);
+  const bool stopped = lerobot_pipe_->stop(hub_config_.transition_timeout, error);
   if (stopped) {
     lerobot_pipe_.reset();
   }
@@ -872,7 +586,7 @@ void MultiCameraHubComponent::publish_status()
     message->set_mode_delay_ms = set_mode_delay_ms_;
   }
   const auto metrics = stream_processor_ ? stream_processor_->snapshot_metrics() :
-    CamHubStreamProcessor::MetricsSnapshot{};
+    MetricsSnapshot{};
   message->hailo_fps = metrics.rates[stream_index(StreamId::kStereoLeft)];
   message->stereo_right_fps = metrics.rates[stream_index(StreamId::kStereoRight)];
   message->usb_wrist_fps = metrics.rates[stream_index(StreamId::kUsbWrist)];

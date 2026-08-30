@@ -13,13 +13,10 @@ using namespace std::chrono_literals;
 TEST(SampleGate, WaitsForActiveCallback)
 {
   auto gate = std::make_shared<lekiwi_perception::SampleGate>();
-  {
-    lekiwi_perception::CallbackGuard callback(gate);
-    ASSERT_TRUE(static_cast<bool>(callback));
+  EXPECT_TRUE(gate->with_callback([&gate]() {
     gate->close();
     EXPECT_FALSE(gate->wait_drained(1ms));
-  }
+  }));
   EXPECT_TRUE(gate->wait_drained(1ms));
-  lekiwi_perception::CallbackGuard rejected(gate);
-  EXPECT_FALSE(static_cast<bool>(rejected));
+  EXPECT_FALSE(gate->with_callback([]() {}));
 }

@@ -27,7 +27,7 @@
     cameras.stereo_right.fps: 30
     cameras.stereo_right.rotation: 0
 
-    cameras.usb_wrist.selector: "/dev/wrist"
+    cameras.usb_wrist.selector: "/dev/usb_wrist"
     cameras.usb_wrist.frame_id: "wrist_camera_optical"
     cameras.usb_wrist.calibration_url: ""
     cameras.usb_wrist.capture_width: 1280
@@ -37,7 +37,7 @@
     cameras.usb_wrist.fps: 30
     cameras.usb_wrist.rotation: 0
 
-    cameras.usb_side.selector: "/dev/side"
+    cameras.usb_side.selector: "/dev/usb_side"
     cameras.usb_side.frame_id: "side_camera_optical"
     cameras.usb_side.calibration_url: ""
     cameras.usb_side.capture_width: 1280

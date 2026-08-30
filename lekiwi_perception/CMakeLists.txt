@@ -67,11 +67,14 @@ target_link_libraries(lekiwi_pieces_postprocess PRIVATE
 
 add_library(lekiwi_perception_component SHARED
   src/gstreamer/gst_pipe.cpp
+  src/gstreamer/pipe_builder.cpp
   src/hailo/chess_vision_mapper.cpp
-  src/multi_camera_hub_component.cpp
+  src/camera_geometry.cpp
+  src/camera_hub_config.cpp
+  src/stream_metrics_tracker.cpp
   src/cam_hub_stream_processor.cpp
   src/chess_visualizer_component.cpp
-  src/gstreamer/pipe_builder.cpp
+  src/multi_camera_hub_component.cpp
 )
 target_include_directories(lekiwi_perception_component PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -150,6 +153,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_sample_gate test/test_sample_gate.cpp)
   if(TARGET test_sample_gate)
     target_link_libraries(test_sample_gate lekiwi_perception_component)
+  endif()
+
+  ament_add_gtest(test_stream_metrics test/test_stream_metrics.cpp)
+  if(TARGET test_stream_metrics)
+    target_link_libraries(test_stream_metrics lekiwi_perception_component)
   endif()
 endif()
 

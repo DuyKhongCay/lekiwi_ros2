@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 
+#include "camera_geometry.hpp"
 #include "camera_info_manager/camera_info_manager.hpp"
 #include "gstreamer/pipe_builder.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -52,6 +53,32 @@ TEST(CameraGeometry, SupportsAllQuarterTurns)
     EXPECT_LE(plan.pad_x + plan.active_width, output_width) << rotation;
     EXPECT_LE(plan.pad_y + plan.active_height, output_height) << rotation;
   }
+}
+
+TEST(CameraGeometry, TransformsCameraInfoWithPaddingAndRotation)
+{
+  sensor_msgs::msg::CameraInfo raw;
+  raw.width = 1280;
+  raw.height = 720;
+  raw.k = {1000.0, 0.0, 640.0, 0.0, 1000.0, 360.0, 0.0, 0.0, 1.0};
+  raw.p = {1000.0, 0.0, 640.0, 0.0, 0.0, 1000.0, 360.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+
+  const auto config = make_config(0);
+  const auto plan = lekiwi_perception::make_geom_plan(config, false);
+  const auto transformed = lekiwi_perception::transform_camera_info(
+    raw, "test_optical", config.capture_width, config.capture_height, plan);
+
+  EXPECT_EQ(transformed.header.frame_id, "test_optical");
+  EXPECT_EQ(transformed.width, 640U);
+  EXPECT_EQ(transformed.height, 480U);
+  EXPECT_EQ(transformed.roi.x_offset, 0U);
+  EXPECT_EQ(transformed.roi.y_offset, 60U);
+  EXPECT_EQ(transformed.roi.width, 640U);
+  EXPECT_EQ(transformed.roi.height, 360U);
+  // Scale is 0.5, focal length becomes 500.0
+  EXPECT_DOUBLE_EQ(transformed.k[0], 500.0);
+  // Cy scaled: 360 * 0.5 + 60 = 240.0
+  EXPECT_DOUBLE_EQ(transformed.k[5], 240.0);
 }
 
 TEST(CameraGeometry, LoadsCalibrationFixture)

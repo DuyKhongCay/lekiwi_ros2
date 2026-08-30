@@ -11,13 +11,13 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <vector>
 
 #include "cam_hub_stream_processor.hpp"
+#include "camera_geometry.hpp"
+#include "camera_hub_config.hpp"
 #include "gstreamer/gst_pipe.hpp"
 #include "gstreamer/pipe_builder.hpp"
 #include "lekiwi_interfaces/msg/cam_hub_status.hpp"
@@ -53,8 +53,7 @@ public:
 
 private:
   static constexpr std::size_t kStreamCount = 4U;
-  void declare_parameters();
-  [[nodiscard]] bool load_configuration(std::string & error);
+
   void create_ros_entities();
   void reset_ros_entities();
   void calibrate_clock_bridge();
@@ -77,15 +76,9 @@ private:
   void set_error(const std::string & error);
   [[nodiscard]] bool lifecycle_active() const;
 
-  std::array<CamStreamConfig, kStreamCount> streams_;
+  MultiCameraHubConfig hub_config_;
   std::array<GeomPlan, kStreamCount> geometry_plans_;
   std::array<sensor_msgs::msg::CameraInfo, kStreamCount> camera_infos_;
-  HailoPipeConfig hailo_config_;
-  bool use_test_sources_{false};
-  bool publish_debug_image_{true};
-  std::chrono::milliseconds transition_timeout_{5000};
-  std::chrono::milliseconds status_period_{1000};
-  double skew_warning_ms_{35.0};
 
   GstClock * common_clock_{nullptr};
   int64_t gst_to_ros_offset_ns_{0};
