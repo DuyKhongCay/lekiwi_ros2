@@ -12,7 +12,11 @@ find_package(std_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CameraMode.msg"
   "msg/CamHubStatus.msg"
+  "msg/ServoTelemetry.msg"
+  "msg/DriveStatus.msg"
   "srv/SetCamMode.srv"
+  "srv/SetDriveEnabled.srv"
+  "srv/ResetMotorBus.srv"
   DEPENDENCIES std_msgs
 )
 
