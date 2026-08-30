@@ -1,0 +1,100 @@
+joints:
+  arm_shoulder_pan:
+    id: 1
+    drive_mode: 0
+    homing_offset: -316
+    range_min: 844
+    range_max: 3345
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+  arm_shoulder_lift:
+    id: 2
+    drive_mode: 0
+    homing_offset: -626
+    range_min: 888
+    range_max: 3226
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+  arm_elbow_flex:
+    id: 3
+    drive_mode: 0
+    homing_offset: 663
+    range_min: 948
+    range_max: 3075
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+  arm_wrist_flex:
+    id: 4
+    drive_mode: 0
+    homing_offset: 72
+    range_min: 909
+    range_max: 3095
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+  arm_wrist_roll:
+    id: 5
+    drive_mode: 0
+    homing_offset: -1206
+    range_min: 0
+    range_max: 4095
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+  arm_gripper:
+    id: 6
+    drive_mode: 0
+    homing_offset: 1961
+    range_min: 2032
+    range_max: 3474
+    p_coefficient: 16
+    i_coefficient: 0
+    d_coefficient: 32
+    return_delay_time: 0
+    acceleration: 254
+  base_left_wheel:
+    id: 7
+    drive_mode: 1
+    homing_offset: 0
+    range_min: 0
+    range_max: 4095
+    acceleration: 254
+    # STS3215 nominal 0.732 RPM per speed tick; confirm direction on the robot.
+    velocity_radians_per_second_per_tick: 0.07665486
+    velocity_direction: 1
+    max_velocity_radians_per_second: 2.0
+  base_back_wheel:
+    id: 8
+    drive_mode: 1
+    homing_offset: 0
+    range_min: 0
+    range_max: 4095
+    acceleration: 254
+    # STS3215 nominal 0.732 RPM per speed tick; confirm direction on the robot.
+    velocity_radians_per_second_per_tick: 0.07665486
+    velocity_direction: 1
+    max_velocity_radians_per_second: 2.0
+  base_right_wheel:
+    id: 9
+    drive_mode: 1
+    homing_offset: 0
+    range_min: 0
+    range_max: 4095
+    acceleration: 254
+    # STS3215 nominal 0.732 RPM per speed tick; confirm direction on the robot.
+    velocity_radians_per_second_per_tick: 0.07665486
+    velocity_direction: 1
+    max_velocity_radians_per_second: 2.0

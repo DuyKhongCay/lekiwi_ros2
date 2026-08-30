@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- Adds standard transmission metadata when a downstream consumer requires it. -->
+  <xacro:macro name="simple_transmission" params="joint_name">
+    <transmission name="${joint_name}_transmission">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="${joint_name}">
+        <mechanicalReduction>1</mechanicalReduction>
+      </joint>
+      <actuator name="${joint_name}_actuator">
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
+  </xacro:macro>
+
+  <!-- Declares interfaces once so real and mock hardware expose the same contract. -->
+  <xacro:macro name="lekiwi_control_joint" params="joint_name servo_id command_interface">
+    <joint name="${joint_name}">
+      <param name="id">${servo_id}</param>
+      <command_interface name="${command_interface}"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- Selects hardware at launch time while retaining a non-actuating mock default. -->
+  <xacro:macro name="lekiwi_ros2_control" params="hardware_type usb_port joint_config_file">
+    <ros2_control name="LeKiwiSystem" type="system">
+      <hardware>
+        <xacro:if value="${hardware_type == 'mock'}">
+          <plugin>mock_components/GenericSystem</plugin>
+        </xacro:if>
+        <xacro:if value="${hardware_type == 'real'}">
+          <plugin>lekiwi_driver/LeKiwiFeetechHardwareInterface</plugin>
+          <param name="usb_port">${usb_port}</param>
+          <param name="joint_config_file">${joint_config_file}</param>
+        </xacro:if>
+      </hardware>
+      <xacro:lekiwi_control_joint joint_name="arm_shoulder_pan" servo_id="1" command_interface="position"/>
+      <xacro:lekiwi_control_joint joint_name="arm_shoulder_lift" servo_id="2" command_interface="position"/>
+      <xacro:lekiwi_control_joint joint_name="arm_elbow_flex" servo_id="3" command_interface="position"/>
+      <xacro:lekiwi_control_joint joint_name="arm_wrist_flex" servo_id="4" command_interface="position"/>
+      <xacro:lekiwi_control_joint joint_name="arm_wrist_roll" servo_id="5" command_interface="position"/>
+      <xacro:lekiwi_control_joint joint_name="arm_gripper" servo_id="6" command_interface="position"/>
+      <xacro:lekiwi_control_joint joint_name="base_left_wheel" servo_id="7" command_interface="velocity"/>
+      <xacro:lekiwi_control_joint joint_name="base_back_wheel" servo_id="8" command_interface="velocity"/>
+      <xacro:lekiwi_control_joint joint_name="base_right_wheel" servo_id="9" command_interface="velocity"/>
+    </ros2_control>
+  </xacro:macro>
+</robot>
