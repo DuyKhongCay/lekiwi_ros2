@@ -3,10 +3,8 @@ project(lekiwi_description)
 
 find_package(ament_cmake REQUIRED)
 
-install(DIRECTORY urdf assets launch
+install(DIRECTORY urdf assets
   DESTINATION share/${PROJECT_NAME}
-  PATTERN "__pycache__" EXCLUDE
-  PATTERN "*.pyc" EXCLUDE
 )
 
 ament_package()

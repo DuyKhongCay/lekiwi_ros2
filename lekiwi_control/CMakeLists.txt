@@ -10,6 +10,7 @@ install(
   PROGRAMS
     scripts/camera_mode_demo
     scripts/task_orchestrator
+    scripts/lerobot_arm_bridge
   DESTINATION lib/${PROJECT_NAME}
 )
 
