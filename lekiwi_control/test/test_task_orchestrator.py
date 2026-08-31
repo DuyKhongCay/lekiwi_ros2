@@ -5,7 +5,7 @@ import asyncio
 import threading
 
 from lekiwi_control.task_orchestrator import TaskOrchestratorNode
-from lekiwi_interfaces.msg import CamHubStatus, CameraMode
+from lekiwi_interfaces.msg import CameraMode, HailoInferenceStatus
 from lekiwi_interfaces.srv import SetCamMode
 
 
@@ -45,7 +45,7 @@ def test_failed_camera_service_response_updates_authoritative_mode():
     hub_response = SetCamMode.Response()
     hub_response.success = False
     hub_response.applied_mode.value = CameraMode.STANDBY
-    hub_response.message = 'pipeline failed'
+    hub_response.message = "pipeline failed"
     node._camera_mode_client = _FailingCameraHubClient(hub_response)
 
     request = SetCamMode.Request()
@@ -57,11 +57,32 @@ def test_failed_camera_service_response_updates_authoritative_mode():
     assert node._current_mode == CameraMode.STANDBY
 
 
-def test_camera_hub_error_status_overrides_stale_mode():
+def test_camera_hub_error_status_logs_error():
     node = _node_for_mode_tests()
-    status = CamHubStatus()
-    status.effective_mode.value = CameraMode.STANDBY
+    status = HailoInferenceStatus()
+    status.pipeline_state = HailoInferenceStatus.PIPELINE_ERROR
+    status.last_error = "mock error"
 
     node._handle_camera_hub_status(status)
+    assert node._current_mode == CameraMode.CHESS_THINKING
 
+
+def test_mode_switch_publishes_camera_mode():
+    node = _node_for_mode_tests()
+    node._camera_mode_client = None
+    published_modes = []
+
+    class _MockPublisher:
+        def publish(self, msg):
+            published_modes.append(msg.value)
+
+    node._mode_publisher = _MockPublisher()
+
+    request = SetCamMode.Request()
+    request.requested_mode.value = CameraMode.STANDBY
+    response = asyncio.run(node._handle_mode_request(request, SetCamMode.Response()))
+
+    assert response.success
+    assert response.applied_mode.value == CameraMode.STANDBY
     assert node._current_mode == CameraMode.STANDBY
+    assert published_modes == [CameraMode.STANDBY]
