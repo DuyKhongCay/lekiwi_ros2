@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>lekiwi_driver</name>
+  <name>lekiwi_ftservo_hardware</name>
   <version>0.2.0</version>
   <description>LeKiwi ros2_control hardware interface for Feetech STS servos.</description>
   <maintainer email="duykhongcay@todo.todo">duykhongcay</maintainer>

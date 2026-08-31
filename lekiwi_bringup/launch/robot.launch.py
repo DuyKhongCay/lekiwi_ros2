@@ -82,6 +82,19 @@ def generate_launch_description():
         ),
     ]
 
+    # Teleoperation subsystem arguments
+    teleop_args_spec = [
+        ("start_teleop", "false"),
+        (
+            "teleop_config_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "control", "teleop_gamepad.yaml"]
+            ),
+        ),
+        ("teleop_device", "/dev/gamepad"),
+        ("teleop_cmd_vel_topic", "/omni_base_controller/cmd_vel"),
+    ]
+
     # Subsystem include definitions
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -130,6 +143,19 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("enable_imu_pipeline")),
     )
 
+    teleop = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([bringup_share, "launch", "teleop.launch.py"])
+        ),
+        launch_arguments={
+            "teleop_config_file": LaunchConfiguration("teleop_config_file"),
+            "device_name": LaunchConfiguration("teleop_device"),
+            "cmd_vel_topic": LaunchConfiguration("teleop_cmd_vel_topic"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration("start_teleop")),
+    )
+
     # Automatic declaration of all arguments
     all_declared_arguments = [
         DeclareLaunchArgument(name, default_value=default)
@@ -138,6 +164,7 @@ def generate_launch_description():
             + perception_args_spec
             + control_args_spec
             + imu_args_spec
+            + teleop_args_spec
         )
     ]
 
@@ -148,5 +175,6 @@ def generate_launch_description():
             cameras,
             control,
             imu,
+            teleop,
         ]
     )

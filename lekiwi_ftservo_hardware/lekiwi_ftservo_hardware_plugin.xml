@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<library path="lekiwi_feetech_hardware">
+  <class name="lekiwi_ftservo_hardware/LeKiwiFeetechHardwareInterface" type="lekiwi_ftservo_hardware::LeKiwiFeetechHardwareInterface" base_class_type="hardware_interface::SystemInterface">
+    <description>Feetech STS ros2_control system with position arms and velocity wheels.</description>
+  </class>
+</library>

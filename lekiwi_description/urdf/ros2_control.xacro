@@ -31,7 +31,7 @@
           <plugin>mock_components/GenericSystem</plugin>
         </xacro:if>
         <xacro:if value="${hardware_type == 'real'}">
-          <plugin>lekiwi_driver/LeKiwiFeetechHardwareInterface</plugin>
+          <plugin>lekiwi_ftservo_hardware/LeKiwiFeetechHardwareInterface</plugin>
           <param name="usb_port">${usb_port}</param>
           <param name="joint_config_file">${joint_config_file}</param>
         </xacro:if>

@@ -1,0 +1,65 @@
+# Gamepad Teleoperation configuration for LeKiwi Mobile Base (Flydigi / Xbox 360 controller)
+# Packages: joy_linux / joy and joy_teleop (teleop_tools)
+
+joy_linux_node:
+  ros__parameters:
+    dev: "/dev/gamepad"
+    deadzone: 0.05
+    autorepeat_rate: 20.0
+    coalesce_interval: 0.001
+    sticky_buttons: false
+
+joy_node:
+  ros__parameters:
+    device_name: "/dev/gamepad"
+    deadzone: 0.05
+    autorepeat_rate: 20.0
+    coalesce_interval_ms: 1
+    sticky_buttons: false
+
+joy_teleop:
+  ros__parameters:
+    # Normal mode: Deadman RB (button 5), max vx/vy = 0.4 m/s, max wz = 1.2 rad/s
+    lekiwi_teleop_normal:
+      type: topic
+      interface_type: geometry_msgs/msg/TwistStamped
+      topic_name: /omni_base_controller/cmd_vel
+      deadman_buttons: [5]
+      axis_mappings:
+        twist-linear-x:
+          axis: 1
+          scale: 10
+          offset: 0.0
+        twist-linear-y:
+          axis: 0
+          scale: 10
+          offset: 0.0
+        twist-angular-z:
+          axis: 3
+          scale: 30
+          offset: 0.0
+        header-frame_id:
+          value: base_footprint
+
+    # Turbo mode: Deadman LB + RB (buttons 4 & 5), max vx/vy = 0.8 m/s, max wz = 2.0 rad/s
+    lekiwi_teleop_turbo:
+      type: topic
+      interface_type: geometry_msgs/msg/TwistStamped
+      topic_name: /omni_base_controller/cmd_vel
+      deadman_buttons: [4, 5]
+      axis_mappings:
+        twist-linear-x:
+          axis: 1
+          scale: 0.8
+          offset: 0.0
+        twist-linear-y:
+          axis: 0
+          scale: 0.8
+          offset: 0.0
+        twist-angular-z:
+          axis: 3
+          scale: 2.0
+          offset: 0.0
+        header-frame_id:
+          value: base_footprint
+

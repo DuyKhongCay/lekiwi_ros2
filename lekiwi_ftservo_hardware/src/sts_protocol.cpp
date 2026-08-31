@@ -1,4 +1,4 @@
-#include "lekiwi_driver/sts_protocol.hpp"
+#include "lekiwi_ftservo_hardware/sts_protocol.hpp"
 
 #include <algorithm>
 #include <array>
@@ -7,23 +7,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "lekiwi_driver/velocity_codec.hpp"
+#include "lekiwi_ftservo_hardware/velocity_codec.hpp"
 
-namespace lekiwi_driver
+namespace lekiwi_ftservo_hardware
 {
   namespace
   {
-    constexpr uint8_t kHeader = 0xff;
-    constexpr uint8_t kBroadcastId = 0xfe;
-    constexpr uint8_t kInstructionRead = 0x02;
-    constexpr uint8_t kInstructionWrite = 0x03;
-    constexpr uint8_t kInstructionSyncWrite = 0x83;
-    constexpr uint8_t kModeRegister = 33;
-    constexpr uint8_t kTorqueEnableRegister = 40;
-    constexpr uint8_t kAccelerationRegister = 41;
-    constexpr uint8_t kGoalSpeedRegister = 46;
-    constexpr uint8_t kPresentPositionRegister = 56;
-
     // Computes the STS checksum over bytes beginning at the packet ID.
     uint8_t checksum(const std::vector<uint8_t> &bytes)
     {
@@ -239,6 +228,134 @@ namespace lekiwi_driver
            read_status(id, count, data, error);
   }
 
+  bool StsProtocol::sync_read(
+      const std::vector<uint8_t> &ids, const uint8_t address, const size_t count,
+      std::vector<std::vector<uint8_t>> *data, std::string *error)
+  {
+    if (data == nullptr || ids.empty() || count == 0U || count > 250U)
+    {
+      set_error(error, "Invalid Feetech sync_read request parameters");
+      return false;
+    }
+    std::vector<uint8_t> parameters{address, static_cast<uint8_t>(count)};
+    parameters.insert(parameters.end(), ids.begin(), ids.end());
+
+    if (!write_packet(kBroadcastId, kInstructionSyncRead, parameters, error))
+    {
+      return false;
+    }
+
+    data->resize(ids.size());
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+      if (!read_status(ids[i], count, &(*data)[i], error))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool StsProtocol::sync_read_fast_state(
+      const std::vector<uint8_t> &ids, std::vector<ServoFastState> *states, std::string *error)
+  {
+    if (states == nullptr)
+    {
+      set_error(error, "Null states pointer in sync_read_fast_state");
+      return false;
+    }
+    std::vector<std::vector<uint8_t>> raw_data;
+    if (!sync_read(ids, kPresentPositionRegister, 4U, &raw_data, error))
+    {
+      return false;
+    }
+    states->resize(ids.size());
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+      const auto &feedback = raw_data[i];
+      auto &state = (*states)[i];
+      state.id = ids[i];
+      state.position_ticks = static_cast<int>(feedback[0]) | (static_cast<int>(feedback[1]) << 8);
+      state.speed_ticks = decode_velocity_ticks(feedback[2], feedback[3]);
+      state.status = 0;
+    }
+    return true;
+  }
+
+  bool StsProtocol::sync_read_diagnostics(
+      const std::vector<uint8_t> &ids, std::vector<ServoDiagnosticData> *diagnostics, std::string *error)
+  {
+    if (diagnostics == nullptr)
+    {
+      set_error(error, "Null diagnostics pointer in sync_read_diagnostics");
+      return false;
+    }
+    std::vector<std::vector<uint8_t>> raw_data;
+    // 15 bytes from register 56 (kPresentPositionRegister) to 70 (kPresentCurrentRegister + 1)
+    if (!sync_read(ids, kPresentPositionRegister, 15U, &raw_data, error))
+    {
+      return false;
+    }
+    diagnostics->resize(ids.size());
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+      const auto &feedback = raw_data[i];
+      auto &diag = (*diagnostics)[i];
+      diag.id = ids[i];
+      diag.position_ticks = static_cast<int>(feedback[0]) | (static_cast<int>(feedback[1]) << 8);
+      diag.speed_ticks = decode_velocity_ticks(feedback[2], feedback[3]);
+      diag.load_raw = static_cast<int>(static_cast<int16_t>(feedback[4] | (feedback[5] << 8)));
+      diag.voltage_v = static_cast<double>(feedback[6]) * 0.1;
+      diag.temperature_c = static_cast<double>(feedback[7]);
+      diag.moving = (feedback[10] != 0);
+      const int16_t current_ticks = static_cast<int16_t>(feedback[13] | (feedback[14] << 8));
+      diag.current_a = static_cast<double>(current_ticks) * 0.0065;
+      diag.status = 0;
+    }
+    return true;
+  }
+
+  bool StsProtocol::read_servo_diagnostics(
+      const uint8_t id, ServoDiagnosticData *diagnostic, std::string *error)
+  {
+    if (diagnostic == nullptr)
+    {
+      set_error(error, "Null diagnostic pointer in read_servo_diagnostics");
+      return false;
+    }
+    std::vector<uint8_t> feedback;
+    if (!read_register(id, kPresentPositionRegister, 15U, &feedback, error))
+    {
+      return false;
+    }
+    diagnostic->id = id;
+    diagnostic->position_ticks = static_cast<int>(feedback[0]) | (static_cast<int>(feedback[1]) << 8);
+    diagnostic->speed_ticks = decode_velocity_ticks(feedback[2], feedback[3]);
+    diagnostic->load_raw = static_cast<int>(static_cast<int16_t>(feedback[4] | (feedback[5] << 8)));
+    diagnostic->voltage_v = static_cast<double>(feedback[6]) * 0.1;
+    diagnostic->temperature_c = static_cast<double>(feedback[7]);
+    diagnostic->moving = (feedback[10] != 0);
+    const int16_t current_ticks = static_cast<int16_t>(feedback[13] | (feedback[14] << 8));
+    diagnostic->current_a = static_cast<double>(current_ticks) * 0.0065;
+    diagnostic->status = 0;
+    return true;
+  }
+
+  bool StsProtocol::reg_write(
+      const uint8_t id, const uint8_t address, const std::vector<uint8_t> &data, std::string *error)
+  {
+    std::vector<uint8_t> parameters{address};
+    parameters.insert(parameters.end(), data.begin(), data.end());
+    std::vector<uint8_t> response;
+    return write_packet(id, kInstructionRegWrite, parameters, error) &&
+           read_status(id, 0U, &response, error);
+  }
+
+  bool StsProtocol::reg_write_action(const uint8_t id, std::string *error)
+  {
+    return write_packet(id, kInstructionAction, {}, error);
+  }
+
   bool StsProtocol::sync_write_velocity(
       const std::vector<uint8_t> &ids, const std::vector<int> &velocity_ticks, std::string *error)
   {
@@ -277,4 +394,4 @@ namespace lekiwi_driver
     return write_packet(kBroadcastId, kInstructionSyncWrite, parameters, error);
   }
 
-} // namespace lekiwi_driver
+} // namespace lekiwi_ftservo_hardware
