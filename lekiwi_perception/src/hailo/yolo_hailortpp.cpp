@@ -1,6 +1,8 @@
 // Copyright 2026 LeKiwi Labs. All rights reserved.
 #include "hailo/yolo_hailortpp.hpp"
 
+extern "C" {
+
 YoloNmsPostprocess * init(const std::string config_path, const std::string function_name)
 {
   (void)config_path;
@@ -48,3 +50,6 @@ void filter_letterbox(HailoROIPtr roi, void * params_void_ptr) {
   }
   roi->clear_scaling_bbox();
 }
+
+}  // extern "C"
+

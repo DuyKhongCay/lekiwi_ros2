@@ -66,15 +66,11 @@ target_link_libraries(lekiwi_pieces_postprocess PRIVATE
 )
 
 add_library(lekiwi_perception_component SHARED
-  src/gstreamer/gst_pipe.cpp
-  src/gstreamer/pipe_builder.cpp
+  src/hailo/hailo_gst_pipeline.cpp
   src/hailo/chess_vision_mapper.cpp
-  src/camera_geometry.cpp
-  src/camera_hub_config.cpp
-  src/stream_metrics_tracker.cpp
-  src/cam_hub_stream_processor.cpp
   src/chess_visualizer_component.cpp
-  src/multi_camera_hub_component.cpp
+  src/hailo_chess_inference_component.cpp
+  src/camera_streamer_component.cpp
 )
 target_include_directories(lekiwi_perception_component PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -103,13 +99,18 @@ ament_target_dependencies(lekiwi_perception_component
 )
 
 rclcpp_components_register_node(lekiwi_perception_component
-  PLUGIN "lekiwi_perception::MultiCameraHubComponent"
-  EXECUTABLE multi_camera_hub_node
+  PLUGIN "lekiwi_perception::HailoChessInferenceComponent"
+  EXECUTABLE hailo_chess_inference_node
 )
 
 rclcpp_components_register_node(lekiwi_perception_component
   PLUGIN "lekiwi_perception::ChessVisualizerComponent"
   EXECUTABLE chess_visualizer_node
+)
+
+rclcpp_components_register_node(lekiwi_perception_component
+  PLUGIN "lekiwi_perception::CameraStreamerComponent"
+  EXECUTABLE camera_streamer_node
 )
 
 install(TARGETS
@@ -121,8 +122,9 @@ install(TARGETS
   RUNTIME DESTINATION bin
 )
 install(TARGETS
-  multi_camera_hub_node
+  hailo_chess_inference_node
   chess_visualizer_node
+  camera_streamer_node
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/
@@ -134,30 +136,14 @@ install(DIRECTORY resources
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
-  ament_add_gtest(test_pipe_builder test/test_pipe_builder.cpp)
-  if(TARGET test_pipe_builder)
-    target_link_libraries(test_pipe_builder lekiwi_perception_component)
-    target_compile_definitions(test_pipe_builder PRIVATE
-      LEKIWI_PERCEPTION_TEST_RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources"
-    )
+  ament_add_gtest(test_hailo_gst_pipeline test/test_hailo_gst_pipeline.cpp)
+  if(TARGET test_hailo_gst_pipeline)
+    target_link_libraries(test_hailo_gst_pipeline lekiwi_perception_component)
   endif()
 
-  ament_add_gtest(test_cam_geometry test/test_cam_geometry.cpp)
-  if(TARGET test_cam_geometry)
-    target_link_libraries(test_cam_geometry lekiwi_perception_component)
-    target_compile_definitions(test_cam_geometry PRIVATE
-      LEKIWI_PERCEPTION_TEST_RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/resources"
-    )
-  endif()
-
-  ament_add_gtest(test_sample_gate test/test_sample_gate.cpp)
-  if(TARGET test_sample_gate)
-    target_link_libraries(test_sample_gate lekiwi_perception_component)
-  endif()
-
-  ament_add_gtest(test_stream_metrics test/test_stream_metrics.cpp)
-  if(TARGET test_stream_metrics)
-    target_link_libraries(test_stream_metrics lekiwi_perception_component)
+  ament_add_gtest(test_camera_streamer_component test/test_camera_streamer_component.cpp)
+  if(TARGET test_camera_streamer_component)
+    target_link_libraries(test_camera_streamer_component lekiwi_perception_component)
   endif()
 endif()
 
