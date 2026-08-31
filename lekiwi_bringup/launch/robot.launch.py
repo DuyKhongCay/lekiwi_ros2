@@ -10,87 +10,110 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     """Compose LeKiwi description, perception, and control subsystem launches."""
-    bringup_share = FindPackageShare('lekiwi_bringup')
+    bringup_share = FindPackageShare("lekiwi_bringup")
+
+    # Description subsystem arguments
+    description_args_spec = [
+        ("hardware_type", "mock"),
+        ("usb_port", "/dev/lekiwi_serial"),
+        (
+            "joint_config_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "hardware", "lekiwi_joints.yaml"]
+            ),
+        ),
+        ("use_ros2_control", "true"),
+        ("enable_imu", "true"),
+        ("imu_hardware_type", "mock"),
+        ("imu_i2c_bus", "1"),
+        ("imu_i2c_address", "0x68"),
+        ("imu_auto_calibrate_gyro", "true"),
+        ("imu_gyro_calib_samples", "500"),
+        (
+            "controllers_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "controllers", "lekiwi_controllers.yaml"]
+            ),
+        ),
+        ("start_controller_manager", "false"),
+        ("activate_controllers", "false"),
+        ("use_sim_time", "false"),
+        ("frame_prefix", ""),
+        ("joint_states_topic", "/joint_states"),
+        ("ignore_timestamp", "false"),
+    ]
+
+    # Perception subsystem arguments
+    perception_args_spec = [
+        ("data_plane_container", "lekiwi_perception_container"),
+        (
+            "camera_params_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "perception", "cameras.yaml"]
+            ),
+        ),
+        ("use_test_sources", "false"),
+    ]
+
+    # Control subsystem arguments
+    control_args_spec = [
+        (
+            "orchestrator_params_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "control", "orchestrator.yaml"]
+            ),
+        ),
+        ("start_lerobot_bridge", "false"),
+        ("run_camera_demo", "false"),
+    ]
+
+    # Subsystem include definitions
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution([bringup_share, 'launch', 'description.launch.py'])
+            PathJoinSubstitution([bringup_share, "launch", "description.launch.py"])
         ),
         launch_arguments={
-            'hardware_type': LaunchConfiguration('hardware_type'),
-            'usb_port': LaunchConfiguration('usb_port'),
-            'joint_config_file': LaunchConfiguration('joint_config_file'),
-            'use_ros2_control': LaunchConfiguration('use_ros2_control'),
-            'controllers_file': LaunchConfiguration('controllers_file'),
-            'start_controller_manager': LaunchConfiguration('start_controller_manager'),
-            'activate_controllers': LaunchConfiguration('activate_controllers'),
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'frame_prefix': LaunchConfiguration('frame_prefix'),
-            'joint_states_topic': LaunchConfiguration('joint_states_topic'),
-            'ignore_timestamp': LaunchConfiguration('ignore_timestamp'),
-        }.items(),
-    )
-    cameras = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([bringup_share, 'launch', 'cameras.launch.py'])
-        ),
-        launch_arguments={
-            'container_name': LaunchConfiguration('data_plane_container'),
-            'create_container': 'true',
-            'cam_params_file': LaunchConfiguration('camera_params_file'),
-            'use_test_sources': LaunchConfiguration('use_test_sources'),
-        }.items(),
-    )
-    control = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([bringup_share, 'launch', 'control.launch.py'])
-        ),
-        launch_arguments={
-            'joint_config_file': LaunchConfiguration('joint_config_file'),
-            'orchestrator_params_file': LaunchConfiguration('orchestrator_params_file'),
-            'start_lerobot_bridge': LaunchConfiguration('start_lerobot_bridge'),
-            'run_camera_demo': LaunchConfiguration('run_camera_demo'),
+            name: LaunchConfiguration(name) for name, _ in description_args_spec
         }.items(),
     )
 
-    return LaunchDescription([
-        DeclareLaunchArgument('hardware_type', default_value='mock'),
-        DeclareLaunchArgument('usb_port', default_value='/dev/lekiwi_serial'),
-        DeclareLaunchArgument(
-            'joint_config_file',
-            default_value=PathJoinSubstitution([
-                bringup_share, 'config', 'hardware', 'lekiwi_joints.yaml'
-            ]),
+    cameras = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([bringup_share, "launch", "cameras.launch.py"])
         ),
-        DeclareLaunchArgument('use_ros2_control', default_value='true'),
-        DeclareLaunchArgument(
-            'controllers_file',
-            default_value=PathJoinSubstitution([
-                bringup_share, 'config', 'controllers', 'lekiwi_controllers.yaml'
-            ]),
+        launch_arguments={
+            "container_name": LaunchConfiguration("data_plane_container"),
+            "create_container": "true",
+            "cam_params_file": LaunchConfiguration("camera_params_file"),
+            "use_test_sources": LaunchConfiguration("use_test_sources"),
+        }.items(),
+    )
+
+    control = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([bringup_share, "launch", "control.launch.py"])
         ),
-        DeclareLaunchArgument('start_controller_manager', default_value='false'),
-        DeclareLaunchArgument('activate_controllers', default_value='false'),
-        DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('frame_prefix', default_value=''),
-        DeclareLaunchArgument('joint_states_topic', default_value='/joint_states'),
-        DeclareLaunchArgument('ignore_timestamp', default_value='false'),
-        DeclareLaunchArgument('data_plane_container', default_value='lekiwi_perception_container'),
-        DeclareLaunchArgument(
-            'camera_params_file',
-            default_value=PathJoinSubstitution([
-                bringup_share, 'config', 'perception', 'cameras.yaml'
-            ]),
-        ),
-        DeclareLaunchArgument('use_test_sources', default_value='false'),
-        DeclareLaunchArgument(
-            'orchestrator_params_file',
-            default_value=PathJoinSubstitution([
-                bringup_share, 'config', 'control', 'orchestrator.yaml'
-            ]),
-        ),
-        DeclareLaunchArgument('start_lerobot_bridge', default_value='false'),
-        DeclareLaunchArgument('run_camera_demo', default_value='false'),
-        description,
-        cameras,
-        control,
-    ])
+        launch_arguments={
+            "joint_config_file": LaunchConfiguration("joint_config_file"),
+            "orchestrator_params_file": LaunchConfiguration("orchestrator_params_file"),
+            "start_lerobot_bridge": LaunchConfiguration("start_lerobot_bridge"),
+            "run_camera_demo": LaunchConfiguration("run_camera_demo"),
+        }.items(),
+    )
+
+    # Automatic declaration of all arguments
+    all_declared_arguments = [
+        DeclareLaunchArgument(name, default_value=default)
+        for name, default in (
+            description_args_spec + perception_args_spec + control_args_spec
+        )
+    ]
+
+    return LaunchDescription(
+        [
+            *all_declared_arguments,
+            description,
+            cameras,
+            control,
+        ]
+    )

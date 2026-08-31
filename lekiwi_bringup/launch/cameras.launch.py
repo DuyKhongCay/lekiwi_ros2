@@ -69,34 +69,33 @@ def generate_launch_description():
         condition=UnlessCondition(create_container),
     )
 
+    bringup_share = FindPackageShare("lekiwi_bringup")
+
+    declared_args_spec = [
+        ("container_name", "lekiwi_perception_container"),
+        ("create_container", "true"),
+        (
+            "cam_params_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "perception", "cameras.yaml"]
+            ),
+        ),
+        (
+            "gscam_params_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "perception", "gscam_cameras.yaml"]
+            ),
+        ),
+    ]
+
+    all_declared_arguments = [
+        DeclareLaunchArgument(name, default_value=default)
+        for name, default in declared_args_spec
+    ]
+
     return LaunchDescription(
         [
-            DeclareLaunchArgument(
-                "container_name", default_value="lekiwi_perception_container"
-            ),
-            DeclareLaunchArgument("create_container", default_value="true"),
-            DeclareLaunchArgument(
-                "cam_params_file",
-                default_value=PathJoinSubstitution(
-                    [
-                        FindPackageShare("lekiwi_bringup"),
-                        "config",
-                        "perception",
-                        "cameras.yaml",
-                    ]
-                ),
-            ),
-            DeclareLaunchArgument(
-                "gscam_params_file",
-                default_value=PathJoinSubstitution(
-                    [
-                        FindPackageShare("lekiwi_bringup"),
-                        "config",
-                        "perception",
-                        "gscam_cameras.yaml",
-                    ]
-                ),
-            ),
+            *all_declared_arguments,
             container,
             loader,
         ]

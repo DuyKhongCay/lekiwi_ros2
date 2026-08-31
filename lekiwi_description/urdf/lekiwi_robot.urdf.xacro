@@ -5,16 +5,22 @@
   <xacro:arg name="usb_port" default="/dev/lekiwi_serial"/>
   <xacro:arg name="joint_config_file" default=""/>
   <xacro:arg name="add_transmissions" default="false"/>
+  <xacro:arg name="enable_imu" default="true"/>
+  <xacro:arg name="imu_hardware_type" default="mock"/>
+  <xacro:arg name="imu_i2c_bus" default="1"/>
+  <xacro:arg name="imu_i2c_address" default="0x68"/>
+  <xacro:arg name="imu_auto_calibrate_gyro" default="true"/>
+  <xacro:arg name="imu_gyro_calib_samples" default="500"/>
 
   <!-- Keep the CAD-generated kinematic model separate from control metadata. -->
   <xacro:include filename="$(find lekiwi_description)/urdf/duykhongcay_lekiwi.urdf"/>
-  <xacro:include filename="$(find lekiwi_description)/urdf/xacro_macros.xacro"/>
+  <xacro:include filename="$(find lekiwi_description)/urdf/ros2_control.xacro"/>
 
   <xacro:if value="$(arg use_ros2_control)">
-    <xacro:lekiwi_ros2_control
-      hardware_type="$(arg hardware_type)"
-      usb_port="$(arg usb_port)"
-      joint_config_file="$(arg joint_config_file)"/>
+    <xacro:lekiwi_ros2_control hardware_type="$(arg hardware_type)" usb_port="$(arg usb_port)" joint_config_file="$(arg joint_config_file)"/>
+    <xacro:if value="$(arg enable_imu)">
+      <xacro:lekiwi_imu_ros2_control hardware_type="$(arg imu_hardware_type)" i2c_bus="$(arg imu_i2c_bus)" i2c_address="$(arg imu_i2c_address)" auto_calibrate_gyro="$(arg imu_auto_calibrate_gyro)" gyro_calib_samples="$(arg imu_gyro_calib_samples)"/>
+    </xacro:if>
   </xacro:if>
 
   <xacro:if value="$(arg add_transmissions)">

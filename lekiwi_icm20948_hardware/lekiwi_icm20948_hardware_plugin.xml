@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<library path="lekiwi_icm20948_hardware">
+    <class name="lekiwi_icm20948_hardware/ICM20948SensorHardware" type="lekiwi_icm20948_hardware::ICM20948SensorHardware" base_class_type="hardware_interface::SensorInterface">
+        <description>ICM-20948 9-DoF IMU ros2_control sensor hardware interface over I2C.</description>
+    </class>
+</library>

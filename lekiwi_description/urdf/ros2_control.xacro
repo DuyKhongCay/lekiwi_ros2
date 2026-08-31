@@ -47,4 +47,34 @@
       <xacro:lekiwi_control_joint joint_name="base_right_wheel" servo_id="9" command_interface="velocity"/>
     </ros2_control>
   </xacro:macro>
+
+  <!-- Declares IMU ros2_control sensor component with 13 state interfaces -->
+  <xacro:macro name="lekiwi_imu_ros2_control" params="hardware_type:='mock' i2c_bus:=1 i2c_address:='0x68' auto_calibrate_gyro:='true' gyro_calib_samples:=500">
+    <ros2_control name="LeKiwiImu" type="sensor">
+      <hardware>
+        <plugin>lekiwi_icm20948_hardware/ICM20948SensorHardware</plugin>
+        <param name="mock_sensor">${'true' if hardware_type == 'mock' else 'false'}</param>
+        <param name="i2c_bus">${i2c_bus}</param>
+        <param name="i2c_address">${i2c_address}</param>
+        <param name="auto_calibrate_gyro">${auto_calibrate_gyro}</param>
+        <param name="gyro_calib_samples">${gyro_calib_samples}</param>
+      </hardware>
+      <sensor name="icm20948_imu">
+        <state_interface name="orientation.x"/>
+        <state_interface name="orientation.y"/>
+        <state_interface name="orientation.z"/>
+        <state_interface name="orientation.w"/>
+        <state_interface name="angular_velocity.x"/>
+        <state_interface name="angular_velocity.y"/>
+        <state_interface name="angular_velocity.z"/>
+        <state_interface name="linear_acceleration.x"/>
+        <state_interface name="linear_acceleration.y"/>
+        <state_interface name="linear_acceleration.z"/>
+        <state_interface name="magnetic_field.x"/>
+        <state_interface name="magnetic_field.y"/>
+        <state_interface name="magnetic_field.z"/>
+        <param name="frame_id">icm20948_imu</param>
+      </sensor>
+    </ros2_control>
+  </xacro:macro>
 </robot>

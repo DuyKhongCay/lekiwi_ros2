@@ -6,3 +6,12 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{serial}=="5B14033437", SYMLINK+
 # Capture node only (index 0) for each UVC camera.
 SUBSYSTEM=="video4linux", ATTR{index}=="0", ATTRS{idVendor}=="4c4a", ATTRS{idProduct}=="4a55", SYMLINK+="usb_wrist", MODE="0660", GROUP="video"
 SUBSYSTEM=="video4linux", ATTR{index}=="0", ATTRS{idVendor}=="1bcf", ATTRS{idProduct}=="2cd1", SYMLINK+="usb_side", MODE="0660", GROUP="video"
+
+# Gamepad Flydigi Dune Fox (xpad / Xbox 360 wireless dongle).
+SUBSYSTEM=="input", KERNEL=="js[0-9]*", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="028e", ATTRS{serial}=="5F6E9C98", SYMLINK+="input/gamepad", SYMLINK+="gamepad", MODE="0660", GROUP="input"
+SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="028e", ATTRS{serial}=="5F6E9C98", SYMLINK+="input/gamepad_event", MODE="0660", GROUP="input"
+
+# ICM-20948 I2C interface permissions
+KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"
+KERNEL=="i2c-1", SYMLINK+="i2c-imu", GROUP="i2c", MODE="0660"
+
