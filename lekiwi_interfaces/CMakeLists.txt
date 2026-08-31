@@ -11,7 +11,7 @@ find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CameraMode.msg"
-  "msg/CamHubStatus.msg"
+  "msg/HailoInferenceStatus.msg"
   "msg/ServoTelemetry.msg"
   "msg/DriveStatus.msg"
   "srv/SetCamMode.srv"
