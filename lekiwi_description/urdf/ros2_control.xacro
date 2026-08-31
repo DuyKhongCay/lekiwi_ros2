@@ -50,7 +50,10 @@
 
   <!-- Declares IMU ros2_control sensor component with 13 state interfaces -->
   <xacro:macro name="lekiwi_imu_ros2_control" params="hardware_type:='mock' i2c_bus:=1 i2c_address:='0x68' auto_calibrate_gyro:='true' gyro_calib_samples:=500">
-    <ros2_control name="LeKiwiImu" type="sensor">
+    <ros2_control name="LeKiwiImu" type="sensor" is_async="true">
+      <properties>
+        <async scheduling_policy="detached" print_warnings="false" thread_priority="30"/>
+      </properties>
       <hardware>
         <plugin>lekiwi_icm20948_hardware/ICM20948SensorHardware</plugin>
         <param name="mock_sensor">${'true' if hardware_type == 'mock' else 'false'}</param>

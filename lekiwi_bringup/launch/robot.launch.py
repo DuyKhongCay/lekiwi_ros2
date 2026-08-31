@@ -3,6 +3,7 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
@@ -67,6 +68,20 @@ def generate_launch_description():
         ("run_camera_demo", "false"),
     ]
 
+    # IMU Filtering pipeline arguments (Layer 2)
+    imu_args_spec = [
+        ("enable_imu_pipeline", "true"),
+        ("enable_imu_transformer", "true"),
+        ("imu_use_mag", "true"),
+        ("imu_target_frame", "base_footprint"),
+        (
+            "imu_params_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "sensors", "imu_filter.yaml"]
+            ),
+        ),
+    ]
+
     # Subsystem include definitions
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -101,11 +116,28 @@ def generate_launch_description():
         }.items(),
     )
 
+    imu = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([bringup_share, "launch", "imu.launch.py"])
+        ),
+        launch_arguments={
+            "imu_params_file": LaunchConfiguration("imu_params_file"),
+            "use_mag": LaunchConfiguration("imu_use_mag"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "enable_transformer": LaunchConfiguration("enable_imu_transformer"),
+            "target_frame": LaunchConfiguration("imu_target_frame"),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration("enable_imu_pipeline")),
+    )
+
     # Automatic declaration of all arguments
     all_declared_arguments = [
         DeclareLaunchArgument(name, default_value=default)
         for name, default in (
-            description_args_spec + perception_args_spec + control_args_spec
+            description_args_spec
+            + perception_args_spec
+            + control_args_spec
+            + imu_args_spec
         )
     ]
 
@@ -115,5 +147,6 @@ def generate_launch_description():
             description,
             cameras,
             control,
+            imu,
         ]
     )

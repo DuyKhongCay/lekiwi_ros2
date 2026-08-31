@@ -1,0 +1,26 @@
+# Configuration for IMU Pre-processing & Filtering (Layer 2)
+# Supported by imu_filter_madgwick (imu_tools) and imu_transformer (imu_pipeline)
+
+imu_filter:
+  ros__parameters:
+    use_sim_time: false
+    stateless: false
+    use_mag: true               # Fuse AK09916 magnetometer for absolute yaw heading
+    publish_tf: false           # Do not publish TF directly from filter; handled by robot_state_publisher & EKF
+    reverse_tf: false
+    fixed_frame: "odom"
+    constant_dt: 0.0            # 0.0 = calculate dt dynamically from message header timestamps
+    publish_debug_topics: false
+    world_frame: "enu"          # REP-103 standard: East-North-Up
+    gain: 0.1                   # Filter gain (beta) for accelerometer attitude correction
+    zeta: 0.0                   # 0.0 because static gyro bias is auto-calibrated at hardware layer on startup
+    mag_bias_x: 0.0
+    mag_bias_y: 0.0
+    mag_bias_z: 0.0
+    orientation_stddev: 0.01
+
+imu_transformer:
+  ros__parameters:
+    use_sim_time: false
+    target_frame: "base_footprint"  # Transform IMU kinematic tensor to robot base frame
+

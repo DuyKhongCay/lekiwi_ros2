@@ -18,6 +18,10 @@
   <exec_depend>lekiwi_control</exec_depend>
   <exec_depend>lekiwi_description</exec_depend>
   <exec_depend>gscam</exec_depend>
+  <exec_depend>imu_filter_madgwick</exec_depend>
+  <exec_depend>imu_pipeline</exec_depend>
+  <exec_depend>imu_tools</exec_depend>
+  <exec_depend>imu_transformer</exec_depend>
   <exec_depend>lekiwi_driver</exec_depend>
   <exec_depend>lekiwi_perception</exec_depend>
   <exec_depend>omni_wheel_drive_controller</exec_depend>
