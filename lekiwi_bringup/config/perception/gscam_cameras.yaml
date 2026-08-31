@@ -1,0 +1,77 @@
+/**:
+  ros__parameters:
+    camera_info_url: ""
+    use_sensor_data_qos: true
+    sync_sink: false
+    use_gst_timestamps: true
+    image_encoding: "rgb8"
+
+/cameras/stereo_left/gscam:
+  ros__parameters:
+    camera_info_url: lekiwi_ros2/lekiwi_bringup/config/perception/calibration/stereo_left.yaml
+    frame_id: "stereo_left_optical"
+    camera_name: "stereo_left"
+    active_modes: [1, 2]
+    gscam_config: >
+      libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" !
+      valve name=gate drop=true !
+      queue leaky=downstream max-size-buffers=1 !
+      video/x-raw, format=NV12, width=3280,height=2464, framerate=20/1 !
+      videoscale add-borders=true n-threads=4 !
+      video/x-raw,format=NV12,width=640, height=640, pixel-aspect-ratio=1/1 !
+      videoflip method="rotate-180" !
+      videoconvert n-threads=4 !
+      video/x-raw,format=RGB
+
+/cameras/stereo_right/gscam:
+  ros__parameters:
+    camera_info_url: lekiwi_ros2/lekiwi_bringup/config/perception/calibration/stereo_right.yaml
+    frame_id: "stereo_right_optical"
+    camera_name: "stereo_right"
+    active_modes: [3]
+    gscam_config: >
+      libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@88000/imx219@10" !
+      valve name=gate drop=true !
+      queue leaky=downstream max-size-buffers=1 !
+      video/x-raw, format=NV12, width=1640,height=1232, framerate=30/1 !
+      videoscale add-borders=true n-threads=4 !
+      video/x-raw,format=NV12,width=640, height=480, pixel-aspect-ratio=1/1 !
+      videoflip method="rotate-180" !
+      videoconvert n-threads=4 !
+      video/x-raw,format=RGB
+
+/cameras/usb_wrist/gscam:
+  ros__parameters:
+    camera_info_url: lekiwi_ros2/lekiwi_bringup/config/perception/calibration/usb_wirst.yaml
+    frame_id: "wrist_camera_optical"
+    camera_name: "usb_wrist"
+    active_modes: [3]
+    gscam_config: >
+      v4l2src device=/dev/usb_wrist io-mode=mmap !
+      valve name=gate drop=true !
+      image/jpeg,width=1280,height=720,framerate=30/1 !
+      queue leaky=downstream max-size-buffers=1 !
+      jpegdec !
+      video/x-raw,format=I420 !
+      videoscale add-borders=true n-threads=4 !
+      video/x-raw,format=I420,width=640,height=480,pixel-aspect-ratio=1/1 !
+      videoconvert n-threads=4 !
+      video/x-raw,format=RGB
+
+/cameras/usb_side/gscam:
+  ros__parameters:
+    camera_info_url: lekiwi_ros2/lekiwi_bringup/config/perception/calibration/usb_side.yaml
+    frame_id: "side_camera_optical"
+    camera_name: "usb_side"
+    active_modes: [3]
+    gscam_config: >
+      v4l2src device=/dev/usb_side io-mode=mmap !
+      valve name=gate drop=true !
+      image/jpeg,width=1280,height=720,framerate=30/1 !
+      queue leaky=downstream max-size-buffers=1 !
+      jpegdec !
+      video/x-raw,format=I420 !
+      videoscale add-borders=true n-threads=4 !
+      video/x-raw,format=I420,width=640,height=480,pixel-aspect-ratio=1/1 !
+      videoconvert n-threads=4 !
+      video/x-raw,format=RGB

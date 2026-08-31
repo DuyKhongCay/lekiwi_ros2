@@ -1,48 +1,9 @@
-/**:
+/hailo_chess_inference:
   ros__parameters:
-    use_test_sources: false
-    trans_timeout_ms: 5000
+    frame_id: "stereo_left_optical"
+    publish_debug_image: true
+    transition_timeout_ms: 5000
     status_period_ms: 1000
-    skew_warning_ms: 35
-    hailo.publish_debug_image: true
-    hailo.vdevice_group_id: "lekiwi_chess"
-
-    cameras.stereo_left.selector: "/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10"
-    cameras.stereo_left.frame_id: "stereo_left_optical"
-    cameras.stereo_left.calibration_url: ""
-    cameras.stereo_left.capture_width: 3280
-    cameras.stereo_left.capture_height: 2464
-    cameras.stereo_left.output_width: 640
-    cameras.stereo_left.output_height: 640
-    cameras.stereo_left.fps: 20
-    cameras.stereo_left.rotation: 180
-
-    cameras.stereo_right.selector: "/base/axi/pcie@1000120000/rp1/i2c@88000/imx219@10"
-    cameras.stereo_right.frame_id: "stereo_right_optical"
-    cameras.stereo_right.calibration_url: ""
-    cameras.stereo_right.capture_width: 1640
-    cameras.stereo_right.capture_height: 1232
-    cameras.stereo_right.output_width: 640
-    cameras.stereo_right.output_height: 480
-    cameras.stereo_right.fps: 30
-    cameras.stereo_right.rotation: 0
-
-    cameras.usb_wrist.selector: "/dev/usb_wrist"
-    cameras.usb_wrist.frame_id: "wrist_camera_optical"
-    cameras.usb_wrist.calibration_url: ""
-    cameras.usb_wrist.capture_width: 1280
-    cameras.usb_wrist.capture_height: 720
-    cameras.usb_wrist.output_width: 640
-    cameras.usb_wrist.output_height: 480
-    cameras.usb_wrist.fps: 30
-    cameras.usb_wrist.rotation: 0
-
-    cameras.usb_side.selector: "/dev/usb_side"
-    cameras.usb_side.frame_id: "side_camera_optical"
-    cameras.usb_side.calibration_url: ""
-    cameras.usb_side.capture_width: 1280
-    cameras.usb_side.capture_height: 720
-    cameras.usb_side.output_width: 640
-    cameras.usb_side.output_height: 480
-    cameras.usb_side.fps: 30
-    cameras.usb_side.rotation: 0
+    vdevice_group_id: "lekiwi_chess"
+    model_width: 640
+    model_height: 640

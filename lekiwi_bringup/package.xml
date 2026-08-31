@@ -17,6 +17,7 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>lekiwi_control</exec_depend>
   <exec_depend>lekiwi_description</exec_depend>
+  <exec_depend>gscam</exec_depend>
   <exec_depend>lekiwi_driver</exec_depend>
   <exec_depend>lekiwi_perception</exec_depend>
   <exec_depend>omni_wheel_drive_controller</exec_depend>

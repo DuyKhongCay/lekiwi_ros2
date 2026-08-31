@@ -10,45 +10,94 @@ from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
 
 
-def generate_launch_description():
-    """Launch the camera hub in a new or existing component container."""
-    container_name = LaunchConfiguration('container_name')
-    create_container = LaunchConfiguration('create_container')
-    params_file = LaunchConfiguration('cam_params_file')
-    use_test_sources = LaunchConfiguration('use_test_sources')
-
-    camera_component = ComposableNode(
-        package='lekiwi_perception',
-        plugin='lekiwi_perception::MultiCameraHubComponent',
-        name='multi_camera_hub',
-        parameters=[params_file, {'use_test_sources': use_test_sources}],
-        extra_arguments=[{'use_intra_process_comms': True}],
+def _camera_streamer_component(namespace, params_file):
+    """Build a CameraStreamerComponent that loads pipeline and camera config from YAML."""
+    return ComposableNode(
+        package="lekiwi_perception",
+        plugin="lekiwi_perception::CameraStreamerComponent",
+        name="gscam",
+        namespace=namespace,
+        parameters=[params_file],
+        remappings=[
+            ("camera/image_raw", "image_raw"),
+            ("camera/camera_info", "camera_info"),
+        ],
+        extra_arguments=[{"use_intra_process_comms": True}],
     )
+
+
+def generate_launch_description():
+    """Launch CameraStreamerComponent drivers and Hailo chess perception component as composed nodes."""
+    container_name = LaunchConfiguration("container_name")
+    create_container = LaunchConfiguration("create_container")
+    cam_params_file = LaunchConfiguration("cam_params_file")
+    gscam_params_file = LaunchConfiguration("gscam_params_file")
+
+    camera_namespaces = [
+        "cameras/stereo_left",
+        "cameras/stereo_right",
+        "cameras/usb_wrist",
+        "cameras/usb_side",
+    ]
+
+    camera_components = [
+        _camera_streamer_component(ns, gscam_params_file) for ns in camera_namespaces
+    ]
+
+    inference_component = ComposableNode(
+        package="lekiwi_perception",
+        plugin="lekiwi_perception::HailoChessInferenceComponent",
+        name="hailo_chess_inference",
+        parameters=[cam_params_file],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
+    all_components = [*camera_components, inference_component]
 
     container = ComposableNodeContainer(
         name=container_name,
-        namespace='',
-        package='rclcpp_components',
-        executable='component_container_mt',
-        composable_node_descriptions=[camera_component],
-        output='screen',
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_mt",
+        composable_node_descriptions=all_components,
+        output="screen",
         condition=IfCondition(create_container),
     )
     loader = LoadComposableNodes(
         target_container=container_name,
-        composable_node_descriptions=[camera_component],
+        composable_node_descriptions=all_components,
         condition=UnlessCondition(create_container),
     )
-    return LaunchDescription([
-        DeclareLaunchArgument('container_name', default_value='lekiwi_perception_container'),
-        DeclareLaunchArgument('create_container', default_value='true'),
-        DeclareLaunchArgument(
-            'cam_params_file',
-            default_value=PathJoinSubstitution([
-                FindPackageShare('lekiwi_bringup'), 'config', 'perception', 'cameras.yaml'
-            ]),
-        ),
-        DeclareLaunchArgument('use_test_sources', default_value='false'),
-        container,
-        loader,
-    ])
+
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "container_name", default_value="lekiwi_perception_container"
+            ),
+            DeclareLaunchArgument("create_container", default_value="true"),
+            DeclareLaunchArgument(
+                "cam_params_file",
+                default_value=PathJoinSubstitution(
+                    [
+                        FindPackageShare("lekiwi_bringup"),
+                        "config",
+                        "perception",
+                        "cameras.yaml",
+                    ]
+                ),
+            ),
+            DeclareLaunchArgument(
+                "gscam_params_file",
+                default_value=PathJoinSubstitution(
+                    [
+                        FindPackageShare("lekiwi_bringup"),
+                        "config",
+                        "perception",
+                        "gscam_cameras.yaml",
+                    ]
+                ),
+            ),
+            container,
+            loader,
+        ]
+    )
