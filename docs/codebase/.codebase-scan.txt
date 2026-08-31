@@ -1,0 +1,68 @@
+=== SCAN COMPLETE: lekiwi_ros2 ===
+Repository root: /home/duykhongcay/docker_ws/lekiwi_ros2
+
+=== RECENT GIT COMMITS ===
+a50183d feat(hardware): integrate async IO worker thread, sync read, telemetry, and gamepad teleop
+e1fe757 feat(imu): implement layer 2 pre-processing and filtering pipeline
+6dc96a8 feat(imu): integrate ICM-20948 IMU sensor and refactor bringup launch scripts
+e661592 feat(bringup): configure camera streamer components and gating pipelines
+f880551 feat(control): publish latched camera mode in task orchestrator
+5f26483 feat(perception): implement CameraStreamerComponent with valve gating and Hailo inference
+9365f80 feat(interfaces): replace CamHubStatus with HailoInferenceStatus message
+0bfdaf0 docs: add repository contribution guidance
+3438615 feat(bringup): compose ros2_control robot launch
+5d3f8af feat(driver): add Feetech ros2_control hardware plugin
+94bd764 feat(perception): modularize camera hub pipeline
+7c43122 feat(interfaces): add mobile base telemetry services
+1643a54 feat: initialize robot description package with URDF, CAD assets, and launch configurations
+7c41e65 refactor: migrate control and perception modules with new GStreamer pipeline architecture and task orchestration system while removing legacy lerobot camera nodes.
+3dd6fd1 feat: initialize opencv_cameras package and add build configuration for imx219_stereo_camera
+d73c6b5 feat: migrate IMX219 camera driver to GStreamer pipeline with native libcamerasrc support
+098e7cd Merge branch 'main' of https://github.com/DuyKhongCay/lekiwi_ros2
+76eb7a8 feat: initialize package.xml, update camera topics to compressed streams, and adjust gitignore patterns
+96675af refactor: modularize camera node implementation with base class and libcamera integration
+0bd71b5 Please provide the code changes or file summaries so I can generate the commit message for you.
+
+=== HIGH-CHURN FILES (last 90 days) ===
+   6 lekiwi_bringup/launch/robot.launch.py
+   6 lekiwi_bringup/package.xml
+   6 .gitmodules
+   4 lekiwi_bringup/config/perception/cameras.yaml
+   4 lekiwi_perception/src/multi_camera_hub_component.cpp
+   4 .gitignore
+   4 lekiwi_hardwares/lekiwi_cameras/CMakeLists.txt
+   4 dependencies/lekiwi_labs
+   3 README.md
+   3 lekiwi_bringup/config/controllers/lekiwi_controllers.yaml
+   3 lekiwi_description/urdf/ros2_control.xacro
+   3 lekiwi_bringup/launch/cameras.launch.py
+   3 lekiwi_bringup/launch/control.launch.py
+   3 lekiwi_description/urdf/duykhongcay_lekiwi.urdf
+   3 lekiwi_perception/CMakeLists.txt
+   3 lekiwi_perception/include/cam_hub_stream_processor.hpp
+   3 lekiwi_perception/include/gstreamer/gst_pipe.hpp
+   3 lekiwi_perception/include/gstreamer/pipe_builder.hpp
+   3 lekiwi_perception/include/multi_camera_hub_component.hpp
+   3 lekiwi_perception/src/cam_hub_stream_processor.cpp
+
+=== CODE METRICS ===
+Total files scanned: 2033
+Total lines of code: 37112
+Files by language:
+  C Header: 52
+  C++: 42
+  Python: 42
+  C: 11
+  Rust: 6
+
+=== PACKAGES DETECTED ===
+- lekiwi_bringup: Launch orchestration, parameters, udev rules
+- lekiwi_control: Python FSM, task orchestrator, LeRobot bridge
+- lekiwi_perception: C++ ROS2 components, GStreamer pipelines, HailoRT inference, chessboard & piece detection
+- lekiwi_interfaces: Custom msg/srv definitions
+- lekiwi_description: URDF/Xacro, meshes, robot description
+- lekiwi_ftservo_hardware: Feetech bus hardware interface (ros2_control)
+- lekiwi_icm20948_hardware: ICM-20948 IMU hardware interface / sensor driver
+- scripts: standalone diagnostic and image utilities
+- deprecated: hailo_perception_node, lekiwi_perception_bak, lekiwi_hardwares
+

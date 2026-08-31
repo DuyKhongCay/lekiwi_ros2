@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(lekiwi_ftservo_hardware)
 
 find_package(ament_cmake REQUIRED)
+find_package(diagnostic_updater REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -21,6 +22,7 @@ target_include_directories(lekiwi_feetech_hardware
 target_include_directories(lekiwi_feetech_hardware SYSTEM PUBLIC ${SERIAL_INCLUDE_DIRS})
 target_link_libraries(lekiwi_feetech_hardware
   PUBLIC
+    diagnostic_updater::diagnostic_updater
     hardware_interface::hardware_interface
     pluginlib::pluginlib
     rclcpp::rclcpp
@@ -53,5 +55,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(lekiwi_ftservo_hardwareTargets HAS_LIBRARY_TARGET)
-ament_export_dependencies(hardware_interface pluginlib rclcpp rclcpp_lifecycle yaml-cpp)
+ament_export_dependencies(diagnostic_updater hardware_interface pluginlib rclcpp rclcpp_lifecycle yaml-cpp)
 ament_package()

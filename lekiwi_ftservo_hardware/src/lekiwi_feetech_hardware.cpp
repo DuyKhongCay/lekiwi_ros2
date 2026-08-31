@@ -249,6 +249,25 @@ namespace lekiwi_ftservo_hardware
         return hardware_interface::CallbackReturn::ERROR;
       }
     }
+
+    if (get_node())
+    {
+      updater_ = std::make_shared<diagnostic_updater::Updater>(get_node());
+      updater_->setHardwareID("lekiwi_feetech_servos");
+      updater_->add(
+          "Servo_Bus_Status", this,
+          &LeKiwiFeetechHardwareInterface::produce_diagnostics);
+      RCLCPP_INFO(
+          rclcpp::get_logger("LeKiwiFeetechHardware"),
+          "Diagnostic updater initialized for lekiwi_feetech_servos");
+    }
+    else
+    {
+      RCLCPP_WARN(
+          rclcpp::get_logger("LeKiwiFeetechHardware"),
+          "Default node is not available. Diagnostic updater will not be published.");
+    }
+
     return hardware_interface::CallbackReturn::SUCCESS;
   }
 
@@ -501,6 +520,11 @@ namespace lekiwi_ftservo_hardware
           shared_state_.last_read_time = std::chrono::steady_clock::now();
           ++shared_state_.update_count;
         }
+        else
+        {
+          std::lock_guard<std::mutex> lock(shared_state_.mutex);
+          ++shared_state_.read_error_count;
+        }
       }
       else
       {
@@ -521,6 +545,11 @@ namespace lekiwi_ftservo_hardware
           shared_state_.valid = true;
           shared_state_.last_read_time = std::chrono::steady_clock::now();
           ++shared_state_.update_count;
+        }
+        else
+        {
+          std::lock_guard<std::mutex> lock(shared_state_.mutex);
+          ++shared_state_.read_error_count;
         }
       }
 
@@ -589,6 +618,144 @@ namespace lekiwi_ftservo_hardware
   {
     std::lock_guard<std::mutex> lock(shared_state_.mutex);
     return shared_state_.telemetry;
+  }
+
+  void LeKiwiFeetechHardwareInterface::produce_diagnostics(
+      diagnostic_updater::DiagnosticStatusWrapper &stat)
+  {
+    std::vector<JointTelemetry> telem_list;
+    uint64_t total_updates = 0;
+    uint64_t total_errors = 0;
+    bool is_valid = false;
+    std::chrono::steady_clock::time_point last_read;
+
+    {
+      std::lock_guard<std::mutex> lock(shared_state_.mutex);
+      telem_list = shared_state_.telemetry;
+      total_updates = shared_state_.update_count;
+      total_errors = shared_state_.read_error_count;
+      is_valid = shared_state_.valid;
+      last_read = shared_state_.last_read_time;
+    }
+
+    if (!protocol_ || !is_valid || telem_list.empty())
+    {
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "STS Serial bus offline or unconfigured");
+      stat.add("USB Port", usb_port_);
+      stat.add("Baud Rate", baud_rate_);
+      stat.add("Worker Running", io_running_ ? "True" : "False");
+      return;
+    }
+
+    // Check freshness of last read
+    const auto now = std::chrono::steady_clock::now();
+    const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_read).count();
+    const bool is_stale = (age_ms > 200); // 200 ms timeout for 100Hz loop
+
+    // Telemetry aggregations
+    double min_v = 999.0;
+    double max_v = 0.0;
+    double max_temp = 0.0;
+    std::string hottest_joint;
+    double max_curr = 0.0;
+    std::string high_curr_joint;
+    std::vector<std::string> error_joints;
+    std::vector<std::string> warn_joints;
+
+    for (const auto &telem : telem_list)
+    {
+      if (telem.voltage_v > 0.1)
+      {
+        min_v = std::min(min_v, telem.voltage_v);
+        max_v = std::max(max_v, telem.voltage_v);
+      }
+      if (telem.temperature_c > max_temp)
+      {
+        max_temp = telem.temperature_c;
+        hottest_joint = telem.name;
+      }
+      if (telem.current_a > max_curr)
+      {
+        max_curr = telem.current_a;
+        high_curr_joint = telem.name;
+      }
+
+      // Check temperature limits (STS servo safe limit is ~65-70 C)
+      if (telem.temperature_c >= 70.0)
+      {
+        error_joints.push_back(telem.name + " (Overheat: " + std::to_string(static_cast<int>(telem.temperature_c)) + "C)");
+      }
+      else if (telem.temperature_c >= 60.0)
+      {
+        warn_joints.push_back(telem.name + " (Warm: " + std::to_string(static_cast<int>(telem.temperature_c)) + "C)");
+      }
+
+      // Check status flags (STS hardware protection flags)
+      if (telem.status_flags != 0)
+      {
+        error_joints.push_back(telem.name + " (Hardware Flag: 0x" + std::to_string(telem.status_flags) + ")");
+      }
+    }
+
+    // Check voltage safety (Nominal 11.1V - 12.6V for 3S LiPo, warn if < 10.0V or > 13.5V)
+    const bool low_voltage = (min_v < 9.5 && min_v > 1.0);
+    const bool high_voltage = (max_v > 13.5);
+
+    // 1. Overall Status Evaluation
+    if (is_stale)
+    {
+      stat.summaryf(
+          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+          "STS telemetry stale (last read %ld ms ago)", age_ms);
+    }
+    else if (!error_joints.empty())
+    {
+      std::string err_str;
+      for (size_t i = 0; i < error_joints.size(); ++i)
+      {
+        err_str += (i > 0 ? ", " : "") + error_joints[i];
+      }
+      stat.summaryf(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Servo errors: %s", err_str.c_str());
+    }
+    else if (low_voltage || high_voltage || !warn_joints.empty())
+    {
+      if (low_voltage)
+      {
+        stat.summaryf(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Low battery voltage: %.1f V", min_v);
+      }
+      else if (high_voltage)
+      {
+        stat.summaryf(diagnostic_msgs::msg::DiagnosticStatus::WARN, "High voltage: %.1f V", max_v);
+      }
+      else
+      {
+        stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Servos operating at high temperature");
+      }
+    }
+    else
+    {
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "All 9 STS servos healthy");
+    }
+
+    // 2. Add Key-Value Metrics (Minimal & Non-overlapping with JointStates)
+    stat.add("Serial Port", usb_port_);
+    stat.add("Baud Rate", baud_rate_);
+    stat.add("Active Servos Count", std::to_string(telem_list.size()) + " / 9");
+    stat.add("Worker I/O Loops", total_updates);
+    stat.add("Worker Read Errors", total_errors);
+
+    if (total_updates + total_errors > 0)
+    {
+      const double err_rate = (static_cast<double>(total_errors) / (total_updates + total_errors)) * 100.0;
+      stat.addf("Serial Error Rate (%)", "%.2f", err_rate);
+    }
+
+    if (min_v < 900.0)
+    {
+      stat.addf("Bus Voltage (Min / Max)", "%.2f V / %.2f V", min_v, max_v);
+    }
+    stat.addf("Max Temperature", "%.1f C (%s)", max_temp, hottest_joint.c_str());
+    stat.addf("Max Current", "%.2f A (%s)", max_curr, high_curr_joint.c_str());
   }
 
 } // namespace lekiwi_ftservo_hardware

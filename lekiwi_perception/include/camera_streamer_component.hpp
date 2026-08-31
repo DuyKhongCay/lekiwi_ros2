@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include <diagnostic_updater/diagnostic_updater.hpp>
 #include <camera_info_manager/camera_info_manager.hpp>
 #include "lekiwi_interfaces/msg/camera_mode.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
@@ -53,6 +54,7 @@ namespace lekiwi_perception
     void monitor_tick();
     void poll_bus_errors();
     void reset_pipeline();
+    void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
 
     static GstFlowReturn on_new_sample(GstAppSink *sink, gpointer user_data);
     void process_sample(GstSample *sample);
@@ -72,6 +74,9 @@ namespace lekiwi_perception
     rclcpp::TimerBase::SharedPtr autostart_timer_;
     rclcpp::TimerBase::SharedPtr monitor_timer_;
 
+    // Diagnostic updater
+    std::shared_ptr<diagnostic_updater::Updater> updater_;
+
     // Parameters (compatible with gscam)
     std::string gscam_config_;
     std::string camera_name_{"camera"};
@@ -90,6 +95,13 @@ namespace lekiwi_perception
     std::atomic<uint8_t> current_camera_mode_{lekiwi_interfaces::msg::CameraMode::STANDBY};
     std::atomic<bool> is_streaming_{false};
     std::atomic<uint64_t> frame_counter_{0};
+
+    // Telemetry & Diagnostic stats
+    std::atomic<double> current_latency_ms_{0.0};
+    std::atomic<float> current_fps_{0.0F};
+    std::chrono::steady_clock::time_point last_fps_time_;
+    uint64_t last_fps_frame_count_{0};
+    std::string last_gst_error_;
   };
 
 } // namespace lekiwi_perception

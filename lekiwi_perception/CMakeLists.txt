@@ -14,6 +14,7 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(diagnostic_updater REQUIRED)
 find_package(lekiwi_interfaces REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -88,6 +89,7 @@ ament_target_dependencies(lekiwi_perception_component
   ament_index_cpp
   camera_info_manager
   cv_bridge
+  diagnostic_updater
   lekiwi_interfaces
   lifecycle_msgs
   rclcpp

@@ -12,6 +12,7 @@
   <depend>ament_index_cpp</depend>
   <depend>camera_info_manager</depend>
   <depend>cv_bridge</depend>
+  <depend>diagnostic_updater</depend>
   <depend>lekiwi_interfaces</depend>
   <depend>lifecycle_msgs</depend>
   <depend>opencv</depend>

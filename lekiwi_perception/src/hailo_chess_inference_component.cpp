@@ -53,16 +53,10 @@ namespace lekiwi_perception
     frame_id_ = declare_parameter<std::string>("frame_id", "stereo_left_optical");
     publish_debug_image_ = declare_parameter<bool>("publish_debug_image", true);
     transition_timeout_ = std::chrono::milliseconds(declare_parameter<int>("transition_timeout_ms", 5000));
-    status_period_ = std::chrono::milliseconds(declare_parameter<int>("status_period_ms", 1000));
 
     fen_pub_ = create_publisher<std_msgs::msg::String>("/chess/fen", rclcpp::SensorDataQoS());
     detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>("/chess/detections_2d", rclcpp::SensorDataQoS());
     debug_image_pub_ = create_publisher<sensor_msgs::msg::Image>("/chess/debug_image", rclcpp::SensorDataQoS());
-
-    rclcpp::QoS status_qos(1);
-    status_qos.reliable();
-    status_qos.transient_local();
-    status_pub_ = create_publisher<lekiwi_interfaces::msg::HailoInferenceStatus>("~/status", status_qos);
 
     mode_srv_ = create_service<lekiwi_interfaces::srv::SetCamMode>(
         "~/set_mode",
@@ -80,7 +74,13 @@ namespace lekiwi_perception
           this->handle_sample(sample, pipeline);
         });
 
-    pipeline_state_ = lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_STOPPED;
+    updater_ = std::make_shared<diagnostic_updater::Updater>(this);
+    updater_->setHardwareID("hailo8_npu");
+    updater_->add(
+        "NPU_Pipeline_Status", this,
+        &HailoChessInferenceComponent::produce_diagnostics);
+
+    pipeline_state_ = "STOPPED";
     last_error_.clear();
     last_logged_fen_.clear();
 
@@ -94,31 +94,26 @@ namespace lekiwi_perception
     fen_pub_->on_activate();
     detections_pub_->on_activate();
     debug_image_pub_->on_activate();
-    status_pub_->on_activate();
 
-    pipeline_state_ = lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_STARTING;
+    pipeline_state_ = "STARTING";
     std::string error;
     if (!hailo_pipeline_->start(pipeline_config_, transition_timeout_, error))
     {
-      pipeline_state_ = lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_ERROR;
+      pipeline_state_ = "ERROR";
       last_error_ = error;
       RCLCPP_ERROR(get_logger(), "Failed to start Hailo pipeline: %s", error.c_str());
-      publish_status();
       return CallbackReturn::FAILURE;
     }
 
-    pipeline_state_ = lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_RUNNING;
+    pipeline_state_ = "RUNNING";
     last_fps_time_ = std::chrono::steady_clock::now();
     last_fps_frame_count_ = 0;
     frame_counter_.store(0);
     current_fps_ = 0.0F;
 
-    status_timer_ = create_wall_timer(
-        status_period_, std::bind(&HailoChessInferenceComponent::publish_status, this));
     bus_timer_ = create_wall_timer(
         std::chrono::milliseconds(100), std::bind(&HailoChessInferenceComponent::poll_bus_errors, this));
 
-    publish_status();
     RCLCPP_INFO(get_logger(), "HailoChessInferenceComponent activated and pipeline running");
     return CallbackReturn::SUCCESS;
   }
@@ -126,31 +121,23 @@ namespace lekiwi_perception
   HailoChessInferenceComponent::CallbackReturn HailoChessInferenceComponent::on_deactivate(
       const rclcpp_lifecycle::State &)
   {
-    if (status_timer_)
-    {
-      status_timer_->cancel();
-      status_timer_.reset();
-    }
     if (bus_timer_)
     {
       bus_timer_->cancel();
       bus_timer_.reset();
     }
 
-    pipeline_state_ = lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_STOPPING;
+    pipeline_state_ = "STOPPING";
     std::string error;
     if (hailo_pipeline_)
     {
       static_cast<void>(hailo_pipeline_->stop(transition_timeout_, error));
     }
-    pipeline_state_ = lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_STOPPED;
-
-    publish_status();
+    pipeline_state_ = "STOPPED";
 
     fen_pub_->on_deactivate();
     detections_pub_->on_deactivate();
     debug_image_pub_->on_deactivate();
-    status_pub_->on_deactivate();
 
     RCLCPP_INFO(get_logger(), "HailoChessInferenceComponent deactivated");
     return CallbackReturn::SUCCESS;
@@ -181,11 +168,6 @@ namespace lekiwi_perception
 
   void HailoChessInferenceComponent::reset_state()
   {
-    if (status_timer_)
-    {
-      status_timer_->cancel();
-      status_timer_.reset();
-    }
     if (bus_timer_)
     {
       bus_timer_->cancel();
@@ -202,9 +184,8 @@ namespace lekiwi_perception
     fen_pub_.reset();
     detections_pub_.reset();
     debug_image_pub_.reset();
-    status_pub_.reset();
     current_camera_mode_.store(lekiwi_interfaces::msg::CameraMode::STANDBY);
-    pipeline_state_ = lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_STOPPED;
+    pipeline_state_ = "STOPPED";
   }
 
   void HailoChessInferenceComponent::handle_set_mode(
@@ -234,7 +215,7 @@ namespace lekiwi_perception
     {
       return;
     }
-    if (!hailo_pipeline_ || pipeline_state_ != lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_RUNNING)
+    if (!hailo_pipeline_ || pipeline_state_ != "RUNNING")
     {
       return;
     }
@@ -247,7 +228,7 @@ namespace lekiwi_perception
 
   void HailoChessInferenceComponent::handle_sample(
       GstSample *sample,
-      GstElement * /*pipeline*/)
+      GstElement *pipeline)
   {
     if (sample == nullptr)
     {
@@ -356,37 +337,29 @@ namespace lekiwi_perception
       }
     }
 
+    if (pipeline != nullptr && GST_BUFFER_PTS_IS_VALID(buffer))
+    {
+      GstClock *clock = gst_element_get_clock(pipeline);
+      if (clock != nullptr)
+      {
+        const GstClockTime now_gst = gst_clock_get_time(clock);
+        const GstClockTime base_time = gst_element_get_base_time(pipeline);
+        if (now_gst >= base_time)
+        {
+          const GstClockTime running_time = now_gst - base_time;
+          const GstClockTime pts = GST_BUFFER_PTS(buffer);
+          if (running_time >= pts)
+          {
+            const double lat_ms = static_cast<double>(running_time - pts) / 1000000.0;
+            current_latency_ms_.store(lat_ms);
+          }
+        }
+        gst_object_unref(clock);
+      }
+    }
+
     gst_buffer_unmap(buffer, &map);
     frame_counter_.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  void HailoChessInferenceComponent::publish_status()
-  {
-    if (!status_pub_ || !status_pub_->is_activated())
-    {
-      return;
-    }
-
-    const auto now_tp = std::chrono::steady_clock::now();
-    const auto elapsed_sec = std::chrono::duration<float>(now_tp - last_fps_time_).count();
-    const uint64_t current_count = frame_counter_.load(std::memory_order_relaxed);
-
-    if (elapsed_sec >= 0.5F)
-    {
-      const uint64_t delta_frames = current_count - last_fps_frame_count_;
-      current_fps_ = static_cast<float>(delta_frames) / elapsed_sec;
-      last_fps_time_ = now_tp;
-      last_fps_frame_count_ = current_count;
-    }
-
-    auto status_msg = std::make_unique<lekiwi_interfaces::msg::HailoInferenceStatus>();
-    status_msg->header.stamp = now();
-    status_msg->header.frame_id = frame_id_;
-    status_msg->pipeline_state = pipeline_state_;
-    status_msg->last_error = last_error_;
-    status_msg->fps = current_fps_;
-
-    status_pub_->publish(std::move(status_msg));
   }
 
   void HailoChessInferenceComponent::poll_bus_errors()
@@ -399,8 +372,64 @@ namespace lekiwi_perception
     if (hailo_pipeline_->poll_error(diags))
     {
       last_error_ = diags;
-      pipeline_state_ = lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_ERROR;
+      pipeline_state_ = "ERROR";
       RCLCPP_ERROR(get_logger(), "Hailo GStreamer bus error: %s", diags.c_str());
+    }
+  }
+
+  void HailoChessInferenceComponent::produce_diagnostics(
+      diagnostic_updater::DiagnosticStatusWrapper &stat)
+  {
+    const auto now_tp = std::chrono::steady_clock::now();
+    const auto elapsed_sec = std::chrono::duration<float>(now_tp - last_fps_time_).count();
+    const uint64_t current_count = frame_counter_.load(std::memory_order_relaxed);
+
+    if (elapsed_sec >= 0.5F)
+    {
+      const uint64_t delta_frames = current_count - last_fps_frame_count_;
+      current_fps_.store(static_cast<float>(delta_frames) / elapsed_sec);
+      last_fps_time_ = now_tp;
+      last_fps_frame_count_ = current_count;
+    }
+
+    const float fps = current_fps_.load();
+    const double latency_ms = current_latency_ms_.load();
+
+    // 1. Overall Status
+    if (pipeline_state_ == "ERROR")
+    {
+      stat.summaryf(
+          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+          "Hailo Pipeline Error: %s", last_error_.c_str());
+    }
+    else if (pipeline_state_ == "RUNNING" && fps < 1.0F && current_count > 10)
+    {
+      stat.summary(
+          diagnostic_msgs::msg::DiagnosticStatus::WARN,
+          "Low Inference FPS (Waiting for Frames or Under load)");
+    }
+    else if (pipeline_state_ == "RUNNING")
+    {
+      stat.summaryf(
+          diagnostic_msgs::msg::DiagnosticStatus::OK,
+          "Hailo-8 NPU Inference Active (%.1f FPS, %.1f ms latency)", fps, latency_ms);
+    }
+    else
+    {
+      stat.summary(
+          diagnostic_msgs::msg::DiagnosticStatus::OK,
+          "Hailo-8 NPU Standby / Idle");
+    }
+
+    // 2. Metrics (Minimal & Non-overlapping with FEN / Detections)
+    stat.add("NPU Device", "Hailo-8 M.2 (26 TOPS)");
+    stat.add("Pipeline State", pipeline_state_);
+    stat.addf("Inference Framerate (FPS)", "%.1f", fps);
+    stat.addf("End-to-End Latency (ms)", "%.2f", latency_ms);
+    stat.add("Total Inferred Frames", current_count);
+    if (!last_error_.empty())
+    {
+      stat.add("Last Error", last_error_);
     }
   }
 

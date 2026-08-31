@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "diagnostic_updater/diagnostic_updater.hpp"
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
 #include "hardware_interface/sensor_interface.hpp"
@@ -60,10 +61,16 @@ namespace lekiwi_icm20948_hardware
         std::array<double, 3> gyro_bias_sum_{0.0, 0.0, 0.0};
         bool gyro_calibrated_{false};
 
-        // Error tracking
+        // Error & Reliability tracking
         int consecutive_errors_{0};
         int max_consecutive_errors_{10};
+        uint64_t total_reads_{0};
+        uint64_t failed_reads_{0};
         SensorData last_valid_data_;
+
+        // Diagnostics
+        std::shared_ptr<diagnostic_updater::Updater> updater_;
+        void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
     };
 
 } // namespace lekiwi_icm20948_hardware

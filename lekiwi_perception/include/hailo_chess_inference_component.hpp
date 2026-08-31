@@ -13,10 +13,10 @@
 #include <mutex>
 #include <string>
 
+#include <diagnostic_updater/diagnostic_updater.hpp>
 #include "hailo/hailo_gst_pipeline.hpp"
 #include "hailo/chess_vision_mapper.hpp"
 #include "lekiwi_interfaces/msg/camera_mode.hpp"
-#include "lekiwi_interfaces/msg/hailo_inference_status.hpp"
 #include "lekiwi_interfaces/srv/set_cam_mode.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
@@ -49,38 +49,39 @@ namespace lekiwi_perception
     void handle_set_mode(
         const std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Request> request,
         std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Response> response);
-    void publish_status();
     void poll_bus_errors();
     void reset_state();
+    void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
 
     HailoPipelineConfig pipeline_config_;
     std::string frame_id_{"stereo_left_optical"};
     bool publish_debug_image_{true};
     std::chrono::milliseconds transition_timeout_{5000};
-    std::chrono::milliseconds status_period_{1000};
 
     std::unique_ptr<HailoGstPipeline> hailo_pipeline_;
 
     rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::String>::SharedPtr fen_pub_;
     rclcpp_lifecycle::LifecyclePublisher<vision_msgs::msg::Detection2DArray>::SharedPtr detections_pub_;
     rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr debug_image_pub_;
-    rclcpp_lifecycle::LifecyclePublisher<lekiwi_interfaces::msg::HailoInferenceStatus>::SharedPtr status_pub_;
 
     rclcpp::Service<lekiwi_interfaces::srv::SetCamMode>::SharedPtr mode_srv_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
-    rclcpp::TimerBase::SharedPtr status_timer_;
     rclcpp::TimerBase::SharedPtr bus_timer_;
+
+    // Diagnostic Updater
+    std::shared_ptr<diagnostic_updater::Updater> updater_;
 
     std::mutex state_mutex_;
     std::atomic<uint8_t> current_camera_mode_{lekiwi_interfaces::msg::CameraMode::STANDBY};
-    uint8_t pipeline_state_{lekiwi_interfaces::msg::HailoInferenceStatus::PIPELINE_STOPPED};
+    std::string pipeline_state_{"STOPPED"};
     std::string last_error_;
     std::string last_logged_fen_;
 
     std::atomic<uint64_t> frame_counter_{0};
     std::chrono::steady_clock::time_point last_fps_time_;
     uint64_t last_fps_frame_count_{0};
-    float current_fps_{0.0F};
+    std::atomic<float> current_fps_{0.0F};
+    std::atomic<double> current_latency_ms_{0.0};
   };
 
 } // namespace lekiwi_perception

@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 
+#include <diagnostic_updater/diagnostic_updater.hpp>
 #include <hardware_interface/system_interface.hpp>
 #include <rclcpp_lifecycle/state.hpp>
 
@@ -72,6 +73,7 @@ namespace lekiwi_ftservo_hardware
       std::vector<double> velocities;
       std::vector<JointTelemetry> telemetry;
       uint64_t update_count{0};
+      uint64_t read_error_count{0};
       std::chrono::steady_clock::time_point last_read_time;
       bool valid{false};
     };
@@ -95,6 +97,9 @@ namespace lekiwi_ftservo_hardware
     // Creates and validates runtime state in URDF declaration order.
     hardware_interface::CallbackReturn configure_joint_runtime();
 
+    // Diagnostics callback
+    void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper & stat);
+
     std::unique_ptr<StsProtocol> protocol_;
     std::vector<JointRuntime> joints_;
     std::vector<uint8_t> joint_ids_;
@@ -107,6 +112,9 @@ namespace lekiwi_ftservo_hardware
     std::atomic<bool> io_running_{false};
     SharedState shared_state_;
     SharedCommand shared_command_;
+
+    // Diagnostic Updater
+    std::shared_ptr<diagnostic_updater::Updater> updater_;
   };
 
 } // namespace lekiwi_ftservo_hardware

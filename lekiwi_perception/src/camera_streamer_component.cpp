@@ -169,6 +169,15 @@ namespace lekiwi_perception
             camera_name_.c_str());
       }
 
+      updater_ = std::make_shared<diagnostic_updater::Updater>(this);
+      updater_->setHardwareID(camera_name_);
+      updater_->add(
+          camera_name_ + "_stream_status", this,
+          &CameraStreamerComponent::produce_diagnostics);
+
+      last_fps_time_ = std::chrono::steady_clock::now();
+      last_fps_frame_count_ = 0;
+
       RCLCPP_INFO(
           get_logger(), "CameraStreamerComponent configured successfully for camera '%s'",
           camera_name_.c_str());
@@ -441,11 +450,13 @@ namespace lekiwi_perception
       if (is_err)
       {
         gst_message_parse_error(msg, &err, &dbg);
+        std::string err_text = err ? err->message : "unknown error";
+        last_gst_error_ = err_text;
         RCLCPP_ERROR(
             get_logger(), "[%s] GStreamer bus error from %s: %s%s%s",
             camera_name_.c_str(),
             GST_OBJECT_NAME(msg->src),
-            err ? err->message : "unknown",
+            err_text.c_str(),
             dbg ? " (" : "",
             dbg ? dbg : "");
         if (dbg)
@@ -456,11 +467,13 @@ namespace lekiwi_perception
       else
       {
         gst_message_parse_warning(msg, &err, &dbg);
+        std::string warn_text = err ? err->message : "unknown warning";
+        last_gst_error_ = "Warning: " + warn_text;
         RCLCPP_WARN(
             get_logger(), "[%s] GStreamer bus warning from %s: %s%s%s",
             camera_name_.c_str(),
             GST_OBJECT_NAME(msg->src),
-            err ? err->message : "unknown",
+            warn_text.c_str(),
             dbg ? " (" : "",
             dbg ? dbg : "");
       }
@@ -634,6 +647,17 @@ namespace lekiwi_perception
       info_pub_->publish(std::move(info_msg));
     }
 
+    if (GST_BUFFER_PTS_IS_VALID(buffer) && GST_BUFFER_PTS(buffer) > 0U)
+    {
+      const auto now_ns = now().nanoseconds();
+      const auto pts_ns = static_cast<int64_t>(GST_BUFFER_PTS(buffer));
+      if (now_ns > pts_ns)
+      {
+        const double lat_ms = static_cast<double>(now_ns - pts_ns) * 1e-6;
+        current_latency_ms_.store(lat_ms);
+      }
+    }
+
     frame_counter_.fetch_add(1, std::memory_order_relaxed);
   }
 
@@ -651,11 +675,83 @@ namespace lekiwi_perception
   {
     if (valve_ == nullptr)
     {
-      return false;
+      return is_streaming_.load();
     }
     gboolean drop = TRUE;
     g_object_get(G_OBJECT(valve_), "drop", &drop, NULL);
-    return drop == FALSE;
+    return (drop == FALSE);
+  }
+
+  void CameraStreamerComponent::produce_diagnostics(
+      diagnostic_updater::DiagnosticStatusWrapper &stat)
+  {
+    const auto now_tp = std::chrono::steady_clock::now();
+    const auto elapsed_sec = std::chrono::duration<float>(now_tp - last_fps_time_).count();
+    const uint64_t current_count = frame_counter_.load(std::memory_order_relaxed);
+
+    if (elapsed_sec >= 0.5F)
+    {
+      const uint64_t delta_frames = current_count - last_fps_frame_count_;
+      current_fps_.store(static_cast<float>(delta_frames) / elapsed_sec);
+      last_fps_time_ = now_tp;
+      last_fps_frame_count_ = current_count;
+    }
+
+    const float fps = current_fps_.load();
+    const double latency_ms = current_latency_ms_.load();
+    const bool streaming = is_streaming_.load();
+    const bool valve_open = is_valve_open();
+    const bool is_active = (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+    // 1. Overall Status
+    if (!last_gst_error_.empty() && last_gst_error_.rfind("Warning:", 0) != 0)
+    {
+      stat.summaryf(
+          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+          "GStreamer pipeline error: %s", last_gst_error_.c_str());
+    }
+    else if (!is_active)
+    {
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Camera streamer node inactive");
+    }
+    else if (streaming && fps < 5.0F && current_count > 10)
+    {
+      stat.summaryf(
+          diagnostic_msgs::msg::DiagnosticStatus::WARN,
+          "Low camera frame rate (%.1f FPS)", fps);
+    }
+    else if (streaming)
+    {
+      stat.summaryf(
+          diagnostic_msgs::msg::DiagnosticStatus::OK,
+          "Streaming active (%.1f FPS, %.1f ms latency)", fps, latency_ms);
+    }
+    else
+    {
+      stat.summary(
+          diagnostic_msgs::msg::DiagnosticStatus::OK,
+          "Gated / Standby (No active stream requested)");
+    }
+
+    // 2. Metrics
+    stat.add("Camera Name", camera_name_);
+    stat.add("Frame ID", frame_id_);
+    stat.add("Stream State", streaming ? "Streaming" : (valve_open ? "Valve Open (Idle)" : "Gated (Dropping)"));
+    stat.addf("Framerate (FPS)", "%.1f", fps);
+    stat.addf("Gst to ROS Latency (ms)", "%.2f", latency_ms);
+    stat.add("Total Frames Published", current_count);
+
+    size_t sub_count = 0;
+    if (image_pub_)
+    {
+      sub_count += image_pub_->get_subscription_count() + image_pub_->get_intra_process_subscription_count();
+    }
+    stat.add("Image Subscribers Count", sub_count);
+
+    if (!last_gst_error_.empty())
+    {
+      stat.add("Last Gst Status", last_gst_error_);
+    }
   }
 
 } // namespace lekiwi_perception

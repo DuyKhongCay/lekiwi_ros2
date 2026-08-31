@@ -214,26 +214,44 @@ namespace lekiwi_icm20948_hardware
         if (mock_sensor_)
         {
             RCLCPP_INFO(get_logger(), "ICM20948 running in MOCK mode (simulating stationary sensor values).");
-            return hardware_interface::CallbackReturn::SUCCESS;
         }
-
-        RCLCPP_INFO(get_logger(), "Configuring ICM20948 sensor on /dev/i2c-%d...", driver_config_.i2c_bus);
-
-        std::string err;
-        if (!driver_.open_bus(driver_config_, &err))
+        else
         {
-            RCLCPP_ERROR(get_logger(), "Failed to open I2C bus: %s", err.c_str());
-            return hardware_interface::CallbackReturn::ERROR;
+            RCLCPP_INFO(get_logger(), "Configuring ICM20948 sensor on /dev/i2c-%d...", driver_config_.i2c_bus);
+
+            std::string err;
+            if (!driver_.open_bus(driver_config_, &err))
+            {
+                RCLCPP_ERROR(get_logger(), "Failed to open I2C bus: %s", err.c_str());
+                return hardware_interface::CallbackReturn::ERROR;
+            }
+
+            if (!driver_.configure_device(&err))
+            {
+                RCLCPP_ERROR(get_logger(), "Failed to configure ICM20948 sensor: %s", err.c_str());
+                driver_.close_bus();
+                return hardware_interface::CallbackReturn::ERROR;
+            }
+
+            RCLCPP_INFO(get_logger(), "Successfully configured ICM20948 and AK09916 magnetometer.");
         }
 
-        if (!driver_.configure_device(&err))
+        if (get_node())
         {
-            RCLCPP_ERROR(get_logger(), "Failed to configure ICM20948 sensor: %s", err.c_str());
-            driver_.close_bus();
-            return hardware_interface::CallbackReturn::ERROR;
+            updater_ = std::make_shared<diagnostic_updater::Updater>(get_node());
+            updater_->setHardwareID(sensor_name_);
+            updater_->add(
+                sensor_name_ + "_status", this,
+                &ICM20948SensorHardware::produce_diagnostics);
+            RCLCPP_INFO(get_logger(), "Diagnostic updater initialized for %s", sensor_name_.c_str());
+        }
+        else
+        {
+            RCLCPP_WARN(
+                get_logger(),
+                "Default node is not available. Diagnostic updater will not be published.");
         }
 
-        RCLCPP_INFO(get_logger(), "Successfully configured ICM20948 and AK09916 magnetometer.");
         return hardware_interface::CallbackReturn::SUCCESS;
     }
 
@@ -288,6 +306,7 @@ namespace lekiwi_icm20948_hardware
         // Truong hop mock mode: cap nhat du lieu tinh gia lap
         if (mock_sensor_)
         {
+            total_reads_++;
             set_state(sensor_name_ + "/orientation.x", 0.0);
             set_state(sensor_name_ + "/orientation.y", 0.0);
             set_state(sensor_name_ + "/orientation.z", 0.0);
@@ -308,6 +327,7 @@ namespace lekiwi_icm20948_hardware
             return hardware_interface::return_type::OK;
         }
 
+        total_reads_++;
         SensorData data;
         std::string err;
 
@@ -315,6 +335,7 @@ namespace lekiwi_icm20948_hardware
         if (!driver_.read_sensor_data(data, &err))
         {
             consecutive_errors_++;
+            failed_reads_++;
             RCLCPP_WARN_THROTTLE(
                 get_logger(), *get_clock(), 1000,
                 "ICM20948 I2C read failed: %s (consecutive errors: %d)",
@@ -398,6 +419,77 @@ namespace lekiwi_icm20948_hardware
         }
 
         return hardware_interface::return_type::OK;
+    }
+
+    void ICM20948SensorHardware::produce_diagnostics(
+        diagnostic_updater::DiagnosticStatusWrapper &stat)
+    {
+        if (mock_sensor_)
+        {
+            stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Running in MOCK mode");
+            stat.add("Mock Mode", "True");
+            stat.add("Total Reads", total_reads_);
+            return;
+        }
+
+        // 1. Danh gia trang thai suc khoe tong the
+        if (consecutive_errors_ > max_consecutive_errors_)
+        {
+            stat.summaryf(
+                diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+                "I2C communication failure (%d consecutive errors)", consecutive_errors_);
+        }
+        else if (auto_calibrate_gyro_ && !gyro_calibrated_)
+        {
+            stat.summaryf(
+                diagnostic_msgs::msg::DiagnosticStatus::WARN,
+                "Calibrating Gyro Bias (%d/%d samples)", current_calib_count_, gyro_calib_samples_);
+        }
+        else if (consecutive_errors_ > 0)
+        {
+            stat.summaryf(
+                diagnostic_msgs::msg::DiagnosticStatus::WARN,
+                "Transient I2C read errors (%d consecutive)", consecutive_errors_);
+        }
+        else
+        {
+            stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "IMU hardware OK");
+        }
+
+        // 2. Metrics toi thieu khong trung lap voi broadcaster
+        std::ostringstream addr_ss;
+        addr_ss << "/dev/i2c-" << driver_config_.i2c_bus << " (0x"
+                << std::hex << std::uppercase << static_cast<int>(driver_config_.i2c_address) << ")";
+        stat.add("I2C Device", addr_ss.str());
+
+        stat.add("Consecutive Read Errors", consecutive_errors_);
+        stat.add("Total Reads", total_reads_);
+        stat.add("Failed Reads", failed_reads_);
+
+        if (total_reads_ > 0)
+        {
+            double error_rate = (static_cast<double>(failed_reads_) / static_cast<double>(total_reads_)) * 100.0;
+            stat.addf("Error Rate (%)", "%.2f", error_rate);
+        }
+        else
+        {
+            stat.add("Error Rate (%)", "0.00");
+        }
+
+        if (auto_calibrate_gyro_)
+        {
+            stat.add("Gyro Calibrated", gyro_calibrated_ ? "Yes" : "In Progress");
+            stat.addf(
+                "Calculated Gyro Bias (rad/s)", "[%.6f, %.6f, %.6f]",
+                gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
+        }
+        else
+        {
+            stat.add("Gyro Calibrated", "Manual Bias");
+            stat.addf(
+                "Configured Gyro Bias (rad/s)", "[%.6f, %.6f, %.6f]",
+                gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
+        }
     }
 
 } // namespace lekiwi_icm20948_hardware
