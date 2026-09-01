@@ -17,6 +17,9 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>lekiwi_control</exec_depend>
   <exec_depend>lekiwi_description</exec_depend>
+  <exec_depend>diagnostic_aggregator</exec_depend>
+  <exec_depend>diagnostic_common_diagnostics</exec_depend>
+  <exec_depend>diagnostic_updater</exec_depend>
   <exec_depend>gscam</exec_depend>
   <exec_depend>imu_filter_madgwick</exec_depend>
   <exec_depend>imu_pipeline</exec_depend>

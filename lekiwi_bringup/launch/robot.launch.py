@@ -47,12 +47,7 @@ def generate_launch_description():
     # Perception subsystem arguments
     perception_args_spec = [
         ("data_plane_container", "lekiwi_perception_container"),
-        (
-            "camera_params_file",
-            PathJoinSubstitution(
-                [bringup_share, "config", "perception", "cameras.yaml"]
-            ),
-        ),
+        ("publish_debug_image", "true"),
         ("use_test_sources", "false"),
     ]
 
@@ -95,6 +90,21 @@ def generate_launch_description():
         ("teleop_cmd_vel_topic", "/omni_base_controller/cmd_vel"),
     ]
 
+    # Diagnostics subsystem arguments
+    diagnostics_args_spec = [
+        ("enable_diagnostics", "true"),
+        (
+            "analyzers_config_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "diagnostics", "lekiwi_analyzers.yaml"]
+            ),
+        ),
+        ("enable_system_monitors", "true"),
+        ("cpu_warning_percentage", "90"),
+        ("ram_warning_percentage", "90"),
+        ("hd_path", "/"),
+    ]
+
     # Subsystem include definitions
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -112,7 +122,7 @@ def generate_launch_description():
         launch_arguments={
             "container_name": LaunchConfiguration("data_plane_container"),
             "create_container": "true",
-            "cam_params_file": LaunchConfiguration("camera_params_file"),
+            "publish_debug_image": LaunchConfiguration("publish_debug_image"),
             "use_test_sources": LaunchConfiguration("use_test_sources"),
         }.items(),
     )
@@ -156,6 +166,20 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("start_teleop")),
     )
 
+    diagnostics = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([bringup_share, "launch", "diagnostics.launch.py"])
+        ),
+        launch_arguments={
+            "analyzers_config_file": LaunchConfiguration("analyzers_config_file"),
+            "enable_system_monitors": LaunchConfiguration("enable_system_monitors"),
+            "cpu_warning_percentage": LaunchConfiguration("cpu_warning_percentage"),
+            "ram_warning_percentage": LaunchConfiguration("ram_warning_percentage"),
+            "hd_path": LaunchConfiguration("hd_path"),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration("enable_diagnostics")),
+    )
+
     # Automatic declaration of all arguments
     all_declared_arguments = [
         DeclareLaunchArgument(name, default_value=default)
@@ -165,6 +189,7 @@ def generate_launch_description():
             + control_args_spec
             + imu_args_spec
             + teleop_args_spec
+            + diagnostics_args_spec
         )
     ]
 
@@ -176,5 +201,6 @@ def generate_launch_description():
             control,
             imu,
             teleop,
+            diagnostics,
         ]
     )

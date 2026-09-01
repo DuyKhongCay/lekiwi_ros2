@@ -1,3 +1,11 @@
+/**
+ * @file lekiwi_feetech_hardware.cpp
+ * @brief Implementation of the LeKiwiFeetechHardwareInterface ros2_control plugin.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
+
 #include "lekiwi_ftservo_hardware/lekiwi_feetech_hardware.hpp"
 
 #include <cmath>
@@ -19,12 +27,19 @@ namespace lekiwi_ftservo_hardware
 {
   namespace
   {
+    /// Magnetic encoder ticks per complete revolution for Feetech STS (12-bit resolution: 4096).
     constexpr int kEncoderTicksPerRevolution = 4096;
+    /// Multiplier to convert encoder ticks into radians: (2 * PI) / 4096.
     constexpr double kRadiansPerEncoderTick = (2.0 * M_PI) / kEncoderTicksPerRevolution;
+    /// Multiplier to convert radians into encoder ticks: 4096 / (2 * PI).
     constexpr double kEncoderTicksPerRadian = kEncoderTicksPerRevolution / (2.0 * M_PI);
+    /// Register address for operating mode configuration.
     constexpr uint8_t kModeRegister = StsProtocol::kModeRegister;
+    /// Register address for motor torque enable state.
     constexpr uint8_t kTorqueEnableRegister = StsProtocol::kTorqueEnableRegister;
+    /// STS operating mode: Position control mode.
     constexpr uint8_t kPositionMode = 0;
+    /// STS operating mode: Continuous velocity / wheel speed mode.
     constexpr uint8_t kVelocityMode = 1;
   } // namespace
 

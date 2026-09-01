@@ -1,5 +1,10 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file camera_streamer_component.cpp
+ * @brief Implementation of CameraStreamerComponent GStreamer lifecycle node.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #include "camera_streamer_component.hpp"
 

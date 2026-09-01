@@ -30,7 +30,6 @@ def generate_launch_description():
     """Launch CameraStreamerComponent drivers and Hailo chess perception component as composed nodes."""
     container_name = LaunchConfiguration("container_name")
     create_container = LaunchConfiguration("create_container")
-    cam_params_file = LaunchConfiguration("cam_params_file")
     gscam_params_file = LaunchConfiguration("gscam_params_file")
 
     camera_namespaces = [
@@ -48,7 +47,11 @@ def generate_launch_description():
         package="lekiwi_perception",
         plugin="lekiwi_perception::HailoChessInferenceComponent",
         name="hailo_chess_inference",
-        parameters=[cam_params_file],
+        parameters=[
+            {
+                "publish_debug_image": LaunchConfiguration("publish_debug_image"),
+            }
+        ],
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
@@ -74,12 +77,7 @@ def generate_launch_description():
     declared_args_spec = [
         ("container_name", "lekiwi_perception_container"),
         ("create_container", "true"),
-        (
-            "cam_params_file",
-            PathJoinSubstitution(
-                [bringup_share, "config", "perception", "cameras.yaml"]
-            ),
-        ),
+        ("publish_debug_image", "true"),
         (
             "gscam_params_file",
             PathJoinSubstitution(

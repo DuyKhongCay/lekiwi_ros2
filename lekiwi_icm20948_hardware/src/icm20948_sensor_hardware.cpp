@@ -1,3 +1,11 @@
+/**
+ * @file icm20948_sensor_hardware.cpp
+ * @brief Implementation of the ros2_control ICM20948SensorHardware plugin.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
+
 #include "lekiwi_icm20948_hardware/icm20948_sensor_hardware.hpp"
 
 #include <cmath>

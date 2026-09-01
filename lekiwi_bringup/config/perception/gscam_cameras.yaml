@@ -13,16 +13,15 @@
     camera_name: "stereo_left"
     active_modes: [1, 2]
     gscam_config: >
-      libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" !
-      valve name=gate drop=true !
-      queue leaky=downstream max-size-buffers=1 !
-      video/x-raw, format=NV12, width=3280,height=2464, framerate=20/1 !
-      videoscale add-borders=true n-threads=4 !
-      video/x-raw,format=NV12,width=640, height=640, pixel-aspect-ratio=1/1 !
-      videoflip method="rotate-180" !
-      videoconvert n-threads=4 !
+      libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" ! 
+      valve name=gate drop=true ! 
+      queue leaky=downstream max-size-buffers=1 ! 
+      video/x-raw,format=NV12,width=3280,height=2464,framerate=20/1 ! 
+      videoscale add-borders=true n-threads=4 ! \
+      video/x-raw,format=NV12,width=640,height=640,pixel-aspect-ratio=1/1 ! 
+      videoflip method="rotate-180" ! 
+      videoconvert n-threads=4 ! 
       video/x-raw,format=RGB
-
 /cameras/stereo_right/gscam:
   ros__parameters:
     camera_info_url: lekiwi_ros2/lekiwi_bringup/config/perception/calibration/stereo_right.yaml
@@ -33,12 +32,14 @@
       libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@88000/imx219@10" !
       valve name=gate drop=true !
       queue leaky=downstream max-size-buffers=1 !
-      video/x-raw, format=NV12, width=1640,height=1232, framerate=30/1 !
-      videoscale add-borders=true n-threads=4 !
-      video/x-raw,format=NV12,width=640, height=480, pixel-aspect-ratio=1/1 !
+      video/x-raw,format=NV12,width=1640,height=1232,framerate=25/1 !
+      videocrop left=204 right=204 !
+      videoscale n-threads=4 !
+      video/x-raw,format=NV12,width=384,height=384,pixel-aspect-ratio=1/1 !
       videoflip method="rotate-180" !
       videoconvert n-threads=4 !
       video/x-raw,format=RGB
+
 
 /cameras/usb_wrist/gscam:
   ros__parameters:
@@ -47,14 +48,16 @@
     camera_name: "usb_wrist"
     active_modes: [3]
     gscam_config: >
-      v4l2src device=/dev/usb_wrist io-mode=mmap !
+      v4l2src device=/dev/usb_wrist io-mode=mmap extra-controls="c,power_line_frequency=1,sharpness=256,contrast=356" !
       valve name=gate drop=true !
-      image/jpeg,width=1280,height=720,framerate=30/1 !
+      image/jpeg,width=1280,height=720,framerate=25/1 !
       queue leaky=downstream max-size-buffers=1 !
       jpegdec !
       video/x-raw,format=I420 !
-      videoscale add-borders=true n-threads=4 !
-      video/x-raw,format=I420,width=640,height=480,pixel-aspect-ratio=1/1 !
+      videocrop left=280 right=280 !
+      videoscale n-threads=4 !
+      video/x-raw,format=I420,width=384,height=384,pixel-aspect-ratio=1/1 !
+      videobalance contrast=1.2 brightness=-0.2 !
       videoconvert n-threads=4 !
       video/x-raw,format=RGB
 
@@ -65,13 +68,22 @@
     camera_name: "usb_side"
     active_modes: [3]
     gscam_config: >
-      v4l2src device=/dev/usb_side io-mode=mmap !
+      v4l2src device=/dev/usb_side io-mode=mmap extra-controls="c,auto_exposure=1,exposure_time_absolute=300,gain=30,brightness=54,contrast=30,sharpness=15000" !
       valve name=gate drop=true !
       image/jpeg,width=1280,height=720,framerate=30/1 !
+      videorate drop-only=true !
+      image/jpeg,framerate=25/1 !
       queue leaky=downstream max-size-buffers=1 !
       jpegdec !
       video/x-raw,format=I420 !
-      videoscale add-borders=true n-threads=4 !
-      video/x-raw,format=I420,width=640,height=480,pixel-aspect-ratio=1/1 !
+      videocrop left=280 right=280 !
+      videoscale n-threads=4 !
+      video/x-raw,format=I420,width=384,height=384,pixel-aspect-ratio=1/1 !
+      videoflip method="counterclockwise" !
+      videomedian filtersize=5 lum-only=true !
+      gamma gamma=1.8 !
+      videobalance contrast=0.9 !
+      videobalance brightness=-0.05 !
       videoconvert n-threads=4 !
-      video/x-raw,format=RGB
+      video/x-raw,format=RGB !
+ 

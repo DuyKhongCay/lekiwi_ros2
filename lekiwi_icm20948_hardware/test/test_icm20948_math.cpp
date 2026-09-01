@@ -1,3 +1,11 @@
+/**
+ * @file test_icm20948_math.cpp
+ * @brief Unit tests (L1 verification) for ICM-20948 scale factor calculations and binary field decoding.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
+
 #include <gtest/gtest.h>
 #include <cmath>
 #include "lekiwi_icm20948_hardware/icm20948_defs.hpp"
@@ -5,6 +13,9 @@
 
 using namespace lekiwi_icm20948_hardware;
 
+/**
+ * @brief Verifies accelerometer sensitivity scale factors across 2g, 4g, 8g, and 16g ranges.
+ */
 TEST(ICM20948MathTest, AccelScaleFactors)
 {
     double scale_2g = ICM20948Driver::calculate_accel_scale(AccelRange::RANGE_2G);
@@ -23,6 +34,9 @@ TEST(ICM20948MathTest, AccelScaleFactors)
     EXPECT_NEAR(accel_1g, GRAVITY_EARTH, 1e-4);
 }
 
+/**
+ * @brief Verifies gyroscope sensitivity scale factors across 250, 500, 1000, and 2000 dps ranges.
+ */
 TEST(ICM20948MathTest, GyroScaleFactors)
 {
     double scale_250 = ICM20948Driver::calculate_gyro_scale(GyroRange::RANGE_250DPS);
@@ -41,6 +55,9 @@ TEST(ICM20948MathTest, GyroScaleFactors)
     EXPECT_NEAR(gyro_rad, 100.0 * DEG_TO_RAD, 1e-3);
 }
 
+/**
+ * @brief Verifies conversion of raw magnetometer 16-bit integer values to Tesla units.
+ */
 TEST(ICM20948MathTest, MagnetometerScalingToTesla)
 {
     // 100 uT = 100 * 10^-6 Tesla
@@ -50,6 +67,9 @@ TEST(ICM20948MathTest, MagnetometerScalingToTesla)
     EXPECT_NEAR(mag_tesla, 100.0e-6, 1e-6);
 }
 
+/**
+ * @brief Verifies Big-Endian byte parsing (MSB first) for ICM-20948 accelerometer and gyroscope.
+ */
 TEST(ICM20948MathTest, BigEndianAccelGyroDecoding)
 {
     uint8_t buf[12] = {
@@ -68,6 +88,9 @@ TEST(ICM20948MathTest, BigEndianAccelGyroDecoding)
     EXPECT_EQ(gy, 3280);
 }
 
+/**
+ * @brief Verifies Little-Endian byte parsing (LSB first) for AK09916 magnetometer registers.
+ */
 TEST(ICM20948MathTest, LittleEndianMagnetometerDecoding)
 {
     uint8_t mag_buf[9] = {

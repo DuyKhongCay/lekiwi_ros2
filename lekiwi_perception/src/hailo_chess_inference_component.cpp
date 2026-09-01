@@ -1,5 +1,10 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file hailo_chess_inference_component.cpp
+ * @brief Implementation of HailoChessInferenceComponent perception node.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #include "hailo_chess_inference_component.hpp"
 

@@ -1,3 +1,11 @@
+/**
+ * @file icm20948_driver.cpp
+ * @brief Implementation of the low-level I2C communication driver for ICM-20948 and AK09916.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
+
 #include "lekiwi_icm20948_hardware/icm20948_driver.hpp"
 
 #include <cerrno>

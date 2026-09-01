@@ -1,5 +1,13 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file hailo_gst_pipeline.hpp
+ * @brief C++ GStreamer wrapper for Hailo-8 NPU inference pipelines.
+ *
+ * Encapsulates GStreamer pipeline construction (appsrc -> hailotools -> appsink), image buffer feeding,
+ * and asynchronous sample callback dispatch.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #ifndef LEKIWI_PERCEPTION__HAILO__HAILO_GST_PIPELINE_HPP_
 #define LEKIWI_PERCEPTION__HAILO__HAILO_GST_PIPELINE_HPP_
@@ -20,35 +28,66 @@
 namespace lekiwi_perception
 {
 
+  /**
+   * @brief Configuration parameters for Hailo GStreamer neural network pipeline.
+   */
   struct HailoPipelineConfig
   {
+    /// File path to board segmentation HEF model file (YOLOv8n-seg).
     std::string board_hef_path;
+    /// File path to piece detection HEF model file (YOLO11n).
     std::string pcs_hef_path;
+    /// Hailo Virtual Device group identifier.
     std::string vdevice_group_id{"lekiwi_chess"};
+    /// Input image width expected by neural network model.
     uint32_t model_width{640};
+    /// Input image height expected by neural network model.
     uint32_t model_height{640};
   };
 
+  /**
+   * @brief Thread-safe C++ wrapper managing GStreamer Hailo pipeline lifecycle.
+   */
   class HailoGstPipeline
   {
   public:
     using SampleCallback = std::function<void(GstSample *sample, GstElement *pipeline)>;
 
+    /**
+     * @brief Constructs HailoGstPipeline with sample callback handler.
+     * @param[in] callback Function invoked whenever a new inferenced frame sample arrives at appsink.
+     */
     explicit HailoGstPipeline(SampleCallback callback);
     ~HailoGstPipeline();
 
     HailoGstPipeline(const HailoGstPipeline &) = delete;
     HailoGstPipeline &operator=(const HailoGstPipeline &) = delete;
 
+    /**
+     * @brief Builds GStreamer string description, links elements, and sets state to PLAYING.
+     * @param[in] config Pipeline model and device configuration.
+     * @param[in] timeout Maximum duration to wait for GStreamer state transition.
+     * @param[out] error Output string capturing error details on failure.
+     * @return true On successful start, false on pipeline creation or state error.
+     */
     [[nodiscard]] bool start(
         const HailoPipelineConfig &config,
         std::chrono::milliseconds timeout,
         std::string &error);
 
+    /**
+     * @brief Stops GStreamer pipeline and sets state to NULL.
+     */
     [[nodiscard]] bool stop(
         std::chrono::milliseconds timeout,
         std::string &error);
 
+    /**
+     * @brief Pushes a ROS 2 Image frame into the GStreamer appsrc element.
+     * @param[in] image Input ROS Image message.
+     * @param[out] error Output string on buffer feed failure.
+     * @return true If buffer was pushed into appsrc successfully, false otherwise.
+     */
     [[nodiscard]] bool push_image(
         const sensor_msgs::msg::Image &image,
         std::string &error);

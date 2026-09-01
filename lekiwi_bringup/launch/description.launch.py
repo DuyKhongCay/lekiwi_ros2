@@ -110,12 +110,16 @@ def generate_launch_description():
         output="screen",
         condition=IfCondition(LaunchConfiguration("start_controller_manager")),
         parameters=[
+            robot_description,
             controller_config,
             {
                 "use_sim_time": ParameterValue(
                     LaunchConfiguration("use_sim_time"), value_type=bool
                 ),
             },
+        ],
+        remappings=[
+            ("~/robot_description", "/robot_description"),
         ],
     )
     joint_state_broadcaster = Node(

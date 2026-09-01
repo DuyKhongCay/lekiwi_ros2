@@ -1,3 +1,11 @@
+/**
+ * @file sts_protocol.cpp
+ * @brief Implementation of the Feetech STS serial communication protocol.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
+
 #include "lekiwi_ftservo_hardware/sts_protocol.hpp"
 
 #include <algorithm>
@@ -13,7 +21,12 @@ namespace lekiwi_ftservo_hardware
 {
   namespace
   {
-    // Computes the STS checksum over bytes beginning at the packet ID.
+    /**
+     * @brief Computes standard Feetech STS frame checksum: ~(ID + Length + Instruction + Params) & 0xFF.
+     *
+     * @param[in] bytes Byte sequence starting from Packet ID through the end of Parameters.
+     * @return uint8_t Inverted 8-bit sum representing the packet checksum.
+     */
     uint8_t checksum(const std::vector<uint8_t> &bytes)
     {
       uint8_t sum = 0;
@@ -24,7 +37,12 @@ namespace lekiwi_ftservo_hardware
       return static_cast<uint8_t>(~sum);
     }
 
-    // Formats protocol failures without leaking transport exceptions through ros2_control.
+    /**
+     * @brief Formats protocol failures safely without throwing exceptions across ros2_control boundaries.
+     *
+     * @param[out] error Pointer to target error message string (can be nullptr).
+     * @param[in] message Diagnostic message describing the failure.
+     */
     void set_error(std::string *error, const std::string &message)
     {
       if (error != nullptr)

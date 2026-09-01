@@ -12,7 +12,8 @@ robot.launch.py (Top-level System Entrypoint)
 ├── cameras.launch.py      -> lekiwi_perception_container (4x CameraStreamer + HailoChessInference)
 ├── control.launch.py      -> task_orchestrator + LeRobotArmBridge
 ├── imu.launch.py          -> ICM-20948 broadcaster + Madgwick filter + TF2 transformer
-└── teleop.launch.py       -> joy_node + teleop_twist_joy (Optional Gamepad control)
+├── teleop.launch.py       -> joy_node + teleop_twist_joy (Optional Gamepad control)
+└── diagnostics.launch.py  -> diagnostic_aggregator (/diagnostics_agg) + system resource monitors (CPU, RAM, Disk)
 ```
 
 ---
@@ -21,7 +22,7 @@ robot.launch.py (Top-level System Entrypoint)
 
 ### 1. Full Robot Stack
 ```bash
-# Mock mode (Default, safe for development without hardware)
+# Mock mode (Default, safe for development without hardware, diagnostics enabled by default)
 ros2 launch lekiwi_bringup robot.launch.py
 
 # Real hardware execution (Raspberry Pi 5 + Feetech Servos + Hailo NPU)
@@ -48,6 +49,12 @@ ros2 launch lekiwi_bringup imu.launch.py
 
 # Gamepad teleoperation:
 ros2 launch lekiwi_bringup teleop.launch.py start_teleop:=true
+
+# Diagnostics aggregator and system monitors only:
+ros2 launch lekiwi_bringup diagnostics.launch.py
+
+# View diagnostics tree in GUI:
+ros2 run rqt_robot_monitor rqt_robot_monitor
 ```
 
 ---
@@ -56,6 +63,7 @@ ros2 launch lekiwi_bringup teleop.launch.py start_teleop:=true
 
 - `config/controllers/lekiwi_controllers.yaml`: `ros2_control` controller configurations (`arm_controller`, `omni_base_controller`, `lekiwi_imu_broadcaster`, `joint_state_broadcaster`).
 - `config/hardware/lekiwi_joints.yaml`: Servo IDs, homing offsets, limits, and velocity scale factors.
+- `config/diagnostics/lekiwi_analyzers.yaml`: Diagnostic analyzer grouping hierarchy (`/LeKiwi/System`, `/LeKiwi/Hardware`, `/LeKiwi/Perception`) for `diagnostic_aggregator`.
 - `config/perception/cameras.yaml`: Parameters for `HailoChessInferenceComponent`.
 - `config/perception/gscam_cameras.yaml`: GStreamer pipeline declarations for all 4 camera endpoints with valve gating.
 - `config/perception/calibration/`: Intrinsic camera calibration matrices for stereo and USB cameras.

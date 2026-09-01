@@ -1,5 +1,10 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file hailo_gst_pipeline.cpp
+ * @brief Implementation of HailoGstPipeline GStreamer wrapper.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #include "hailo/hailo_gst_pipeline.hpp"
 

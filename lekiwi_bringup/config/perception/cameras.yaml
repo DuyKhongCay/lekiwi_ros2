@@ -1,9 +1,0 @@
-/hailo_chess_inference:
-  ros__parameters:
-    frame_id: "stereo_left_optical"
-    publish_debug_image: true
-    transition_timeout_ms: 5000
-    status_period_ms: 1000
-    vdevice_group_id: "lekiwi_chess"
-    model_width: 640
-    model_height: 640

@@ -1,5 +1,13 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file hailo_chess_inference_component.hpp
+ * @brief Hailo-8 NPU perception component for chessboard segmentation and piece detection.
+ *
+ * Runs dual GStreamer Hailo pipelines (YOLOv8n-seg for board segmentation and YOLO11n for piece detection),
+ * extracts bounding boxes and FEN board state, and publishes `/chess/fen` and `/chess/detections_2d`.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #ifndef LEKIWI_PERCEPTION__HAILO_CHESS_INFERENCE_COMPONENT_HPP_
 #define LEKIWI_PERCEPTION__HAILO_CHESS_INFERENCE_COMPONENT_HPP_
@@ -28,19 +36,44 @@
 namespace lekiwi_perception
 {
 
+  /**
+   * @brief ROS 2 Lifecycle component managing Hailo-8 NPU inference for chess perception.
+   */
   class HailoChessInferenceComponent : public rclcpp_lifecycle::LifecycleNode
   {
   public:
+    /**
+     * @brief Constructs HailoChessInferenceComponent.
+     * @param[in] options Node options.
+     */
     explicit HailoChessInferenceComponent(const rclcpp::NodeOptions &options);
     ~HailoChessInferenceComponent() override;
 
     using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
+    /**
+     * @brief Loads model HEF paths, initializes ROS 2 publishers, services, and Hailo pipeline.
+     */
     CallbackReturn on_configure(const rclcpp_lifecycle::State &state) override;
+    /**
+     * @brief Starts Hailo GStreamer pipeline and activates publishers.
+     */
     CallbackReturn on_activate(const rclcpp_lifecycle::State &state) override;
+    /**
+     * @brief Pauses Hailo pipeline and deactivates publishers.
+     */
     CallbackReturn on_deactivate(const rclcpp_lifecycle::State &state) override;
+    /**
+     * @brief Cleans up Hailo pipeline instance.
+     */
     CallbackReturn on_cleanup(const rclcpp_lifecycle::State &state) override;
+    /**
+     * @brief Handles shutdown transition.
+     */
     CallbackReturn on_shutdown(const rclcpp_lifecycle::State &state) override;
+    /**
+     * @brief Resets pipeline state on lifecycle error.
+     */
     CallbackReturn on_error(const rclcpp_lifecycle::State &state) override;
 
   private:

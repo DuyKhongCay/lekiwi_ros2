@@ -1,3 +1,15 @@
+/**
+ * @file velocity_codec.hpp
+ * @brief Velocity encoding, decoding, and unit conversion helpers for Feetech STS servos.
+ *
+ * This header provides purely computational, inline helper utilities for converting
+ * between ROS standard angular velocity (radians per second) and Feetech STS series
+ * servo discrete velocity units (signed / sign-magnitude ticks).
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
+
 #pragma once
 
 #include <algorithm>
@@ -9,10 +21,28 @@
 namespace lekiwi_ftservo_hardware
 {
 
+  /**
+   * @brief Bit index of the direction/sign bit in the Feetech STS 16-bit velocity register.
+   *
+   * Bit 15 indicates rotation direction (0 for CCW / positive magnitude, 1 for CW / negative magnitude).
+   */
   constexpr int kStsVelocitySignBit = 15;
+
+  /**
+   * @brief Maximum tick magnitude expressible in the STS 15-bit magnitude field (0x7FFF = 32767).
+   */
   constexpr int kStsVelocityMaxTicks = (1 << kStsVelocitySignBit) - 1;
 
-  // Converts signed STS velocity ticks to the protocol's sign-magnitude word.
+  /**
+   * @brief Converts signed STS velocity ticks to the protocol's 2-byte sign-magnitude word.
+   *
+   * In STS protocol, velocity values use sign-magnitude encoding where the highest bit
+   * (bit 15) represents sign (1 = negative/CW, 0 = positive/CCW) and bits [14:0] represent magnitude.
+   *
+   * @param[in] ticks Signed integer velocity in servo tick units.
+   * @return std::array<uint8_t, 2> 2-byte array with {low_byte, high_byte} in little-endian order.
+   * @throws std::out_of_range If @p std::abs(ticks) exceeds @ref kStsVelocityMaxTicks (32767).
+   */
   inline std::array<uint8_t, 2> encode_velocity_ticks(const int ticks)
   {
     if (std::abs(ticks) > kStsVelocityMaxTicks)
@@ -23,7 +53,13 @@ namespace lekiwi_ftservo_hardware
     return {static_cast<uint8_t>(encoded & 0xff), static_cast<uint8_t>((encoded >> 8) & 0xff)};
   }
 
-  // Decodes the STS sign-magnitude velocity representation into signed ticks.
+  /**
+   * @brief Decodes the STS sign-magnitude 2-byte representation into signed ticks.
+   *
+   * @param[in] low Low byte from the servo register payload.
+   * @param[in] high High byte from the servo register payload containing sign bit at bit 7 (overall bit 15).
+   * @return int Signed velocity in ticks (negative for CW rotation, positive for CCW rotation).
+   */
   inline int decode_velocity_ticks(const uint8_t low, const uint8_t high)
   {
     const int encoded = static_cast<int>(low) | (static_cast<int>(high) << 8);
@@ -31,7 +67,20 @@ namespace lekiwi_ftservo_hardware
     return (encoded & (1 << kStsVelocitySignBit)) != 0 ? -magnitude : magnitude;
   }
 
-  // Converts a bounded ROS angular velocity into a bounded STS tick command.
+  /**
+   * @brief Converts a bounded ROS angular velocity (rad/s) into a bounded STS tick command.
+   *
+   * Clamps the input velocity within `[-max_radians_per_second, max_radians_per_second]`,
+   * accounts for hardware mounting inversion (@p direction), and scales by the conversion factor.
+   *
+   * @param[in] radians_per_second Commanded wheel angular velocity in rad/s.
+   * @param[in] radians_per_second_per_tick Conversion scale from ticks to rad/s (must be > 0.0).
+   * @param[in] max_radians_per_second Maximum allowable speed ceiling in rad/s (must be > 0.0).
+   * @param[in] direction Direction polarity multiplier (must be either +1 or -1).
+   * @return int Signed tick command ready to be encoded via @ref encode_velocity_ticks.
+   * @throws std::invalid_argument If any scale/direction argument is non-positive or not in {-1, 1},
+   *         or if @p radians_per_second is not finite (NaN or infinity).
+   */
   inline int radians_per_second_to_ticks(
       const double radians_per_second, const double radians_per_second_per_tick,
       const double max_radians_per_second, const int direction)

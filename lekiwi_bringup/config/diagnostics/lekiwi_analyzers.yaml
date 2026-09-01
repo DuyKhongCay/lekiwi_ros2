@@ -1,0 +1,53 @@
+/**:
+  ros__parameters:
+    path: LeKiwi
+    analyzers:
+      system:
+        type: diagnostic_aggregator/AnalyzerGroup
+        path: System
+        analyzers:
+          cpu:
+            type: diagnostic_aggregator/GenericAnalyzer
+            path: CPU
+            contains: ['CPU']
+            timeout: 5.0
+          ram:
+            type: diagnostic_aggregator/GenericAnalyzer
+            path: RAM
+            contains: ['RAM']
+            timeout: 5.0
+          disk:
+            type: diagnostic_aggregator/GenericAnalyzer
+            path: Disk
+            contains: ['Disk', 'HD']
+            timeout: 5.0
+
+      hardware:
+        type: diagnostic_aggregator/AnalyzerGroup
+        path: Hardware
+        analyzers:
+          servos:
+            type: diagnostic_aggregator/GenericAnalyzer
+            path: Servos
+            contains: ['servo', 'joint', 'motor', 'sts']
+            timeout: 5.0
+          imu:
+            type: diagnostic_aggregator/GenericAnalyzer
+            path: IMU
+            contains: ['imu', 'icm20948']
+            timeout: 5.0
+
+      perception:
+        type: diagnostic_aggregator/AnalyzerGroup
+        path: Perception
+        analyzers:
+          cameras:
+            type: diagnostic_aggregator/GenericAnalyzer
+            path: Cameras
+            contains: ['camera', 'stream_status']
+            timeout: 5.0
+          npu:
+            type: diagnostic_aggregator/GenericAnalyzer
+            path: NPU
+            contains: ['NPU', 'hailo']
+            timeout: 5.0

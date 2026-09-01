@@ -1,5 +1,10 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file test_camera_streamer_component.cpp
+ * @brief Unit & lifecycle integration tests (L1/L2) for CameraStreamerComponent.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #include <gtest/gtest.h>
 #include <gst/gst.h>

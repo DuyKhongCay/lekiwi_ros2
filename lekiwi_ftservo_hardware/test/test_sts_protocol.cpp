@@ -1,3 +1,11 @@
+/**
+ * @file test_sts_protocol.cpp
+ * @brief Unit tests (L1 verification) for Feetech STS serial protocol constants and telemetry conversion.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
+
 #include <gtest/gtest.h>
 
 #include "lekiwi_ftservo_hardware/sts_protocol.hpp"
@@ -5,6 +13,9 @@
 namespace lekiwi_ftservo_hardware
 {
 
+  /**
+   * @brief Verifies that protocol register addresses and instruction OP codes match Feetech STS manual.
+   */
   TEST(StsProtocolTest, ValidatesProtocolConstants)
   {
     EXPECT_EQ(StsProtocol::kHeader, 0xff);
@@ -31,6 +42,9 @@ namespace lekiwi_ftservo_hardware
     EXPECT_EQ(StsProtocol::kPresentCurrentRegister, 69);
   }
 
+  /**
+   * @brief Verifies raw ADC conversion factors for STS telemetry (voltage 0.1V/LSB, current 6.5mA/LSB).
+   */
   TEST(StsProtocolTest, DecodesDiagnosticTelemetryValues)
   {
     // Test voltage decoding: 124 -> 12.4V
@@ -49,6 +63,9 @@ namespace lekiwi_ftservo_hardware
     EXPECT_DOUBLE_EQ(current_a, 0.65);
   }
 
+  /**
+   * @brief Verifies default values and field assignment in telemetry and fast state structures.
+   */
   TEST(StsProtocolTest, InitializesTelemetryStructures)
   {
     ServoDiagnosticData diag;

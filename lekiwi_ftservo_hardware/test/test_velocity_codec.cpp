@@ -1,3 +1,11 @@
+/**
+ * @file test_velocity_codec.cpp
+ * @brief Unit tests (L1 verification) for STS velocity codec and unit conversion logic.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
+
 #include <array>
 
 #include <gtest/gtest.h>
@@ -7,7 +15,9 @@
 namespace lekiwi_ftservo_hardware
 {
 
-  // Checks the wire format used by the STS goal-speed and present-speed registers.
+  /**
+   * @brief Verifies that velocity sign-magnitude encoding/decoding adheres to Feetech STS bit format.
+   */
   TEST(VelocityCodec, EncodesAndDecodesSignedMagnitudeTicks)
   {
     EXPECT_EQ(encode_velocity_ticks(0), (std::array<uint8_t, 2>{0U, 0U}));
@@ -16,7 +26,9 @@ namespace lekiwi_ftservo_hardware
     EXPECT_EQ(decode_velocity_ticks(42U, 0U), 42);
   }
 
-  // Checks that the configured ROS velocity limit is applied before bus conversion.
+  /**
+   * @brief Verifies velocity saturation limits (clamping) and directional polarity multiplication.
+   */
   TEST(VelocityCodec, BoundsAndAppliesWheelDirection)
   {
     EXPECT_EQ(radians_per_second_to_ticks(3.0, 0.1, 2.0, 1), 20);

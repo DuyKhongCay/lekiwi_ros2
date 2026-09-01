@@ -1,5 +1,10 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file test_hailo_gst_pipeline.cpp
+ * @brief Unit tests (L1 verification) for HailoGstPipeline wrapper lifecycle.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #include <gtest/gtest.h>
 #include <gst/gst.h>
