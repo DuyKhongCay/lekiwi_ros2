@@ -54,7 +54,7 @@ Production ROS 2 workspace for the **LeKiwi Robot**, featuring an omnidirectiona
 | [`lekiwi_description`](lekiwi_description/) | URDF / Xacro | Kinematic robot description, CAD STL meshes, joint limits, transmissions, and `ros2_control` macros. |
 | [`lekiwi_bringup`](lekiwi_bringup/) | Launch & Config | System launch compositions (`robot.launch.py`), YAML configs, controllers, calibration files, and udev rules. |
 | [`lekiwi_navigation`](lekiwi_navigation/) | Roadmap / Nav2 | Nav2 integration package for autonomous omni-wheel navigation (in development). |
-| [`teleop_hardware`](teleop_hardware/) | Roadmap / Teleop | Dedicated hardware teleoperation and leader-arm interface package (in development). |
+| [`teleop_zhongli_servo_hw`](teleop_zhongli_servo_hw/) | C++ Driver / Remapper | Dedicated driver, interactive calibration CLI, and ROS 2 publisher for Zhongli / uArm leader teleoperation. |
 | [`scripts`](scripts/) | Python Utilities | Developer diagnostics and image capture tools (`analyzing_traces.py`, `save_image.py`). |
 | [`deprecated`](deprecated/) | Archived | Legacy nodes and backups (`hailo_perception_node`, `lekiwi_hardwares`), ignored via `COLCON_IGNORE`. |
 
