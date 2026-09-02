@@ -9,7 +9,9 @@ install(DIRECTORY launch config
   PATTERN "*.pyc" EXCLUDE
 )
 
-install(FILES udev/99-lekiwi.rules
+install(FILES
+  udev/99-lekiwi.rules
+  udev/99-teleop-lekiwi.rules
   DESTINATION share/${PROJECT_NAME}/udev
 )
 

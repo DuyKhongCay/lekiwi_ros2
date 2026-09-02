@@ -16,6 +16,10 @@ core.*
 deprecated/
 install/
 log/
+scripts/
+CMakeFiles/
+cross_reference/
+zenoh_pi5.json
 
 ### Environments & Dependencies ###
 .env

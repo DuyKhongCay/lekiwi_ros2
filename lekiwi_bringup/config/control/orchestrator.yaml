@@ -3,5 +3,4 @@
     cam_hub_node: "/hailo_chess_inference"
     cam_hub_srv: "/hailo_chess_inference/set_mode"
     orchestrator_service: "/orchestrator/set_mode"
-    camera_hub_status_topic: "/hailo_chess_inference/status"
     lifecycle_poll_period_sec: 0.5

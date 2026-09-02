@@ -37,7 +37,6 @@ Visual debugging component combining the debug camera image with digital 2D top-
 | `/hailo_chess_inference/fen` | `std_msgs/msg/String` | Real-time chess board state in FEN format. |
 | `/hailo_chess_inference/detections` | `vision_msgs/msg/Detection2DArray` | 2D bounding boxes and class IDs for detected pieces. |
 | `/hailo_chess_inference/debug_image` | `sensor_msgs/msg/Image` | Debug frame with drawn bounding boxes and grid overlay. |
-| `/hailo_chess_inference/status` | `lekiwi_interfaces/msg/HailoInferenceStatus` | Pipeline health, FPS, and error state. |
 | `/chess_visualizer/visual_image` | `sensor_msgs/msg/Image` | Side-by-side composite visual debugging panel. |
 
 ### Subscribed Topics

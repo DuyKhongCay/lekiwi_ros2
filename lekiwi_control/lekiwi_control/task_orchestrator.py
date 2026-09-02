@@ -4,7 +4,7 @@
 import threading
 
 from lekiwi_control.fsm import is_transition_allowed, MODE_NAMES
-from lekiwi_interfaces.msg import CameraMode, HailoInferenceStatus
+from lekiwi_interfaces.msg import CameraMode
 from lekiwi_interfaces.srv import SetCamMode
 from lifecycle_msgs.msg import State, Transition
 from lifecycle_msgs.srv import ChangeState, GetState
@@ -25,9 +25,6 @@ class TaskOrchestratorNode(Node):
         self.declare_parameter("camera_hub_node", "")
         self.declare_parameter("camera_hub_service", "")
         self.declare_parameter("orchestrator_service", "/orchestrator/set_mode")
-        self.declare_parameter(
-            "camera_hub_status_topic", "/hailo_chess_inference/status"
-        )
         self.declare_parameter("lifecycle_poll_period_sec", 0.5)
 
         cam_hub_node = self._param_with_legacy(
@@ -35,7 +32,6 @@ class TaskOrchestratorNode(Node):
         ).rstrip("/")
         self._cam_hub_srv = self._param_with_legacy("cam_hub_srv", "camera_hub_service")
         orchestrator_service = self.get_parameter("orchestrator_service").value
-        status_topic = self.get_parameter("camera_hub_status_topic").value
         poll_period = float(self.get_parameter("lifecycle_poll_period_sec").value)
 
         self._state_lock = threading.Lock()
@@ -70,19 +66,6 @@ class TaskOrchestratorNode(Node):
             self._handle_mode_request,
             callback_group=self._mode_group,
         )
-        status_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
-        self._status_subscription = self.create_subscription(
-            HailoInferenceStatus,
-            status_topic,
-            self._handle_camera_hub_status,
-            status_qos,
-            callback_group=self._mode_group,
-        )
         mode_pub_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
@@ -110,17 +93,6 @@ class TaskOrchestratorNode(Node):
             )
             return legacy_value
         return self.get_parameter(canonical).value
-
-    def _handle_camera_hub_status(self, status):
-        """Handle perception status updates."""
-        if status.pipeline_state == HailoInferenceStatus.PIPELINE_RUNNING:
-            if not self._camera_hub_ready:
-                self._camera_hub_ready = True
-                self.get_logger().info("Camera hub lifecycle is ACTIVE (from status)")
-        elif status.pipeline_state == HailoInferenceStatus.PIPELINE_ERROR:
-            self.get_logger().error(
-                f"Hailo perception pipeline error: {status.last_error}"
-            )
 
     def _bootstrap_camera_hub(self):
         """Advance the camera hub lifecycle without blocking the executor."""

@@ -8,7 +8,7 @@
 
 /cameras/stereo_left/gscam:
   ros__parameters:
-    camera_info_url: lekiwi_ros2/lekiwi_bringup/config/perception/calibration/stereo_left.yaml
+    camera_info_url: package://lekiwi_bringup/config/perception/calibration/stereo_left.yaml
     frame_id: "stereo_left_optical"
     camera_name: "stereo_left"
     active_modes: [1, 2]
@@ -24,7 +24,7 @@
       video/x-raw,format=RGB
 /cameras/stereo_right/gscam:
   ros__parameters:
-    camera_info_url: lekiwi_ros2/lekiwi_bringup/config/perception/calibration/stereo_right.yaml
+    camera_info_url: package://lekiwi_bringup/config/perception/calibration/stereo_right.yaml
     frame_id: "stereo_right_optical"
     camera_name: "stereo_right"
     active_modes: [3]
@@ -43,7 +43,7 @@
 
 /cameras/usb_wrist/gscam:
   ros__parameters:
-    camera_info_url: lekiwi_ros2/lekiwi_bringup/config/perception/calibration/usb_wirst.yaml
+    camera_info_url: package://lekiwi_bringup/config/perception/calibration/usb_wirst.yaml
     frame_id: "wrist_camera_optical"
     camera_name: "usb_wrist"
     active_modes: [3]
@@ -63,7 +63,7 @@
 
 /cameras/usb_side/gscam:
   ros__parameters:
-    camera_info_url: lekiwi_ros2/lekiwi_bringup/config/perception/calibration/usb_side.yaml
+    camera_info_url: package://lekiwi_bringup/config/perception/calibration/usb_side.yaml
     frame_id: "side_camera_optical"
     camera_name: "usb_side"
     active_modes: [3]

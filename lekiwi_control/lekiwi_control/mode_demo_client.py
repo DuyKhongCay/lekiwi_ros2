@@ -5,7 +5,7 @@ import sys
 import time
 
 from lekiwi_control.fsm import MODE_NAMES
-from lekiwi_interfaces.msg import CameraMode, HailoInferenceStatus
+from lekiwi_interfaces.msg import CameraMode
 from lekiwi_interfaces.srv import SetCamMode
 import rclpy
 from rclpy.node import Node
@@ -24,7 +24,6 @@ class ModeDemoClient(Node):
         self.settle_seconds = float(self.get_parameter("settle_seconds").value)
         srv_name = self.get_parameter("orchestrator_service").value
         self.client = self.create_client(SetCamMode, srv_name)
-        self.status = None
         self.counts = {"hailo": 0, "right": 0, "wrist": 0, "side": 0}
 
         sensor_qos = QoSProfile(
@@ -32,18 +31,6 @@ class ModeDemoClient(Node):
             depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
-        )
-        status_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
-        self.create_subscription(
-            HailoInferenceStatus,
-            "/hailo_chess_inference/status",
-            self._on_status,
-            status_qos,
         )
         self.create_subscription(
             Detection2DArray,
@@ -70,10 +57,6 @@ class ModeDemoClient(Node):
             sensor_qos,
         )
 
-    def _on_status(self, message):
-        """Store the latest retained inference status."""
-        self.status = message
-
     def _count(self, stream):
         """Increment one debug subscriber frame counter."""
         self.counts[stream] += 1
@@ -93,21 +76,8 @@ class ModeDemoClient(Node):
         return future.result() if future.done() else None
 
     def wait_for_camera_hub(self, timeout_sec=20.0):
-        """Wait for the first running status from the active inference node."""
-        deadline = time.monotonic() + timeout_sec
-        while (
-            rclpy.ok()
-            and (
-                self.status is None
-                or self.status.pipeline_state != HailoInferenceStatus.PIPELINE_RUNNING
-            )
-            and time.monotonic() < deadline
-        ):
-            rclpy.spin_once(self, timeout_sec=0.1)
-        if (
-            self.status is not None
-            and self.status.pipeline_state == HailoInferenceStatus.PIPELINE_RUNNING
-        ):
+        """Wait for the orchestrator service to be available."""
+        if self.client.wait_for_service(timeout_sec=timeout_sec):
             self.spin_for(0.5)
             return True
         return False

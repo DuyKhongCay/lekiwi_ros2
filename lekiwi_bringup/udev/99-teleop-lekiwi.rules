@@ -1,0 +1,3 @@
+# Match Prolific PL2303 USB-to-Serial adapter for uArm Leader
+SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", SYMLINK+="ttyUSB_PROLIFIC", SYMLINK+="uarm_leader", MODE="0666"
+

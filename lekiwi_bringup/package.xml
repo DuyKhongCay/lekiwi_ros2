@@ -28,6 +28,7 @@
   <exec_depend>joy_linux</exec_depend>
   <exec_depend>joy_teleop</exec_depend>
   <exec_depend>teleop_tools</exec_depend>
+  <exec_depend>teleop_zhongli_servo_hw</exec_depend>
   <exec_depend>lekiwi_ftservo_hardware</exec_depend>
   <exec_depend>lekiwi_perception</exec_depend>
   <exec_depend>omni_wheel_drive_controller</exec_depend>

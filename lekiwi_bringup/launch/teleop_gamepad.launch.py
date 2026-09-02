@@ -21,17 +21,22 @@ def generate_launch_description():
         (
             "teleop_config_file",
             PathJoinSubstitution(
-                [bringup_share, "config", "control", "teleop_gamepad.yaml"]
+                [bringup_share, "config", "control", "gamepad_base_teleop.yaml"]
             ),
+            "Path to gamepad teleoperation YAML configuration",
         ),
-        ("device_name", "/dev/gamepad"),
-        ("cmd_vel_topic", "/omni_base_controller/cmd_vel"),
-        ("use_sim_time", "false"),
+        ("device_name", "/dev/gamepad", "Linux joystick device path"),
+        (
+            "cmd_vel_topic",
+            "/omni_base_controller/cmd_vel",
+            "Target topic for base velocity commands",
+        ),
+        ("use_sim_time", "false", "Use simulation clock if true"),
     ]
 
     all_declared_arguments = [
-        DeclareLaunchArgument(name, default_value=default)
-        for name, default in declared_args_spec
+        DeclareLaunchArgument(name, default_value=default, description=desc)
+        for name, default, desc in declared_args_spec
     ]
 
     joy_node = Node(

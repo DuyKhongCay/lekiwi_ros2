@@ -20,7 +20,7 @@
 
 ## 🔌 Hardware Configuration
 
-Joint limits, velocity scaling, and homing offsets are configured in [`lekiwi_bringup/config/hardware/lekiwi_joints.yaml`](file:///home/duykhongcay/docker_ws/lekiwi_ros2/lekiwi_bringup/config/hardware/lekiwi_joints.yaml):
+Joint limits, velocity scaling, and homing offsets are configured in [`lekiwi_bringup/config/servos/lekiwi_arm_calib.yaml`](file:///home/duykhongcay/docker_ws/lekiwi_ros2/lekiwi_bringup/config/servos/lekiwi_arm_calib.yaml):
 
 ```yaml
 joints:

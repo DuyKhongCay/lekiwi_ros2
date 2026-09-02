@@ -31,7 +31,7 @@ def generate_launch_description():
         (
             "joint_config_file",
             PathJoinSubstitution(
-                [bringup_share, "config", "hardware", "lekiwi_joints.yaml"]
+                [bringup_share, "config", "servos", "lekiwi_arm_calib.yaml"]
             ),
         ),
         ("use_ros2_control", "true"),
@@ -136,7 +136,11 @@ def generate_launch_description():
     arm_controller = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["arm_controller", "--controller-manager", "/controller_manager"],
+        arguments=[
+            "arm_trajectory_controller",
+            "--controller-manager",
+            "/controller_manager",
+        ],
         output="screen",
         condition=controller_condition,
     )

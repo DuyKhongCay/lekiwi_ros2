@@ -5,7 +5,7 @@ import asyncio
 import threading
 
 from lekiwi_control.task_orchestrator import TaskOrchestratorNode
-from lekiwi_interfaces.msg import CameraMode, HailoInferenceStatus
+from lekiwi_interfaces.msg import CameraMode
 from lekiwi_interfaces.srv import SetCamMode
 
 
@@ -55,16 +55,6 @@ def test_failed_camera_service_response_updates_authoritative_mode():
     assert not response.success
     assert response.applied_mode.value == CameraMode.STANDBY
     assert node._current_mode == CameraMode.STANDBY
-
-
-def test_camera_hub_error_status_logs_error():
-    node = _node_for_mode_tests()
-    status = HailoInferenceStatus()
-    status.pipeline_state = HailoInferenceStatus.PIPELINE_ERROR
-    status.last_error = "mock error"
-
-    node._handle_camera_hub_status(status)
-    assert node._current_mode == CameraMode.CHESS_THINKING
 
 
 def test_mode_switch_publishes_camera_mode():

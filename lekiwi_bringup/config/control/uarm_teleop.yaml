@@ -1,0 +1,28 @@
+# ==============================================================================
+# uArm Leader Arm Teleoperation Runtime Parameters
+# ==============================================================================
+/**:
+  ros__parameters:
+    port: "/dev/uarm_leader"
+    baudrate: 115200
+    timeout_ms: 50
+    publish_rate_hz: 50.0
+    command_delay_us: 3000
+    leader_topic: "/leader/joint_states"
+    diagnostics_rate_hz: 1.0
+    calibration_file: "" # Optional custom calibration YAML path
+
+    # Follower Dispatcher Settings
+    arm_mode: "joint_trajectory" # Options: "joint_trajectory", "forward_position", "joint_states_only"
+    follower_jtc_topic: "/arm_trajectory_controller/joint_trajectory"
+    follower_fwd_topic: "/arm_forward_controller/commands"
+    point_dt_s: 0.04
+    lpf_alpha: 1.0 # 1.0 = pass-through; < 1.0 = low-pass smoothing
+    follower_arm_joints:
+      - "arm_shoulder_pan"
+      - "arm_shoulder_lift"
+      - "arm_elbow_flex"
+      - "arm_wrist_flex"
+      - "arm_wrist_roll"
+      - "arm_gripper"
+
