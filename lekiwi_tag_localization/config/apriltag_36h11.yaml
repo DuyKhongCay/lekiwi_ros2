@@ -1,0 +1,23 @@
+/**:
+  ros__parameters:
+    image_transport: raw
+    family: 36h11
+    size: 0.02
+    max_hamming: 0
+    qos_profile: sensor_data
+
+    detector:
+      threads: 2
+      decimate: 1.0
+      blur: 0.0
+      refine: true
+      sharpening: 0.25
+      debug: false
+
+    pose_estimation_method: "pnp"
+
+    tag:
+      ids: [1, 4, 3, 6]
+      frames: ["tag36h11:1", "tag36h11:4", "tag36h11:3", "tag36h11:6"]
+      sizes: [0.02, 0.02, 0.02, 0.02]
+
