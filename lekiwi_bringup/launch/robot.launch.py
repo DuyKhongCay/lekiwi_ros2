@@ -52,6 +52,11 @@ def generate_launch_description():
             "true",
             "Master toggle: start diagnostic_aggregator tree & hardware/system monitors",
         ),
+        (
+            "enable_navigation",
+            "false",
+            "Master toggle: start Nav2 stack & twist_mux arbitration around chessboard arena",
+        ),
     ]
 
     # =========================================================================
@@ -163,11 +168,12 @@ def generate_launch_description():
     # =========================================================================
     imu_args_spec = [
         (
-            "enable_imu_transformer",
-            "true",
-            "Enable TF2 transform from imu_link to target frame",
+            "imu_mag_calib_file",
+            PathJoinSubstitution(
+                [bringup_share, "config", "sensors", "icm20948_magnetometer_calib.yaml"]
+            ),
+            "Path to magnetometer calibration YAML configuration",
         ),
-        ("imu_use_mag", "true", "Use magnetometer in Madgwick orientation filter"),
         (
             "imu_target_frame",
             "base_footprint",
@@ -259,6 +265,33 @@ def generate_launch_description():
     ]
 
     # =========================================================================
+    # 9. Navigation Subsystem Arguments
+    # =========================================================================
+    nav_share = FindPackageShare("lekiwi_navigation")
+    navigation_args_spec = [
+        (
+            "nav_map_file",
+            PathJoinSubstitution([nav_share, "maps", "chessboard_arena.yaml"]),
+            "Path to static chessboard arena map YAML",
+        ),
+        (
+            "nav_params_file",
+            PathJoinSubstitution([nav_share, "config", "nav2_params.yaml"]),
+            "Path to Nav2 parameters YAML",
+        ),
+        (
+            "nav_autostart",
+            "true",
+            "Automatically start Nav2 lifecycle nodes",
+        ),
+        (
+            "nav_twist_mux_config",
+            PathJoinSubstitution([nav_share, "config", "twist_mux.yaml"]),
+            "Path to twist_mux YAML configuration",
+        ),
+    ]
+
+    # =========================================================================
     # Include Subsystem Launch Descriptions
     # =========================================================================
 
@@ -305,9 +338,8 @@ def generate_launch_description():
         ),
         launch_arguments={
             "imu_params_file": LaunchConfiguration("imu_params_file"),
-            "use_mag": LaunchConfiguration("imu_use_mag"),
+            "mag_calib_file": LaunchConfiguration("imu_mag_calib_file"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "enable_transformer": LaunchConfiguration("enable_imu_transformer"),
             "target_frame": LaunchConfiguration("imu_target_frame"),
         }.items(),
         condition=IfCondition(LaunchConfiguration("enable_imu_pipeline")),
@@ -356,6 +388,21 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("enable_diagnostics")),
     )
 
+    navigation = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([nav_share, "launch", "navigation.launch.py"])
+        ),
+        launch_arguments={
+            "map": LaunchConfiguration("nav_map_file"),
+            "params_file": LaunchConfiguration("nav_params_file"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "autostart": LaunchConfiguration("nav_autostart"),
+            "twist_mux_config": LaunchConfiguration("nav_twist_mux_config"),
+            "cmd_vel_out": LaunchConfiguration("teleop_cmd_vel_topic"),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration("enable_navigation")),
+    )
+
     # Automatic declaration of all arguments with descriptions
     all_declared_arguments = [
         DeclareLaunchArgument(name, default_value=default, description=desc)
@@ -368,6 +415,7 @@ def generate_launch_description():
             + gamepad_args_spec
             + uarm_args_spec
             + diagnostics_args_spec
+            + navigation_args_spec
         )
     ]
 
@@ -381,5 +429,6 @@ def generate_launch_description():
             teleop_gamepad,
             teleop_uarm,
             diagnostics,
+            navigation,
         ]
     )

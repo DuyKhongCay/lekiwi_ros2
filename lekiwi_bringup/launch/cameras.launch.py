@@ -55,7 +55,43 @@ def generate_launch_description():
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
-    all_components = [*camera_components, inference_component]
+    tag_localization_share = FindPackageShare("lekiwi_tag_localization")
+    apriltag_params_file = LaunchConfiguration("apriltag_params_file")
+    chessboard_params_file = LaunchConfiguration("chessboard_params_file")
+
+    apriltag_component = ComposableNode(
+        package="apriltag_ros",
+        plugin="AprilTagNode",
+        name="apriltag_detector",
+        namespace="",
+        remappings=[
+            ("image_rect", "/cameras/stereo_left/image_raw"),
+            ("camera_info", "/cameras/stereo_left/camera_info"),
+            ("detections", "/tag_detections"),
+        ],
+        parameters=[apriltag_params_file],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
+    chessboard_estimator_component = ComposableNode(
+        package="lekiwi_tag_localization",
+        plugin="lekiwi_tag_localization::ChessboardPoseEstimator",
+        name="chessboard_pose_estimator",
+        namespace="",
+        remappings=[
+            ("/cameras/stereo_left/camera_info", "/cameras/stereo_left/camera_info"),
+            ("/tag_detections", "/tag_detections"),
+        ],
+        parameters=[chessboard_params_file],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
+    all_components = [
+        *camera_components,
+        inference_component,
+        apriltag_component,
+        chessboard_estimator_component,
+    ]
 
     container = ComposableNodeContainer(
         name=container_name,
@@ -82,6 +118,18 @@ def generate_launch_description():
             "gscam_params_file",
             PathJoinSubstitution(
                 [bringup_share, "config", "perception", "gscam_cameras.yaml"]
+            ),
+        ),
+        (
+            "apriltag_params_file",
+            PathJoinSubstitution(
+                [tag_localization_share, "config", "apriltag_36h11.yaml"]
+            ),
+        ),
+        (
+            "chessboard_params_file",
+            PathJoinSubstitution(
+                [tag_localization_share, "config", "chessboard_tags.yaml"]
             ),
         ),
     ]

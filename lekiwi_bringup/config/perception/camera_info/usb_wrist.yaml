@@ -1,0 +1,26 @@
+image_width: 1280
+image_height: 720
+camera_name: usb_wrist
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [1287.81814,    0.     ,  553.78611,
+            0.     , 1295.53491,  404.10797,
+            0.     ,    0.     ,    1.     ]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.074793, -0.310819, -0.002243, 0.000155, 0.000000]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1., 0., 0.,
+         0., 1., 0.,
+         0., 0., 1.]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [1220.77856,    0.     ,  539.3758 ,    0.     ,
+            0.     , 1282.96448,  403.7362 ,    0.     ,
+            0.     ,    0.     ,    1.     ,    0.     ]

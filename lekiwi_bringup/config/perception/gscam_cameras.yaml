@@ -8,7 +8,7 @@
 
 /cameras/stereo_left/gscam:
   ros__parameters:
-    camera_info_url: package://lekiwi_bringup/config/perception/calibration/stereo_left.yaml
+    camera_info_url: package://lekiwi_bringup/config/perception/camera_info/stereo_left.yaml
     frame_id: "stereo_left_optical"
     camera_name: "stereo_left"
     active_modes: [1, 2]
@@ -24,7 +24,7 @@
       video/x-raw,format=RGB
 /cameras/stereo_right/gscam:
   ros__parameters:
-    camera_info_url: package://lekiwi_bringup/config/perception/calibration/stereo_right.yaml
+    camera_info_url: package://lekiwi_bringup/config/perception/camera_info/stereo_right.yaml
     frame_id: "stereo_right_optical"
     camera_name: "stereo_right"
     active_modes: [3]
@@ -43,7 +43,7 @@
 
 /cameras/usb_wrist/gscam:
   ros__parameters:
-    camera_info_url: package://lekiwi_bringup/config/perception/calibration/usb_wirst.yaml
+    camera_info_url: package://lekiwi_bringup/config/perception/camera_info/usb_wrist.yaml
     frame_id: "wrist_camera_optical"
     camera_name: "usb_wrist"
     active_modes: [3]
@@ -63,12 +63,12 @@
 
 /cameras/usb_side/gscam:
   ros__parameters:
-    camera_info_url: package://lekiwi_bringup/config/perception/calibration/usb_side.yaml
+    camera_info_url: package://lekiwi_bringup/config/perception/camera_info/usb_side.yaml
     frame_id: "side_camera_optical"
     camera_name: "usb_side"
     active_modes: [3]
     gscam_config: >
-      v4l2src device=/dev/usb_side io-mode=mmap extra-controls="c,auto_exposure=1,exposure_time_absolute=300,gain=30,brightness=54,contrast=30,sharpness=15000" !
+      v4l2src device=/dev/usb_side io-mode=mmap extra-controls="c,auto_exposure=1,exposure_time_absolute=200,gain=30,brightness=20,contrast=20,sharpness=10000" !
       valve name=gate drop=true !
       image/jpeg,width=1280,height=720,framerate=30/1 !
       videorate drop-only=true !
@@ -80,10 +80,10 @@
       videoscale n-threads=4 !
       video/x-raw,format=I420,width=384,height=384,pixel-aspect-ratio=1/1 !
       videoflip method="counterclockwise" !
-      videomedian filtersize=5 lum-only=true !
-      gamma gamma=1.8 !
-      videobalance contrast=0.9 !
-      videobalance brightness=-0.05 !
       videoconvert n-threads=4 !
       video/x-raw,format=RGB !
+    # videomedian filtersize=5 lum-only=true !
+    # gamma gamma=1.8 !
+    # videobalance contrast=0.9 !
+    # videobalance brightness=-0.05 !
  

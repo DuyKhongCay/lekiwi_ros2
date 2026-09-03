@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    camera_name: "usb_side"
+    frame_id: "side_camera_optical"
+    camera_info_url: ""
+    image_encoding: "rgb8"
+    use_sensor_data_qos: false
+    sync_sink: false
+    use_gst_timestamps: true
+    autostart: true
+    calib_mode: true
+    gscam_config: >
+      v4l2src device=/dev/usb_side io-mode=mmap extra-controls="c,auto_exposure=1,exposure_time_absolute=200,gain=25,brightness=36,contrast=20,sharpness=10000" !
+      image/jpeg,width=1280,height=720,framerate=20/1 !
+      queue leaky=downstream max-size-buffers=1 !
+      jpegdec !
+      video/x-raw,format=I420 !
+      videoflip method="counterclockwise" !
+      queue leaky=downstream max-size-buffers=1 !
+      videoconvert n-threads=4 !
+      video/x-raw,format=RGB

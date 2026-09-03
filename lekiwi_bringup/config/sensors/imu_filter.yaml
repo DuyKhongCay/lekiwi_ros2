@@ -6,7 +6,7 @@ imu_filter:
     use_sim_time: false
     stateless: false
     use_mag: true               # Fuse AK09916 magnetometer for absolute yaw heading
-    publish_tf: true           # Do not publish TF directly from filter; handled by robot_state_publisher & EKF
+    publish_tf: false          # Do not publish TF directly from filter; handled by robot_state_publisher & EKF
     reverse_tf: false
     fixed_frame: "odom"
     constant_dt: 0.0            # 0.0 = calculate dt dynamically from message header timestamps

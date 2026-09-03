@@ -1,0 +1,6 @@
+# Magnetometer calibration parameters for LeKiwi AK09916 (ICM-20948)
+# Automatically managed by magnetometer_bias_observer or manually configured
+magnetometer_bias_x: 0.0
+magnetometer_bias_y: 0.0
+magnetometer_bias_z: 0.0
+

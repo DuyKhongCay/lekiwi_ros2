@@ -1,0 +1,18 @@
+/**:
+  ros__parameters:
+    camera_name: "stereo_left"
+    frame_id: "stereo_left_optical"
+    camera_info_url: ""
+    image_encoding: "rgb8"
+    use_sensor_data_qos: false
+    sync_sink: false
+    use_gst_timestamps: true
+    autostart: true
+    calib_mode: true
+    gscam_config: >
+      libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" !
+      queue leaky=downstream max-size-buffers=1 !
+      video/x-raw,format=NV12,width=3280,height=2464,framerate=20/1 !
+      videoflip method="rotate-180" !
+      videoconvert n-threads=4 !
+      video/x-raw,format=RGB
