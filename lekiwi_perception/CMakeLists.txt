@@ -12,6 +12,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
+find_package(apriltag_msgs REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(diagnostic_updater REQUIRED)
@@ -87,6 +88,7 @@ target_link_libraries(lekiwi_perception_component
 )
 ament_target_dependencies(lekiwi_perception_component
   ament_index_cpp
+  apriltag_msgs
   camera_info_manager
   cv_bridge
   diagnostic_updater
@@ -146,6 +148,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_camera_streamer_component test/test_camera_streamer_component.cpp)
   if(TARGET test_camera_streamer_component)
     target_link_libraries(test_camera_streamer_component lekiwi_perception_component)
+  endif()
+
+  ament_add_gtest(test_chess_vision_mapper test/test_chess_vision_mapper.cpp)
+  if(TARGET test_chess_vision_mapper)
+    target_link_libraries(test_chess_vision_mapper lekiwi_perception_component)
   endif()
 endif()
 

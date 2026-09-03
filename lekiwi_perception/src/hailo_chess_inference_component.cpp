@@ -73,6 +73,11 @@ namespace lekiwi_perception
         rclcpp::SensorDataQoS(),
         std::bind(&HailoChessInferenceComponent::handle_image_input, this, std::placeholders::_1));
 
+    tag_detections_sub_ = create_subscription<apriltag_msgs::msg::AprilTagDetectionArray>(
+        "/tag_detections",
+        rclcpp::SensorDataQoS(),
+        std::bind(&HailoChessInferenceComponent::handle_tag_detections, this, std::placeholders::_1));
+
     hailo_pipeline_ = std::make_unique<HailoGstPipeline>(
         [this](GstSample *sample, GstElement *pipeline)
         {
@@ -186,11 +191,55 @@ namespace lekiwi_perception
     }
     mode_srv_.reset();
     image_sub_.reset();
+    tag_detections_sub_.reset();
+    {
+      std::lock_guard<std::mutex> lock(tags_mutex_);
+      latest_tags_.clear();
+    }
     fen_pub_.reset();
     detections_pub_.reset();
     debug_image_pub_.reset();
+    a1_corner_idx_.store(0);
     current_camera_mode_.store(lekiwi_interfaces::msg::CameraMode::STANDBY);
     pipeline_state_ = "STOPPED";
+  }
+
+  void HailoChessInferenceComponent::handle_tag_detections(
+      const apriltag_msgs::msg::AprilTagDetectionArray::ConstSharedPtr &msg)
+  {
+    if (!msg || msg->detections.empty())
+    {
+      return;
+    }
+
+    std::vector<hailo::Tag2D> tags;
+    tags.reserve(msg->detections.size());
+
+    const float w = static_cast<float>(pipeline_config_.model_width > 0 ? pipeline_config_.model_width : 640);
+    const float h = static_cast<float>(pipeline_config_.model_height > 0 ? pipeline_config_.model_height : 640);
+
+    for (const auto &det : msg->detections)
+    {
+      hailo::Tag2D tag;
+      tag.id = det.id;
+      float cx = static_cast<float>(det.centre.x);
+      float cy = static_cast<float>(det.centre.y);
+      if (cx > 1.0f)
+      {
+        cx /= w;
+      }
+      if (cy > 1.0f)
+      {
+        cy /= h;
+      }
+      tag.center_norm = cv::Point2f(cx, cy);
+      tags.push_back(tag);
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(tags_mutex_);
+      latest_tags_ = std::move(tags);
+    }
   }
 
   void HailoChessInferenceComponent::handle_set_mode(
@@ -263,7 +312,19 @@ namespace lekiwi_perception
 
     const auto roi = get_hailo_main_roi(buffer);
     hailo::ChessboardState state;
-    const bool valid_metadata = roi && hailo::ChessVisionMapper::decode_hailo_metadata(roi, state);
+    state.a1_corner_idx = a1_corner_idx_.load();
+
+    std::vector<hailo::Tag2D> tags_snapshot;
+    {
+      std::lock_guard<std::mutex> lock(tags_mutex_);
+      tags_snapshot = latest_tags_;
+    }
+
+    const bool valid_metadata = roi && hailo::ChessVisionMapper::decode_hailo_metadata(roi, state, tags_snapshot);
+    if (valid_metadata)
+    {
+      a1_corner_idx_.store(state.a1_corner_idx);
+    }
 
     std_msgs::msg::Header header;
     header.frame_id = frame_id_;

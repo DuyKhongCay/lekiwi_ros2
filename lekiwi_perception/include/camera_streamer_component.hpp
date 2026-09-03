@@ -124,6 +124,7 @@ namespace lekiwi_perception
     bool use_gst_timestamps_{false};
     bool use_sensor_data_qos_{true};
     bool autostart_{true};
+    bool calib_mode_{false};
     std::vector<int64_t> active_modes_;
     std::string valve_name_{"gate"};
 

@@ -29,6 +29,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "rclcpp_lifecycle/lifecycle_publisher.hpp"
+#include "apriltag_msgs/msg/april_tag_detection_array.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "vision_msgs/msg/detection2_d_array.hpp"
@@ -79,6 +80,7 @@ namespace lekiwi_perception
   private:
     void handle_sample(GstSample *sample, GstElement *pipeline);
     void handle_image_input(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
+    void handle_tag_detections(const apriltag_msgs::msg::AprilTagDetectionArray::ConstSharedPtr &msg);
     void handle_set_mode(
         const std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Request> request,
         std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Response> response);
@@ -99,6 +101,10 @@ namespace lekiwi_perception
 
     rclcpp::Service<lekiwi_interfaces::srv::SetCamMode>::SharedPtr mode_srv_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+    rclcpp::Subscription<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_detections_sub_;
+    std::mutex tags_mutex_;
+    std::vector<hailo::Tag2D> latest_tags_;
+    std::atomic<int> a1_corner_idx_{0};
     rclcpp::TimerBase::SharedPtr bus_timer_;
 
     // Diagnostic Updater

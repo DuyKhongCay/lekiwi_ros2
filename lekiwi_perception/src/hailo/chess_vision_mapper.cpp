@@ -327,4 +327,142 @@ namespace lekiwi_perception::hailo
     return true;
   }
 
+  // Canonical tag placement offset (in CW steps from corner A1):
+  // Tag 1 (A1): offset 0 (0 steps from A1)
+  // Tag 6 (A8): offset 1 (1 step CW from A1)
+  // Tag 3 (H8): offset 2 (2 steps CW from A1)
+  // Tag 4 (H1): offset 3 (3 steps CW from A1)
+  static const std::map<int, int> TAG_CANONICAL_OFFSET = {
+      {1, 0}, // A1
+      {6, 1}, // A8
+      {3, 2}, // H8
+      {4, 3}, // H1
+      {0, 0}, // Optional fallback for 0-based tag numbering
+      {2, 2}
+  };
+
+  int ChessVisionMapper::match_a1_corner_index(
+      const std::vector<cv::Point2f> &grid_points_norm,
+      const std::vector<Tag2D> &detected_tags,
+      int fallback_a1_idx)
+  {
+    if (detected_tags.empty() || grid_points_norm.size() != 81U)
+    {
+      return fallback_a1_idx;
+    }
+
+    // The 4 chessboard corners in normalized coordinates:
+    // CORNER_GRID_INDICES: {0: TL, 8: TR, 80: BR, 72: BL}
+    const std::vector<cv::Point2f> corner_pts = {
+        grid_points_norm[CORNER_GRID_INDICES[0]], // 0: TL
+        grid_points_norm[CORNER_GRID_INDICES[1]], // 1: TR
+        grid_points_norm[CORNER_GRID_INDICES[2]], // 2: BR
+        grid_points_norm[CORNER_GRID_INDICES[3]]  // 3: BL
+    };
+
+    // Consensus voting array for a1_corner_idx (0..3)
+    int votes[4] = {0, 0, 0, 0};
+    int valid_votes = 0;
+
+    for (const auto &tag : detected_tags)
+    {
+      auto it = TAG_CANONICAL_OFFSET.find(tag.id);
+      if (it == TAG_CANONICAL_OFFSET.end())
+      {
+        continue;
+      }
+
+      int tag_offset = it->second;
+
+      // Find nearest image corner k in {0:TL, 1:TR, 2:BR, 3:BL}
+      float min_dist_sq = 1e9F;
+      int nearest_corner = 0;
+
+      for (int k = 0; k < 4; ++k)
+      {
+        float dx = corner_pts[k].x - tag.center_norm.x;
+        float dy = corner_pts[k].y - tag.center_norm.y;
+        float d2 = dx * dx + dy * dy;
+        if (d2 < min_dist_sq)
+        {
+          min_dist_sq = d2;
+          nearest_corner = k;
+        }
+      }
+
+      // Tag must be within reasonable proximity of a corner in normalized coords
+      if (min_dist_sq < (0.35F * 0.35F))
+      {
+        int a1_idx = (nearest_corner - tag_offset + 4) % 4;
+        votes[a1_idx]++;
+        valid_votes++;
+      }
+    }
+
+    if (valid_votes == 0)
+    {
+      return fallback_a1_idx;
+    }
+
+    int best_a1 = fallback_a1_idx;
+    int max_votes = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+      if (votes[i] > max_votes)
+      {
+        max_votes = votes[i];
+        best_a1 = i;
+      }
+    }
+
+    return best_a1;
+  }
+
+
+  bool ChessVisionMapper::decode_hailo_metadata(
+      const HailoROIPtr &roi, ChessboardState &state,
+      const std::vector<Tag2D> &detected_tags)
+  {
+    if (!decode_hailo_metadata(roi, state))
+    {
+      return false;
+    }
+
+    if (!detected_tags.empty() && state.grid_points_norm.size() == 81U)
+    {
+      int matched_a1 = match_a1_corner_index(
+          state.grid_points_norm, detected_tags, state.a1_corner_idx);
+      if (matched_a1 != state.a1_corner_idx)
+      {
+        remap_board_orientation(state, matched_a1);
+      }
+    }
+    return true;
+  }
+
+  void ChessVisionMapper::remap_board_orientation(
+      ChessboardState &state, int new_a1_corner_idx)
+  {
+    state.a1_corner_idx = new_a1_corner_idx;
+    if (state.homography_matrix.empty())
+    {
+      return;
+    }
+    state.occupancy_map.clear();
+    for (auto &piece : state.pieces)
+    {
+      piece.square = ChessVisionMapper::map_pixel_to_square(
+          piece.base_pt.x, piece.base_pt.y, state.homography_matrix, state.a1_corner_idx);
+      if (!piece.square.empty() && !piece.label.empty())
+      {
+        state.occupancy_map[piece.square] = piece.label;
+      }
+    }
+    state.num_pieces = static_cast<int>(state.occupancy_map.size());
+    if (!state.occupancy_map.empty())
+    {
+      state.fen = ChessVisionMapper::generate_fen(state.occupancy_map);
+    }
+  }
+
 } // namespace lekiwi_perception::hailo

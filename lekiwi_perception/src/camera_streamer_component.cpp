@@ -33,6 +33,7 @@ namespace lekiwi_perception
     declare_parameter<bool>("use_gst_timestamps", false);
     declare_parameter<bool>("use_sensor_data_qos", true);
     declare_parameter<bool>("autostart", true);
+    declare_parameter<bool>("calib_mode", false);
     declare_parameter<std::vector<int64_t>>("active_modes", std::vector<int64_t>{});
     declare_parameter<std::string>("valve_name", "gate");
 
@@ -78,6 +79,7 @@ namespace lekiwi_perception
       sync_sink_ = get_parameter("sync_sink").as_bool();
       use_gst_timestamps_ = get_parameter("use_gst_timestamps").as_bool();
       use_sensor_data_qos_ = get_parameter("use_sensor_data_qos").as_bool();
+      calib_mode_ = get_parameter("calib_mode").as_bool();
       active_modes_ = get_parameter("active_modes").as_integer_array();
       valve_name_ = get_parameter("valve_name").as_string();
 
@@ -163,9 +165,9 @@ namespace lekiwi_perception
       if (valve_ != nullptr)
       {
         RCLCPP_INFO(
-            get_logger(), "Found GStreamer valve element '%s' for camera '%s'",
-            GST_OBJECT_NAME(valve_), camera_name_.c_str());
-        g_object_set(G_OBJECT(valve_), "drop", TRUE, NULL);
+            get_logger(), "Found GStreamer valve element '%s' for camera '%s' (calib_mode=%s)",
+            GST_OBJECT_NAME(valve_), camera_name_.c_str(), calib_mode_ ? "true" : "false");
+        g_object_set(G_OBJECT(valve_), "drop", calib_mode_ ? FALSE : TRUE, NULL);
       }
       else
       {
@@ -417,12 +419,12 @@ namespace lekiwi_perception
     }
     const bool has_subscribers = (sub_count > 0);
 
-    const bool should_stream = is_active && mode_allowed && has_subscribers;
+    const bool should_stream = calib_mode_ || (is_active && mode_allowed && has_subscribers);
     const bool prev_streaming = is_streaming_.exchange(should_stream);
 
     if (valve_ != nullptr)
     {
-      const gboolean drop_val = should_stream ? FALSE : TRUE;
+      const gboolean drop_val = (calib_mode_ || should_stream) ? FALSE : TRUE;
       g_object_set(G_OBJECT(valve_), "drop", drop_val, NULL);
     }
 
@@ -430,10 +432,10 @@ namespace lekiwi_perception
     {
       RCLCPP_INFO(
           get_logger(),
-          "[%s] Valve state changed: %s (mode=%u, allowed=%d, sub_count=%zu, active=%d)",
+          "[%s] Valve state changed: %s (calib_mode=%d, mode=%u, allowed=%d, sub_count=%zu, active=%d)",
           camera_name_.c_str(),
           should_stream ? "OPEN (streaming)" : "DROPPING (idle)",
-          mode, mode_allowed, sub_count, is_active);
+          calib_mode_ ? 1 : 0, mode, mode_allowed, sub_count, is_active);
     }
   }
 
