@@ -107,8 +107,6 @@ namespace lekiwi_icm20948_hardware
         // Sensor Calibration & Remapping
         std::array<double, 3> accel_bias_{0.0, 0.0, 0.0};
         std::array<double, 3> gyro_bias_{0.0, 0.0, 0.0};
-        std::array<double, 3> mag_bias_{0.0, 0.0, 0.0};
-        std::array<double, 3> mag_scale_{1.0, 1.0, 1.0};
 
         std::array<int, 3> accel_axis_sign_{1, 1, 1};
         std::array<int, 3> gyro_axis_sign_{1, 1, 1};

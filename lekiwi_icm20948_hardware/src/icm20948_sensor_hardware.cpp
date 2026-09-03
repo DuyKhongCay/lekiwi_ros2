@@ -401,9 +401,11 @@ namespace lekiwi_icm20948_hardware
             gz = (data.gyro_rad_s[2] - gyro_bias_[2]) * gyro_axis_sign_[2];
         }
 
-        double mx = (data.mag_tesla[0] - mag_bias_[0]) * mag_scale_[0] * mag_axis_sign_[0];
-        double my = (data.mag_tesla[1] - mag_bias_[1]) * mag_scale_[1] * mag_axis_sign_[1];
-        double mz = (data.mag_tesla[2] - mag_bias_[2]) * mag_scale_[2] * mag_axis_sign_[2];
+        // Raw magnetometer data in Tesla aligned to REP-103 robot frame
+        // Hard-iron and soft-iron calibration is decoupled and handled by Layer 2 magnetometer_pipeline
+        double mx = data.mag_tesla[0] * mag_axis_sign_[0];
+        double my = data.mag_tesla[1] * mag_axis_sign_[1];
+        double mz = data.mag_tesla[2] * mag_axis_sign_[2];
 
         // Raw IMU exports identity quaternion (covariance[0] = -1.0 in controller)
         set_state(sensor_name_ + "/orientation.x", 0.0);
