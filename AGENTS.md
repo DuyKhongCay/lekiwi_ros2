@@ -32,13 +32,15 @@ Keep generated `build/`, `install/`, and `log/` directories out of source change
 From the workspace root, source your ROS 2 installation, then use:
 
 ```bash
-colcon build --symlink-install
+colcon build --symlink-install --cmake-args -GNinja
 source install/setup.bash
 colcon test --event-handlers console_direct+
 colcon test-result --verbose
 ```
 
-Build a focused package with `colcon build --packages-select lekiwi_perception`. Run a robot stack after building with `ros2 launch lekiwi_bringup robot.launch.py`; use the individual launch files in `lekiwi_bringup/launch/` for narrower debugging.
+Always prioritize using the **Ninja** build generator (`--cmake-args -GNinja`) when building packages for faster and more efficient builds.
+
+Build a focused package with `colcon build --symlink-install --packages-select lekiwi_perception --cmake-args -GNinja`. Run a robot stack after building with `ros2 launch lekiwi_bringup robot.launch.py`; use the individual launch files in `lekiwi_bringup/launch/` for narrower debugging.
 
 ## Coding Style & Naming Conventions
 
