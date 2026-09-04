@@ -4,11 +4,11 @@
 <robot name="lekiwi">
   <!-- Link base_footprint -->
   <link name="base_footprint">
-    <inertial>
+    <!-- <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="0"/>
       <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
-    </inertial>
+    </inertial> -->
     <!-- Part base_plate_layer2_v3_1__body1 -->
     <visual>
       <origin xyz="-0.0209673 1.32994e-05 0.1072" rpy="-0 0 -1.5708"/>
