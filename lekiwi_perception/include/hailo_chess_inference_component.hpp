@@ -88,7 +88,10 @@ namespace lekiwi_perception
     void reset_state();
     void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
 
-    HailoPipelineConfig pipeline_config_;
+    /// Internal package paths to HEF models (resolved via ament_index_cpp, not ROS parameters)
+    std::string board_hef_path_;
+    std::string pcs_hef_path_;
+    std::string vdevice_group_id_{"lekiwi_chess"};
     std::string frame_id_{"stereo_left_optical"};
     bool publish_debug_image_{true};
     std::chrono::milliseconds transition_timeout_{5000};

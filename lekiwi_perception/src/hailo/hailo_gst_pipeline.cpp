@@ -29,7 +29,9 @@ namespace lekiwi_perception
   }
 
   bool HailoGstPipeline::start(
-      const HailoPipelineConfig &config,
+      const std::string &board_hef_path,
+      const std::string &pcs_hef_path,
+      const std::string &vdevice_group_id,
       std::chrono::milliseconds timeout,
       std::string &error)
   {
@@ -42,16 +44,15 @@ namespace lekiwi_perception
 
     std::ostringstream ss;
     ss << "appsrc name=hailo_appsrc is-live=true format=time do-timestamp=false block=false max-bytes=0 "
-       << "caps=\"video/x-raw,format=RGB,width=" << config.model_width
-       << ",height=" << config.model_height << "\" ! "
+       << "caps=\"video/x-raw,format=RGB,width=640,height=640\" ! "
        << "queue name=board_queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! "
-       << "hailonet name=chessboard_net hef-path=\"" << config.board_hef_path << "\" "
-       << "vdevice-group-id=\"" << config.vdevice_group_id << "\" force-writable=true is-active=true ! "
+       << "hailonet name=chessboard_net hef-path=\"" << board_hef_path << "\" "
+       << "vdevice-group-id=\"" << vdevice_group_id << "\" force-writable=true is-active=true ! "
        << "queue name=filter_board_queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! "
        << "hailofilter so-path=liblekiwi_chessboard_postprocess.so function-name=filter_chessboard qos=false ! "
        << "queue name=chess_queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! "
-       << "hailonet name=pieces_net hef-path=\"" << config.pcs_hef_path << "\" "
-       << "vdevice-group-id=\"" << config.vdevice_group_id << "\" force-writable=true is-active=true ! "
+       << "hailonet name=pieces_net hef-path=\"" << pcs_hef_path << "\" "
+       << "vdevice-group-id=\"" << vdevice_group_id << "\" force-writable=true is-active=true ! "
        << "queue name=filter_chess_queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! "
        << "hailofilter so-path=liblekiwi_pieces_postprocess.so function-name=filter_letterbox qos=false ! "
        << "queue name=hailo_queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! "

@@ -36,24 +36,24 @@ namespace lekiwi_perception
   HailoChessInferenceComponent::CallbackReturn HailoChessInferenceComponent::on_configure(
       const rclcpp_lifecycle::State &)
   {
-    std::string default_models_dir;
     try
     {
-      default_models_dir = ament_index_cpp::get_package_share_directory("lekiwi_perception") + "/resources/models";
+      const std::string models_dir = ament_index_cpp::get_package_share_directory("lekiwi_perception") + "/resources/models";
+      board_hef_path_ = models_dir + "/yolov8n-seg.hef";
+      pcs_hef_path_ = models_dir + "/yolo11n.hef";
     }
-    catch (const std::exception &)
+    catch (const std::exception &e)
     {
-      default_models_dir = "resources/models";
+      board_hef_path_ = "resources/models/yolov8n-seg.hef";
+      pcs_hef_path_ = "resources/models/yolo11n.hef";
+      RCLCPP_WARN(
+          get_logger(),
+          "Failed to locate lekiwi_perception package share directory: %s. Falling back to relative paths.",
+          e.what());
     }
 
-    pipeline_config_.board_hef_path = declare_parameter<std::string>(
-        "board_hef_path", default_models_dir + "/yolov8n-seg.hef");
-    pipeline_config_.pcs_hef_path = declare_parameter<std::string>(
-        "pcs_hef_path", default_models_dir + "/yolo11n.hef");
-    pipeline_config_.vdevice_group_id = declare_parameter<std::string>(
-        "vdevice_group_id", "lekiwi_chess");
-    pipeline_config_.model_width = static_cast<uint32_t>(declare_parameter<int>("model_width", 640));
-    pipeline_config_.model_height = static_cast<uint32_t>(declare_parameter<int>("model_height", 640));
+    RCLCPP_INFO(get_logger(), "Board HEF path: %s", board_hef_path_.c_str());
+    RCLCPP_INFO(get_logger(), "Pieces HEF path: %s", pcs_hef_path_.c_str());
 
     frame_id_ = declare_parameter<std::string>("frame_id", "stereo_left_optical");
     publish_debug_image_ = declare_parameter<bool>("publish_debug_image", true);
@@ -107,7 +107,7 @@ namespace lekiwi_perception
 
     pipeline_state_ = "STARTING";
     std::string error;
-    if (!hailo_pipeline_->start(pipeline_config_, transition_timeout_, error))
+    if (!hailo_pipeline_->start(board_hef_path_, pcs_hef_path_, vdevice_group_id_, transition_timeout_, error))
     {
       pipeline_state_ = "ERROR";
       last_error_ = error;
@@ -215,8 +215,8 @@ namespace lekiwi_perception
     std::vector<hailo::Tag2D> tags;
     tags.reserve(msg->detections.size());
 
-    const float w = static_cast<float>(pipeline_config_.model_width > 0 ? pipeline_config_.model_width : 640);
-    const float h = static_cast<float>(pipeline_config_.model_height > 0 ? pipeline_config_.model_height : 640);
+    const float w = 640.0f;
+    const float h = 640.0f;
 
     for (const auto &det : msg->detections)
     {
@@ -273,6 +273,26 @@ namespace lekiwi_perception
     {
       return;
     }
+
+    size_t sub_count = 0;
+    if (fen_pub_)
+    {
+      sub_count += fen_pub_->get_subscription_count() + fen_pub_->get_intra_process_subscription_count();
+    }
+    if (detections_pub_)
+    {
+      sub_count += detections_pub_->get_subscription_count() + detections_pub_->get_intra_process_subscription_count();
+    }
+    if (debug_image_pub_)
+    {
+      sub_count += debug_image_pub_->get_subscription_count() + debug_image_pub_->get_intra_process_subscription_count();
+    }
+
+    if (sub_count == 0)
+    {
+      return;
+    }
+
     std::string error;
     if (!hailo_pipeline_->push_image(*msg, error))
     {

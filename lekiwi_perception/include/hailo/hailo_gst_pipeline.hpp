@@ -29,23 +29,6 @@ namespace lekiwi_perception
 {
 
   /**
-   * @brief Configuration parameters for Hailo GStreamer neural network pipeline.
-   */
-  struct HailoPipelineConfig
-  {
-    /// File path to board segmentation HEF model file (YOLOv8n-seg).
-    std::string board_hef_path;
-    /// File path to piece detection HEF model file (YOLO11n).
-    std::string pcs_hef_path;
-    /// Hailo Virtual Device group identifier.
-    std::string vdevice_group_id{"lekiwi_chess"};
-    /// Input image width expected by neural network model.
-    uint32_t model_width{640};
-    /// Input image height expected by neural network model.
-    uint32_t model_height{640};
-  };
-
-  /**
    * @brief Thread-safe C++ wrapper managing GStreamer Hailo pipeline lifecycle.
    */
   class HailoGstPipeline
@@ -65,13 +48,17 @@ namespace lekiwi_perception
 
     /**
      * @brief Builds GStreamer string description, links elements, and sets state to PLAYING.
-     * @param[in] config Pipeline model and device configuration.
+     * @param[in] board_hef_path File path to board segmentation HEF model file.
+     * @param[in] pcs_hef_path File path to piece detection HEF model file.
+     * @param[in] vdevice_group_id Hailo Virtual Device group identifier.
      * @param[in] timeout Maximum duration to wait for GStreamer state transition.
      * @param[out] error Output string capturing error details on failure.
      * @return true On successful start, false on pipeline creation or state error.
      */
     [[nodiscard]] bool start(
-        const HailoPipelineConfig &config,
+        const std::string &board_hef_path,
+        const std::string &pcs_hef_path,
+        const std::string &vdevice_group_id,
         std::chrono::milliseconds timeout,
         std::string &error);
 
