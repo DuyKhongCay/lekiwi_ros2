@@ -20,6 +20,9 @@ scripts/
 CMakeFiles/
 cross_reference/
 zenoh_pi5.json
+so101_camera_calibration
+frames_*.gv
+frames_*.pdf
 
 ### Environments & Dependencies ###
 .env

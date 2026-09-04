@@ -26,6 +26,7 @@ Keep generated `build/`, `install/`, and `log/` directories out of source change
 ## Agent-Specific Instructions
 
 - Respond to users in Vietnamese; write code comments in English.
+- Always use **Mermaid** syntax (` ```mermaid `) whenever drawing diagrams, charts, pipelines, or architectural graphs.
 
 ## Build, Test, and Development Commands
 
