@@ -13,6 +13,7 @@ def generate_launch_description():
 
     default_map = PathJoinSubstitution([nav_share, "maps", "chessboard_arena.yaml"])
     default_params = PathJoinSubstitution([nav_share, "config", "nav2_params.yaml"])
+    default_ekf_params = PathJoinSubstitution([nav_share, "config", "ekf.yaml"])
     default_twist_mux_config = PathJoinSubstitution([nav_share, "config", "twist_mux.yaml"])
 
     # Launch arguments
@@ -26,6 +27,12 @@ def generate_launch_description():
         "params_file",
         default_value=default_params,
         description="Full path to Nav2 parameters file",
+    )
+
+    declare_ekf_params_file = DeclareLaunchArgument(
+        "ekf_params_file",
+        default_value=default_ekf_params,
+        description="Full path to robot_localization EKF parameters file",
     )
 
     declare_use_sim_time = DeclareLaunchArgument(
@@ -63,8 +70,18 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     params_file = LaunchConfiguration("params_file")
+    ekf_params_file = LaunchConfiguration("ekf_params_file")
     map_yaml_file = LaunchConfiguration("map")
     autostart = LaunchConfiguration("autostart")
+
+    # 0. EKF Odometry Fusion (Wheel Odom vx, vy + IMU yaw, wz -> /odometry/filtered & TF odom->base_footprint)
+    ekf_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_filter_node",
+        output="screen",
+        parameters=[ekf_params_file, {"use_sim_time": use_sim_time}],
+    )
 
     # 1. Map Server
     map_server_node = Node(
@@ -132,7 +149,7 @@ def generate_launch_description():
         ],
     )
 
-    # 7. Safety Command Arbiter: twist_mux (luôn luôn được kích hoạt cùng navigation)
+    # 7. Safety Command Arbiter: twist_mux
     twist_mux_node = Node(
         package="twist_mux",
         executable="twist_mux",
@@ -151,10 +168,12 @@ def generate_launch_description():
         [
             declare_map_yaml,
             declare_params_file,
+            declare_ekf_params_file,
             declare_use_sim_time,
             declare_autostart,
             declare_twist_mux_config,
             declare_cmd_vel_out,
+            ekf_node,
             map_server_node,
             planner_server_node,
             controller_server_node,
