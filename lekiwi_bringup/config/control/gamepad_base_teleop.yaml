@@ -1,5 +1,11 @@
 # Gamepad Teleoperation configuration for LeKiwi Mobile Base (Flydigi / Xbox 360 controller)
-# Packages: joy_linux / joy and joy_teleop (teleop_tools)
+# Standard Button Map:
+# Button 0: A
+# Button 1: B
+# Button 2: X (E-Stop toggle / lock)
+# Button 3: Y (Lock Chessboard World Anchor / Tag Localization)
+# Button 4: LB
+# Button 5: RB (Deadman switch)
 
 joy_linux_node:
   ros__parameters:
@@ -19,47 +25,59 @@ joy_node:
 
 joy_teleop:
   ros__parameters:
-    # Normal mode: Deadman RB (button 5), max vx/vy = 0.4 m/s, max wz = 1.2 rad/s
+    # 1. Normal Drive Mode: Deadman RB (button 5)
     lekiwi_teleop_normal:
       type: topic
-      interface_type: geometry_msgs/msg/TwistStamped
-      topic_name: /omni_base_controller/cmd_vel
+      interface_type: geometry_msgs/msg/Twist
+      topic_name: /cmd_vel_teleop
       deadman_buttons: [5]
       axis_mappings:
-        twist-linear-x:
+        linear-x:
           axis: 1
-          scale: 10
+          scale: 0.35
           offset: 0.0
-        twist-linear-y:
+        linear-y:
           axis: 0
-          scale: 10
+          scale: 0.35
           offset: 0.0
-        twist-angular-z:
+        angular-z:
           axis: 3
-          scale: 30
+          scale: 0.80
           offset: 0.0
-        header-frame_id:
-          value: base_footprint
 
-    # Turbo mode: Deadman LB + RB (buttons 4 & 5), max vx/vy = 0.8 m/s, max wz = 2.0 rad/s
+    # 2. Turbo Drive Mode: Deadman LB + RB (buttons 4 & 5)
     lekiwi_teleop_turbo:
       type: topic
-      interface_type: geometry_msgs/msg/TwistStamped
-      topic_name: /omni_base_controller/cmd_vel
+      interface_type: geometry_msgs/msg/Twist
+      topic_name: /cmd_vel_teleop
       deadman_buttons: [4, 5]
       axis_mappings:
-        twist-linear-x:
+        linear-x:
           axis: 1
-          scale: 0.8
+          scale: 0.60
           offset: 0.0
-        twist-linear-y:
+        linear-y:
           axis: 0
-          scale: 0.8
+          scale: 0.60
           offset: 0.0
-        twist-angular-z:
+        angular-z:
           axis: 3
-          scale: 2.0
+          scale: 1.50
           offset: 0.0
-        header-frame_id:
-          value: base_footprint
 
+    # 3. Button X (Index 2): Emergency Stop (Publish /safety/estop_active = True)
+    lekiwi_estop_button:
+      type: topic
+      interface_type: std_msgs/msg/Bool
+      topic_name: /safety/estop_active
+      deadman_buttons: [2]
+      message_value:
+        data:
+          value: true
+
+    # 4. Button Y (Index 3): Lock Chessboard Anchor (Call /chessboard/lock_anchor service)
+    lekiwi_lock_anchor_button:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+      service_name: /chessboard/lock_anchor
+      buttons: [3]

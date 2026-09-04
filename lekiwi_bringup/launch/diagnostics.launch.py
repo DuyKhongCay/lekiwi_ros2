@@ -13,12 +13,8 @@ def generate_launch_description():
     """Launch diagnostic aggregator and system resource monitors (CPU, RAM, Disk)."""
     bringup_share = FindPackageShare("lekiwi_bringup")
 
-    analyzers_config_arg = DeclareLaunchArgument(
-        "analyzers_config_file",
-        default_value=PathJoinSubstitution(
-            [bringup_share, "config", "diagnostics", "lekiwi_analyzers.yaml"]
-        ),
-        description="Path to diagnostics aggregator configuration YAML.",
+    analyzers_config = PathJoinSubstitution(
+        [bringup_share, "config", "diagnostics", "lekiwi_analyzers.yaml"]
     )
 
     enable_system_monitors_arg = DeclareLaunchArgument(
@@ -27,34 +23,14 @@ def generate_launch_description():
         description="Whether to run system monitors (CPU, RAM, Disk).",
     )
 
-    cpu_warning_percentage_arg = DeclareLaunchArgument(
-        "cpu_warning_percentage",
-        default_value="90",
-        description="CPU load percentage threshold to trigger diagnostic warning.",
-    )
-
-    ram_warning_percentage_arg = DeclareLaunchArgument(
-        "ram_warning_percentage",
-        default_value="90",
-        description="RAM usage percentage threshold to trigger diagnostic warning.",
-    )
-
-    hd_path_arg = DeclareLaunchArgument(
-        "hd_path",
-        default_value="/",
-        description="Mount path for hard drive usage monitoring.",
-    )
-
-    # Aggregator node
     aggregator_node = Node(
         package="diagnostic_aggregator",
         executable="aggregator_node",
         name="diagnostic_aggregator",
         output="screen",
-        parameters=[LaunchConfiguration("analyzers_config_file")],
+        parameters=[analyzers_config],
     )
 
-    # System monitors from diagnostic_common_diagnostics
     system_condition = IfCondition(LaunchConfiguration("enable_system_monitors"))
 
     cpu_monitor_node = Node(
@@ -62,12 +38,7 @@ def generate_launch_description():
         executable="cpu_monitor.py",
         name="cpu_monitor",
         output="screen",
-        parameters=[
-            {
-                "warning_percentage": LaunchConfiguration("cpu_warning_percentage"),
-                "window": 1,
-            }
-        ],
+        parameters=[analyzers_config],
         condition=system_condition,
     )
 
@@ -76,12 +47,7 @@ def generate_launch_description():
         executable="ram_monitor.py",
         name="ram_monitor",
         output="screen",
-        parameters=[
-            {
-                "warning_percentage": LaunchConfiguration("ram_warning_percentage"),
-                "window": 1,
-            }
-        ],
+        parameters=[analyzers_config],
         condition=system_condition,
     )
 
@@ -90,21 +56,13 @@ def generate_launch_description():
         executable="hd_monitor.py",
         name="hd_monitor",
         output="screen",
-        parameters=[
-            {
-                "path": LaunchConfiguration("hd_path"),
-            }
-        ],
+        parameters=[analyzers_config],
         condition=system_condition,
     )
 
     return LaunchDescription(
         [
-            analyzers_config_arg,
             enable_system_monitors_arg,
-            cpu_warning_percentage_arg,
-            ram_warning_percentage_arg,
-            hd_path_arg,
             aggregator_node,
             cpu_monitor_node,
             ram_monitor_node,

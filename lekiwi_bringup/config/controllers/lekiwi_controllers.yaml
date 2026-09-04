@@ -25,7 +25,7 @@ arm_trajectory_controller:
       - arm_gripper
     command_interfaces: [position]
     state_interfaces: [position, velocity]
-    open_loop_control: true
+    interpolate_from_desired_state: true
     allow_nonzero_velocity_at_trajectory_end: true
     allow_partial_joints_goal: false
     state_publish_rate: 50.0
@@ -50,7 +50,7 @@ omni_base_controller:
     wheel_radius: 0.065 
     odom_frame_id: odom
     base_frame_id: base_footprint
-    enable_odom_tf: true
+    enable_odom_tf: false
     open_loop: false
     position_feedback: false
     cmd_vel_timeout: 0.25

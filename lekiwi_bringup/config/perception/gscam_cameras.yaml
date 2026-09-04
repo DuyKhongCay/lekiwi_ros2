@@ -17,7 +17,7 @@
       valve name=gate drop=true ! 
       queue leaky=downstream max-size-buffers=1 ! 
       video/x-raw,format=NV12,width=3280,height=2464,framerate=20/1 ! 
-      videoscale add-borders=true n-threads=4 ! \
+      videoscale add-borders=true n-threads=4 !
       video/x-raw,format=NV12,width=640,height=640,pixel-aspect-ratio=1/1 ! 
       videoflip method="rotate-180" ! 
       videoconvert n-threads=4 ! 
@@ -48,7 +48,7 @@
     camera_name: "usb_wrist"
     active_modes: [3]
     gscam_config: >
-      v4l2src device=/dev/usb_wrist io-mode=mmap extra-controls="c,power_line_frequency=1,sharpness=256,contrast=356" !
+      v4l2src device=/dev/usb_wrist io-mode=mmap extra-controls="c,power_line_frequency=1" !
       valve name=gate drop=true !
       image/jpeg,width=1280,height=720,framerate=25/1 !
       queue leaky=downstream max-size-buffers=1 !
@@ -81,7 +81,7 @@
       video/x-raw,format=I420,width=384,height=384,pixel-aspect-ratio=1/1 !
       videoflip method="counterclockwise" !
       videoconvert n-threads=4 !
-      video/x-raw,format=RGB !
+      video/x-raw,format=RGB
     # videomedian filtersize=5 lum-only=true !
     # gamma gamma=1.8 !
     # videobalance contrast=0.9 !

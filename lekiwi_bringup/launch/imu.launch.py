@@ -4,7 +4,8 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
@@ -20,28 +21,15 @@ def generate_launch_description():
         [bringup_share, "config", "sensors", "icm20948_magnetometer_calib.yaml"]
     )
 
-    declared_args_spec = [
-        ("imu_params_file", default_imu_params),
-        ("mag_calib_file", default_mag_calib),
-        ("use_sim_time", "false"),
-        ("target_frame", "base_footprint"),
-        ("raw_imu_topic", "/lekiwi_imu_broadcaster/imu"),
-        ("raw_mag_topic", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
-        ("calibrated_mag_topic", "/magnetic_field/calibrated"),
-        ("filtered_imu_topic", "/imu/data"),
-        ("transformed_imu_topic", "/imu/data_transformed"),
-    ]
-
-    all_declared_arguments = [
-        DeclareLaunchArgument(name, default_value=default)
-        for name, default in declared_args_spec
-    ]
+    use_sim_time_arg = DeclareLaunchArgument(
+        "use_sim_time", default_value="false", description="Use simulation clock"
+    )
 
     use_sim_time_param = ParameterValue(
         LaunchConfiguration("use_sim_time"), value_type=bool
     )
 
-    # 1. Magnetometer Bias Observer (Calibrate via /calibrate_magnetometer service & load/save YAML)
+    # 1. Magnetometer Bias Observer (Python node: calibrate via /calibrate_magnetometer service & load/save YAML)
     mag_bias_observer_node = Node(
         package="magnetometer_pipeline",
         executable="magnetometer_bias_observer.py",
@@ -49,7 +37,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
-                "calibration_file_path": LaunchConfiguration("mag_calib_file"),
+                "calibration_file_path": default_mag_calib,
                 "2d_mode": False,
                 "measuring_time": 30.0,
                 "load_from_params": False,
@@ -59,74 +47,82 @@ def generate_launch_description():
             }
         ],
         remappings=[
-            ("imu/mag", LaunchConfiguration("raw_mag_topic")),
+            ("imu/mag", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
             ("imu/mag_bias", "/imu/mag_bias"),
         ],
     )
 
-    # 2. Magnetometer Bias Remover (Substracts bias & scales ellipsoid to unit sphere)
-    mag_bias_remover_node = Node(
+    # 2. Composable Components for C++ High-frequency IMU pipeline
+    mag_bias_remover_component = ComposableNode(
         package="magnetometer_pipeline",
-        executable="magnetometer_bias_remover_node",
+        plugin="magnetometer_pipeline::MagnetometerBiasRemoverNodelet",
         name="magnetometer_bias_remover",
-        output="screen",
         parameters=[
             {
                 "use_sim_time": use_sim_time_param,
             }
         ],
         remappings=[
-            ("imu/mag", LaunchConfiguration("raw_mag_topic")),
+            ("imu/mag", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
             ("imu/mag_bias", "/imu/mag_bias"),
-            ("imu/mag_unbiased", LaunchConfiguration("calibrated_mag_topic")),
+            ("imu/mag_unbiased", "/magnetic_field/calibrated"),
         ],
+        extra_arguments=[{"use_intra_process_comms": True}],
     )
 
-    # 3. Madgwick AHRS Filter (Fuses linear accel, calibrated mag and angular vel into absolute orientation)
-    imu_filter_node = Node(
+    imu_filter_component = ComposableNode(
         package="imu_filter_madgwick",
-        executable="imu_filter_madgwick_node",
+        plugin="ImuFilterMadgwickRos",
         name="imu_filter",
-        output="screen",
         parameters=[
-            LaunchConfiguration("imu_params_file"),
+            default_imu_params,
             {
                 "use_mag": True,
                 "use_sim_time": use_sim_time_param,
             },
         ],
         remappings=[
-            ("imu/data_raw", LaunchConfiguration("raw_imu_topic")),
-            ("imu/mag", LaunchConfiguration("calibrated_mag_topic")),
-            ("imu/data", LaunchConfiguration("filtered_imu_topic")),
+            ("imu/data_raw", "/lekiwi_imu_broadcaster/imu"),
+            ("imu/mag", "/magnetic_field/calibrated"),
+            ("imu/data", "/imu/data"),
         ],
+        extra_arguments=[{"use_intra_process_comms": True}],
     )
 
-    # 4. IMU Transformer (Transforms IMU tensors from sensor frame to robot base_footprint frame)
-    imu_transformer_node = Node(
+    imu_transformer_component = ComposableNode(
         package="imu_transformer",
-        executable="imu_transformer_node",
+        plugin="imu_transformer::ImuTransformer",
         name="imu_transformer",
-        output="screen",
         parameters=[
-            LaunchConfiguration("imu_params_file"),
+            default_imu_params,
             {
-                "target_frame": LaunchConfiguration("target_frame"),
                 "use_sim_time": use_sim_time_param,
             },
         ],
         remappings=[
-            ("imu_in", LaunchConfiguration("filtered_imu_topic")),
-            ("imu_out", LaunchConfiguration("transformed_imu_topic")),
+            ("imu_in", "/imu/data"),
+            ("imu_out", "/imu/data_transformed"),
         ],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
+    imu_container = ComposableNodeContainer(
+        name="lekiwi_imu_container",
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_mt",
+        composable_node_descriptions=[
+            mag_bias_remover_component,
+            imu_filter_component,
+            imu_transformer_component,
+        ],
+        output="screen",
     )
 
     return LaunchDescription(
         [
-            *all_declared_arguments,
+            use_sim_time_arg,
             mag_bias_observer_node,
-            mag_bias_remover_node,
-            imu_filter_node,
-            imu_transformer_node,
+            imu_container,
         ]
     )
