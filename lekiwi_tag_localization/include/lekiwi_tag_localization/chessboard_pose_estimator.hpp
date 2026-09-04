@@ -20,6 +20,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "apriltag_msgs/msg/april_tag_detection_array.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
@@ -98,7 +99,6 @@ namespace lekiwi_tag_localization
         cv::Mat &rvec_board,
         cv::Mat &tvec_board);
 
-
     /**
      * @brief Generates a Keepout Polygon around the chessboard with safety margin.
      * @param[in] frame_id TF frame ID for the header (typically chessboard_frame).
@@ -166,6 +166,7 @@ namespace lekiwi_tag_localization
     bool publish_tf_{true};
     bool publish_map_to_chessboard_{true};
     bool publish_camera_to_board_{true};
+    bool publish_map_to_odom_{true};
     double keepout_margin_{0.035};
     double keepout_rate_{2.0};
 
@@ -183,12 +184,22 @@ namespace lekiwi_tag_localization
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr robot_pose_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr costmap_polygon_pub_;
 
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr lock_anchor_srv_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_anchor_srv_;
+
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     rclcpp::TimerBase::SharedPtr keepout_timer_;
+
+    // Anchor lock state
+    bool is_anchored_{false};
+    geometry_msgs::msg::TransformStamped T_map_odom_locked_;
+    bool has_latest_tag_detection_{false};
+    tf2::Transform latest_T_map_base_;
+    rclcpp::Time latest_detection_stamp_;
 
     // Last known poses for smoothing / initial guess
     cv::Mat last_rvec_;

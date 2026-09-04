@@ -1,6 +1,6 @@
 /**
  * @file chessboard_pose_estimator.cpp
- * @brief Implementation of AprilTag chessboard pose estimation and TF broadcasting.
+ * @brief Implementation of AprilTag chessboard pose estimation, TF broadcasting, and map anchor locking.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -105,7 +105,7 @@ namespace lekiwi_tag_localization
       }
     }
 
-    if (used_tags_count == 0)
+    if (object_points.size() < 4U)
     {
       return false;
     }
@@ -135,7 +135,6 @@ namespace lekiwi_tag_localization
     }
     return success;
   }
-
 
   geometry_msgs::msg::PolygonStamped PoseSolver::create_keepout_polygon(
       const std::string &frame_id,
@@ -195,6 +194,14 @@ namespace lekiwi_tag_localization
     costmap_polygon_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
         "/chessboard/costmap_polygon", rclcpp::QoS(1).transient_local());
 
+    // Services
+    lock_anchor_srv_ = create_service<std_srvs::srv::Trigger>(
+        "/chessboard/lock_anchor",
+        std::bind(&ChessboardPoseEstimator::on_lock_anchor, this, std::placeholders::_1, std::placeholders::_2));
+    reset_anchor_srv_ = create_service<std_srvs::srv::Trigger>(
+        "/chessboard/reset_anchor",
+        std::bind(&ChessboardPoseEstimator::on_reset_anchor, this, std::placeholders::_1, std::placeholders::_2));
+
     // Subscriptions
     camera_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
         "/cameras/stereo_left/camera_info",
@@ -206,7 +213,7 @@ namespace lekiwi_tag_localization
         rclcpp::SensorDataQoS(),
         std::bind(&ChessboardPoseEstimator::on_tag_detections, this, std::placeholders::_1));
 
-    // Periodic timer for Keepout Polygon & Static TF
+    // Periodic timer for Keepout Polygon, Static TF, and map->odom broadcaster
     const auto keepout_period = std::chrono::duration<double>(1.0 / keepout_rate_);
     keepout_timer_ = create_wall_timer(
         std::chrono::duration_cast<std::chrono::milliseconds>(keepout_period),
@@ -215,8 +222,9 @@ namespace lekiwi_tag_localization
     // Publish initial static transform and keepout polygon immediately
     publish_keepout_and_static_tf();
 
-    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator node initialized (Family: %s, Tag size: %.3fm, Board size: %.3fm)",
+    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator initialized (Family: %s, Tag size: %.3fm, Board size: %.3fm)",
                 tag_family_.c_str(), tag_size_, tag_distance_);
+    RCLCPP_INFO(get_logger(), "Services ready: /chessboard/lock_anchor and /chessboard/reset_anchor");
   }
 
   void ChessboardPoseEstimator::load_parameters()
@@ -226,16 +234,18 @@ namespace lekiwi_tag_localization
     tag_distance_ = declare_parameter<double>("tag_distance", 0.38);
 
     map_frame_ = declare_parameter<std::string>("map_frame", "map");
+    odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
     chessboard_frame_ = declare_parameter<std::string>("chessboard_frame", "chessboard_frame");
     camera_frame_ = declare_parameter<std::string>("camera_frame", "stereo_left_optical");
-    base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
+    base_frame_ = declare_parameter<std::string>("base_frame", "base_footprint");
 
     chessboard_pose_in_map_ = declare_parameter<std::vector<double>>(
-        "chessboard_pose_in_map", std::vector<double>{1.0, 0.0, 0.75, 0.0, 0.0, 0.0});
+        "chessboard_pose_in_map", std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
 
     publish_tf_ = declare_parameter<bool>("publish_tf", true);
     publish_map_to_chessboard_ = declare_parameter<bool>("publish_map_to_chessboard", true);
     publish_camera_to_board_ = declare_parameter<bool>("publish_camera_to_board", true);
+    publish_map_to_odom_ = declare_parameter<bool>("publish_map_to_odom", true);
 
     keepout_margin_ = declare_parameter<double>("keepout.safety_margin", 0.035);
     keepout_rate_ = declare_parameter<double>("keepout.publish_rate", 2.0);
@@ -304,23 +314,25 @@ namespace lekiwi_tag_localization
       return;
     }
 
-    last_rvec_ = rvec.clone();
-    last_tvec_ = tvec.clone();
-    has_last_pose_ = true;
+    // Convert OpenCV Rodrigues rvec -> tf2::Quaternion
+    cv::Mat R_cam_board;
+    cv::Rodrigues(rvec, R_cam_board);
+    tf2::Matrix3x3 tf_rot(
+        R_cam_board.at<double>(0, 0), R_cam_board.at<double>(0, 1), R_cam_board.at<double>(0, 2),
+        R_cam_board.at<double>(1, 0), R_cam_board.at<double>(1, 1), R_cam_board.at<double>(1, 2),
+        R_cam_board.at<double>(2, 0), R_cam_board.at<double>(2, 1), R_cam_board.at<double>(2, 2));
+    tf2::Quaternion q_cam_board;
+    tf_rot.getRotation(q_cam_board);
 
-    // Convert rvec/tvec to tf2::Transform (T_cam^board)
-    cv::Mat R;
-    cv::Rodrigues(rvec, R);
-    tf2::Matrix3x3 tf_R(
-        R.at<double>(0, 0), R.at<double>(0, 1), R.at<double>(0, 2),
-        R.at<double>(1, 0), R.at<double>(1, 1), R.at<double>(1, 2),
-        R.at<double>(2, 0), R.at<double>(2, 1), R.at<double>(2, 2));
-    tf2::Vector3 tf_t(tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2));
-    const tf2::Transform T_cam_board(tf_R, tf_t);
+    tf2::Vector3 t_cam_board(
+        tvec.at<double>(0),
+        tvec.at<double>(1),
+        tvec.at<double>(2));
 
+    const tf2::Transform T_cam_board(q_cam_board, t_cam_board);
     const std::string cam_frame = msg->header.frame_id.empty() ? camera_frame_ : msg->header.frame_id;
 
-    // 1. Publish TF: camera -> chessboard_frame
+    // 1. Publish dynamic TF: camera_optical -> chessboard_frame
     if (publish_tf_ && publish_camera_to_board_)
     {
       geometry_msgs::msg::TransformStamped tf_msg;
@@ -331,15 +343,14 @@ namespace lekiwi_tag_localization
       tf_broadcaster_->sendTransform(tf_msg);
     }
 
-    // 2. Publish chessboard pose with covariance in camera frame
+    // 2. Publish Board Pose in camera frame
     auto board_pose_msg = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
     board_pose_msg->header.stamp = msg->header.stamp;
     board_pose_msg->header.frame_id = cam_frame;
     tf2::toMsg(T_cam_board, board_pose_msg->pose.pose);
 
-    // Covariance depends on tag count (multi-tag yields higher precision)
-    const double pos_var = (used_tags >= 2) ? 0.0001 : 0.0009; // 1cm vs 3cm standard deviation
-    const double rot_var = (used_tags >= 2) ? 0.0004 : 0.0025; // ~1 deg vs ~2.8 deg
+    const double pos_var = (used_tags >= 2) ? 0.0001 : 0.0009;
+    const double rot_var = (used_tags >= 2) ? 0.0004 : 0.0025;
     board_pose_msg->pose.covariance[0] = pos_var;
     board_pose_msg->pose.covariance[7] = pos_var;
     board_pose_msg->pose.covariance[14] = pos_var * 2.0;
@@ -356,11 +367,9 @@ namespace lekiwi_tag_localization
       tf2::Transform T_cam_base;
       tf2::fromMsg(transform_cam_base.transform, T_cam_base);
 
-      // T_board^cam = (T_cam^board)^-1
       const tf2::Transform T_board_cam = T_cam_board.inverse();
       const tf2::Transform T_board_base = T_board_cam * T_cam_base;
 
-      // Known fixed chessboard pose in map
       tf2::Quaternion q_map_board;
       if (chessboard_pose_in_map_.size() >= 6)
       {
@@ -378,6 +387,11 @@ namespace lekiwi_tag_localization
 
       const tf2::Transform T_map_base = T_map_board * T_board_base;
 
+      // Cache latest detection for anchor locking
+      latest_T_map_base_ = T_map_base;
+      latest_detection_stamp_ = msg->header.stamp;
+      has_latest_tag_detection_ = true;
+
       auto robot_pose_msg = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
       robot_pose_msg->header.stamp = msg->header.stamp;
       robot_pose_msg->header.frame_id = map_frame_;
@@ -391,16 +405,91 @@ namespace lekiwi_tag_localization
       robot_pose_msg->pose.covariance[28] = rot_var;
       robot_pose_msg->pose.covariance[35] = rot_var;
       robot_pose_pub_->publish(std::move(robot_pose_msg));
+
+      // Continuous subtle refinement of T_map^odom if anchored and high confidence (>=2 tags)
+      if (is_anchored_ && used_tags >= 2)
+      {
+        try
+        {
+          const auto transform_odom_base = tf_buffer_->lookupTransform(
+              odom_frame_, base_frame_, tf2::TimePointZero);
+          tf2::Transform T_odom_base;
+          tf2::fromMsg(transform_odom_base.transform, T_odom_base);
+
+          const tf2::Transform T_map_odom = T_map_base * T_odom_base.inverse();
+          T_map_odom_locked_.transform = tf2::toMsg(T_map_odom);
+        }
+        catch (const tf2::TransformException &)
+        {
+        }
+      }
     }
-    catch (const tf2::TransformException &)
+    catch (const tf2::TransformException &ex)
     {
-      // Camera to base_link transform not yet available in TF tree
+      RCLCPP_DEBUG(get_logger(), "TF lookup transform failed: %s", ex.what());
     }
+  }
+
+  void ChessboardPoseEstimator::on_lock_anchor(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    if (!has_latest_tag_detection_)
+    {
+      response->success = false;
+      response->message = "Cannot lock anchor: No AprilTags detected yet. Please teleop robot to face chessboard.";
+      RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+      return;
+    }
+
+    try
+    {
+      const auto transform_odom_base = tf_buffer_->lookupTransform(
+          odom_frame_, base_frame_, tf2::TimePointZero);
+      tf2::Transform T_odom_base;
+      tf2::fromMsg(transform_odom_base.transform, T_odom_base);
+
+      // T_map^odom = T_map^base * (T_odom^base)^-1
+      const tf2::Transform T_map_odom = latest_T_map_base_ * T_odom_base.inverse();
+
+      T_map_odom_locked_.header.stamp = now();
+      T_map_odom_locked_.header.frame_id = map_frame_;
+      T_map_odom_locked_.child_frame_id = odom_frame_;
+      T_map_odom_locked_.transform = tf2::toMsg(T_map_odom);
+
+      is_anchored_ = true;
+
+      // Broadcast immediately
+      if (publish_tf_ && publish_map_to_odom_)
+      {
+        tf_broadcaster_->sendTransform(T_map_odom_locked_);
+      }
+
+      response->success = true;
+      response->message = "Anchor locked successfully! Map -> Odom TF is now active.";
+      RCLCPP_INFO(get_logger(), ">>> CHESSBOARD ANCHOR LOCKED! Map->Odom TF broadcasting active.");
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      response->success = false;
+      response->message = std::string("Cannot lock anchor: TF lookup failed: ") + ex.what();
+      RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+    }
+  }
+
+  void ChessboardPoseEstimator::on_reset_anchor(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    is_anchored_ = false;
+    response->success = true;
+    response->message = "Anchor reset. Map -> Odom TF broadcast disabled until re-locked.";
+    RCLCPP_INFO(get_logger(), "Chessboard anchor reset.");
   }
 
   void ChessboardPoseEstimator::publish_keepout_and_static_tf()
   {
-    // Publish static TF: map -> chessboard_frame
+    // 1. Publish static TF: map -> chessboard_frame
     if (publish_tf_ && publish_map_to_chessboard_)
     {
       geometry_msgs::msg::TransformStamped static_tf;
@@ -425,10 +514,17 @@ namespace lekiwi_tag_localization
       static_tf_broadcaster_->sendTransform(static_tf);
     }
 
-    // Publish Keepout Polygon
+    // 2. Publish Keepout Polygon
     auto poly = PoseSolver::create_keepout_polygon(
         chessboard_frame_, now(), tag_distance_, keepout_margin_);
     costmap_polygon_pub_->publish(poly);
+
+    // 3. If anchored, keep publishing TF map -> odom
+    if (is_anchored_ && publish_tf_ && publish_map_to_odom_)
+    {
+      T_map_odom_locked_.header.stamp = now();
+      tf_broadcaster_->sendTransform(T_map_odom_locked_);
+    }
   }
 
 } // namespace lekiwi_tag_localization
