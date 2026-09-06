@@ -89,6 +89,17 @@ install(
 
 install(DIRECTORY include/ DESTINATION include)
 
+install(DIRECTORY config launch
+  DESTINATION share/${PROJECT_NAME}
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "*.pyc" EXCLUDE
+)
+
+install(FILES
+  udev/99-teleop-lekiwi.rules
+  DESTINATION share/${PROJECT_NAME}/udev
+)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
