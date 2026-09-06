@@ -17,6 +17,11 @@ def generate_launch_description():
     # Global and Subsystem Arguments
     declared_arguments = [
         DeclareLaunchArgument(
+            "cameras",
+            default_value="true",
+            description="Lekiwi perception: true of false",
+        ),
+        DeclareLaunchArgument(
             "hardware_type",
             default_value="real",
             description="Hardware interface type: real or mock",
@@ -95,6 +100,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([bringup_share, "launch", "cameras.launch.py"])
         ),
+        condition=IfCondition(LaunchConfiguration("cameras")),
     )
 
     control = IncludeLaunchDescription(
