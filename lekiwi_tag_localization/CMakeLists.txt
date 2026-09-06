@@ -72,9 +72,15 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-install(DIRECTORY config
+install(PROGRAMS
+  scripts/calibrate_chessboard_tags.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
+
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)

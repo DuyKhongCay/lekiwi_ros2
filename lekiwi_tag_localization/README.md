@@ -23,9 +23,6 @@ lekiwi_tag_localization/
 ├── CMakeLists.txt
 ├── package.xml
 ├── README.md
-├── config/
-│   ├── apriltag_36h11.yaml          # AprilTag 36h11 detector family and quad thresholding config
-│   └── chessboard_tags.yaml         # Tag IDs, physical metric dimensions, and 3D arena coordinates
 ├── include/lekiwi_tag_localization/
 │   └── chessboard_pose_estimator.hpp # Header declaring pose estimation pipeline and TF logic
 ├── src/
@@ -34,6 +31,8 @@ lekiwi_tag_localization/
 └── test/
     └── test_pose_solver.cpp         # GTest unit tests for SolvePnP math and corner projections
 ```
+
+*(Note: System configuration files `apriltag_36h11.yaml` and `chessboard_tags.yaml` are managed in `lekiwi_bringup/config/localization/`).*
 
 ---
 
@@ -55,10 +54,27 @@ lekiwi_tag_localization/
 
 ### 1. Run Tag Localization Node
 ```bash
-ros2 run lekiwi_tag_localization chessboard_pose_estimator_node --ros-args --params-file src/lekiwi_ros2/lekiwi_tag_localization/config/chessboard_tags.yaml
+ros2 run lekiwi_tag_localization chessboard_pose_estimator_node --ros-args --params-file src/lekiwi_ros2/lekiwi_bringup/config/localization/chessboard_tags.yaml
 ```
 
-### 2. Run Unit Tests
+### 2. Calibrate Tag Coordinates (Offline / Live)
+```bash
+# Option A: Calibrate from Rosbag
+ros2 run lekiwi_tag_localization calibrate_chessboard_tags.py \
+  --bag path/to/bag.mcap \
+  --camera-info /root/docker_ws/lekiwi_ros2/lekiwi_bringup/config/perception/camera_info/stereo_left.yaml \
+  --z-prior 0.0 0.0 0.0 0.0 \
+  -o /root/docker_ws/lekiwi_ros2/lekiwi_tag_localization/config/chessboard_tags.yaml
+
+# Option B: Calibrate Live from Active Camera Stream
+ros2 run lekiwi_tag_localization calibrate_chessboard_tags.py \
+  --live --num-frames 60 \
+  --topic /apriltag_detections \
+  --camera-info /root/docker_ws/lekiwi_ros2/lekiwi_bringup/config/perception/camera_info/stereo_left.yaml \
+  -o /root/docker_ws/lekiwi_ros2/lekiwi_tag_localization/config/chessboard_tags.yaml
+```
+
+### 3. Run Unit Tests
 ```bash
 colcon test --packages-select lekiwi_tag_localization --event-handlers console_direct+
 colcon test-result --verbose

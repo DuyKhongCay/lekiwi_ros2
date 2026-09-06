@@ -150,6 +150,20 @@ namespace lekiwi_tag_localization
     void on_tag_detections(const apriltag_msgs::msg::AprilTagDetectionArray::ConstSharedPtr &msg);
 
     /**
+     * @brief Service callback to lock the map->odom anchor transform from the latest tag detection.
+     */
+    void on_lock_anchor(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+
+    /**
+     * @brief Service callback to reset the map->odom anchor lock.
+     */
+    void on_reset_anchor(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+
+    /**
      * @brief Timer callback that publishes the keepout costmap polygon and static TF transform.
      */
     void publish_keepout_and_static_tf();
@@ -159,6 +173,7 @@ namespace lekiwi_tag_localization
     double tag_size_{0.02};
     double tag_distance_{0.38};
     std::string map_frame_{"map"};
+    std::string odom_frame_{"odom"};
     std::string chessboard_frame_{"chessboard_frame"};
     std::string camera_frame_{"stereo_left_optical"};
     std::string base_frame_{"base_link"};
