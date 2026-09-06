@@ -25,7 +25,17 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(vision_msgs REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn highgui)
+find_package(Boost REQUIRED COMPONENTS system filesystem)
 find_package(PkgConfig REQUIRED)
+
+include(FetchContent)
+FetchContent_Declare(
+  chess_library
+  GIT_REPOSITORY https://github.com/Disservin/chess-library.git
+  GIT_TAG        master
+)
+FetchContent_MakeAvailable(chess_library)
+
 pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET
   gstreamer-1.0
   gstreamer-app-1.0
@@ -70,13 +80,17 @@ target_link_libraries(lekiwi_pieces_postprocess PRIVATE
 add_library(lekiwi_perception_component SHARED
   src/hailo/hailo_gst_pipeline.cpp
   src/hailo/chess_vision_mapper.cpp
+  src/hailo/chess_game_state_tracker.cpp
   src/chess_visualizer_component.cpp
   src/hailo_chess_inference_component.cpp
   src/camera_streamer_component.cpp
+  src/chess_engine_component.cpp
 )
 target_include_directories(lekiwi_perception_component PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${chess_library_SOURCE_DIR}/include
+  ${Boost_INCLUDE_DIRS}
   PRIVATE
   ${HAILO_EXTRA_INCLUDES}
   ${OpenCV_INCLUDE_DIRS}
@@ -85,6 +99,7 @@ target_link_libraries(lekiwi_perception_component
   PkgConfig::GSTREAMER
   PkgConfig::HAILO_TAPPAS
   ${OpenCV_LIBRARIES}
+  ${Boost_LIBRARIES}
 )
 ament_target_dependencies(lekiwi_perception_component
   ament_index_cpp
@@ -117,6 +132,11 @@ rclcpp_components_register_node(lekiwi_perception_component
   EXECUTABLE camera_streamer_node
 )
 
+rclcpp_components_register_node(lekiwi_perception_component
+  PLUGIN "lekiwi_perception::ChessEngineComponent"
+  EXECUTABLE chess_engine_node
+)
+
 install(TARGETS
   lekiwi_chessboard_postprocess
   lekiwi_pieces_postprocess
@@ -129,6 +149,7 @@ install(TARGETS
   hailo_chess_inference_node
   chess_visualizer_node
   camera_streamer_node
+  chess_engine_node
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/
@@ -153,6 +174,12 @@ if(BUILD_TESTING)
   ament_add_gtest(test_chess_vision_mapper test/test_chess_vision_mapper.cpp)
   if(TARGET test_chess_vision_mapper)
     target_link_libraries(test_chess_vision_mapper lekiwi_perception_component)
+  endif()
+
+  ament_add_gtest(test_chess_engine_component test/test_chess_engine_component.cpp)
+  if(TARGET test_chess_engine_component)
+    target_include_directories(test_chess_engine_component PRIVATE ${chess_library_SOURCE_DIR}/include)
+    target_link_libraries(test_chess_engine_component lekiwi_perception_component)
   endif()
 endif()
 

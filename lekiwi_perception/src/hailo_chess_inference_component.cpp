@@ -56,7 +56,7 @@ namespace lekiwi_perception
     RCLCPP_INFO(get_logger(), "Pieces HEF path: %s", pcs_hef_path_.c_str());
 
     frame_id_ = declare_parameter<std::string>("frame_id", "stereo_left_optical");
-    publish_debug_image_ = declare_parameter<bool>("publish_debug_image", true);
+    debug_image_ = declare_parameter<bool>("debug_image", true);
     transition_timeout_ = std::chrono::milliseconds(declare_parameter<int>("transition_timeout_ms", 5000));
 
     fen_pub_ = create_publisher<std_msgs::msg::String>("/chess/fen", rclcpp::SensorDataQoS());
@@ -359,16 +359,21 @@ namespace lekiwi_perception
 
     if (valid_metadata)
     {
-      if (!state.fen.empty() && fen_pub_->is_activated())
+      // Process game rules, debounce, and generate full FEN
+      const hailo::GameStateResult game_res = game_tracker_.update(state.piece_placement);
+
+      if (!game_res.full_fen.empty() && fen_pub_->is_activated())
       {
         auto fen_msg = std::make_unique<std_msgs::msg::String>();
-        fen_msg->data = state.fen;
+        fen_msg->data = game_res.full_fen;
         fen_pub_->publish(std::move(fen_msg));
 
-        if (state.fen != last_logged_fen_)
+        if (game_res.full_fen != last_logged_fen_)
         {
-          last_logged_fen_ = state.fen;
-          RCLCPP_INFO(get_logger(), "Board state: %d pieces | FEN: %s", state.num_pieces, state.fen.c_str());
+          last_logged_fen_ = game_res.full_fen;
+          RCLCPP_INFO(get_logger(), "Board state: %d pieces | Full FEN: %s%s",
+                      state.num_pieces, game_res.full_fen.c_str(),
+                      game_res.last_move.empty() ? "" : (" | Move: " + game_res.last_move).c_str());
         }
       }
 
@@ -397,28 +402,22 @@ namespace lekiwi_perception
         detections_pub_->publish(std::move(detections_msg));
       }
 
-      if (publish_debug_image_ && debug_image_pub_->is_activated() &&
+      // Gate Filter Logic:
+      // If debug_image_ is true -> continuously publish all frames (debug mode)
+      // If debug_image_ is false -> gate filter: only publish when game_res.is_legal_move is true
+      bool should_publish_image = debug_image_ || game_res.is_legal_move;
+
+      if (should_publish_image && debug_image_pub_->is_activated() &&
           (debug_image_pub_->get_subscription_count() + debug_image_pub_->get_intra_process_subscription_count() > 0U))
       {
-        cv::Mat rgb_mat(
-            GST_VIDEO_INFO_HEIGHT(&video_info),
-            GST_VIDEO_INFO_WIDTH(&video_info),
-            CV_8UC3, map.data);
-        cv::Mat debug_bgr;
-        cv::cvtColor(rgb_mat, debug_bgr, cv::COLOR_RGB2BGR);
-
-        hailo::ChessVisionMapper::draw_chessboard_overlay(
-            debug_bgr, state.grid_points_norm, state.poly_points_norm);
-        hailo::ChessVisionMapper::draw_piece_detections(debug_bgr, state.pieces);
-
         auto debug_msg = std::make_unique<sensor_msgs::msg::Image>();
         debug_msg->header = header;
-        debug_msg->height = static_cast<uint32_t>(debug_bgr.rows);
-        debug_msg->width = static_cast<uint32_t>(debug_bgr.cols);
-        debug_msg->encoding = "bgr8";
+        debug_msg->height = static_cast<uint32_t>(GST_VIDEO_INFO_HEIGHT(&video_info));
+        debug_msg->width = static_cast<uint32_t>(GST_VIDEO_INFO_WIDTH(&video_info));
+        debug_msg->encoding = "rgb8";
         debug_msg->is_bigendian = false;
-        debug_msg->step = static_cast<uint32_t>(debug_bgr.cols * 3);
-        debug_msg->data.assign(debug_bgr.datastart, debug_bgr.dataend);
+        debug_msg->step = static_cast<uint32_t>(debug_msg->width * 3);
+        debug_msg->data.assign(map.data, map.data + (debug_msg->height * debug_msg->step));
         debug_image_pub_->publish(std::move(debug_msg));
       }
     }

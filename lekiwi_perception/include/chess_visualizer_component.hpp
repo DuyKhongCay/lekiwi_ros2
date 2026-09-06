@@ -2,8 +2,8 @@
  * @file chess_visualizer_component.hpp
  * @brief Chessboard and FEN state visualization component for LeKiwi perception.
  *
- * Subscribes to `/chess/debug_image` and `/chess/fen`, renders a 2D top-down digital chessboard
- * with piece PNG sprites side-by-side with camera feed, and publishes visualization images.
+ * Subscribes to `/chess/debug_image`, `/chess/detections_2d`, and `/chess/fen`.
+ * Renders detection bounding boxes and a 2D digital chessboard overlay side-by-side.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -15,6 +15,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <vision_msgs/msg/detection2_d_array.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 
 #include <opencv2/opencv.hpp>
@@ -22,6 +23,7 @@
 #include <memory>
 #include <string>
 #include <map>
+#include <vector>
 #include <mutex>
 #include <thread>
 #include <atomic>
@@ -54,6 +56,11 @@ namespace lekiwi_perception
     void fenCallback(const std_msgs::msg::String::ConstSharedPtr msg);
 
     /**
+     * Receive piece detections array.
+     */
+    void detectionsCallback(const vision_msgs::msg::Detection2DArray::ConstSharedPtr msg);
+
+    /**
      * Load transparent piece PNG sprites from resources directory.
      */
     void loadPieceSprites(int cell_size, const std::string &pieces_dir);
@@ -64,6 +71,12 @@ namespace lekiwi_perception
     void render2DBoardPanel(
         cv::Mat &panel, const std::map<std::string, std::string> &occupancy_map,
         const std::string &fen_str, int panel_width, int panel_height, float fps);
+
+    /**
+     * Draw detection bounding boxes onto the camera frame.
+     */
+    void drawPieceDetections(
+        cv::Mat &frame, const std::vector<vision_msgs::msg::Detection2D> &detections);
 
     /**
      * Parse FEN string into square-to-piece character map.
@@ -77,11 +90,13 @@ namespace lekiwi_perception
     rclcpp::CallbackGroup::SharedPtr callback_group_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr debug_image_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fen_sub_;
+    rclcpp::Subscription<vision_msgs::msg::Detection2DArray>::SharedPtr detections_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr visual_image_pub_;
 
     // Visualization state
     std::string current_fen_;
     std::string last_valid_fen_;
+    std::vector<vision_msgs::msg::Detection2D> latest_detections_;
     std::string pieces_dir_;
     bool gui_display_ = false;
     std::string window_name_;

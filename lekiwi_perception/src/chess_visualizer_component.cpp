@@ -22,7 +22,23 @@ namespace lekiwi_perception
 {
 
   static const std::map<std::string, std::string> PIECE_PNG_NAMES = {
-      {"B", "w-bishop.png"}, {"K", "w-king.png"}, {"N", "w-knight.png"}, {"P", "w-pawn.png"}, {"Q", "w-queen.png"}, {"R", "w-rook.png"}, {"b", "b-bishop.png"}, {"k", "b-king.png"}, {"n", "b-knight.png"}, {"p", "b-pawn.png"}, {"q", "b-queen.png"}, {"r", "b-rook.png"}};
+      {"B", "w-bishop.png"}, {"K", "w-king.png"}, {"N", "w-knight.png"}, {"P", "w-pawn.png"},
+      {"Q", "w-queen.png"},  {"R", "w-rook.png"},   {"b", "b-bishop.png"}, {"k", "b-king.png"},
+      {"n", "b-knight.png"}, {"p", "b-pawn.png"},   {"q", "b-queen.png"},  {"r", "b-rook.png"}};
+
+  static const std::map<std::string, cv::Scalar> CLASS_COLORS_BGR = {
+      {"w-king", cv::Scalar(255, 255, 255)},   {"K", cv::Scalar(255, 255, 255)},
+      {"w-queen", cv::Scalar(220, 220, 255)},  {"Q", cv::Scalar(220, 220, 255)},
+      {"w-rook", cv::Scalar(180, 180, 255)},   {"R", cv::Scalar(180, 180, 255)},
+      {"w-bishop", cv::Scalar(140, 140, 255)}, {"B", cv::Scalar(140, 140, 255)},
+      {"w-knight", cv::Scalar(100, 100, 255)}, {"N", cv::Scalar(100, 100, 255)},
+      {"w-pawn", cv::Scalar(60, 60, 255)},     {"P", cv::Scalar(60, 60, 255)},
+      {"b-king", cv::Scalar(50, 50, 50)},      {"k", cv::Scalar(50, 50, 50)},
+      {"b-queen", cv::Scalar(70, 70, 70)},     {"q", cv::Scalar(70, 70, 70)},
+      {"b-rook", cv::Scalar(90, 90, 90)},      {"r", cv::Scalar(90, 90, 90)},
+      {"b-bishop", cv::Scalar(110, 110, 110)}, {"b", cv::Scalar(110, 110, 110)},
+      {"b-knight", cv::Scalar(130, 130, 130)}, {"n", cv::Scalar(130, 130, 130)},
+      {"b-pawn", cv::Scalar(150, 150, 150)},   {"p", cv::Scalar(150, 150, 150)}};
 
   ChessVisualizerComponent::ChessVisualizerComponent(const rclcpp::NodeOptions &options)
       : Node("chess_visualizer_component", options)
@@ -43,7 +59,7 @@ namespace lekiwi_perception
     RCLCPP_INFO(this->get_logger(), "Initializing Chess Visualizer Component (GUI Display: %s)",
                 gui_display_ ? "ON" : "OFF");
 
-    current_fen_ = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    current_fen_ = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
     last_valid_fen_ = current_fen_;
 
     callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -53,6 +69,10 @@ namespace lekiwi_perception
     fen_sub_ = this->create_subscription<std_msgs::msg::String>(
         "/chess/fen", rclcpp::SensorDataQoS(),
         std::bind(&ChessVisualizerComponent::fenCallback, this, std::placeholders::_1), sub_opts);
+
+    detections_sub_ = this->create_subscription<vision_msgs::msg::Detection2DArray>(
+        "/chess/detections_2d", rclcpp::SensorDataQoS(),
+        std::bind(&ChessVisualizerComponent::detectionsCallback, this, std::placeholders::_1), sub_opts);
 
     debug_image_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
         "/chess/debug_image", rclcpp::SensorDataQoS(),
@@ -88,6 +108,12 @@ namespace lekiwi_perception
     {
       last_valid_fen_ = msg->data;
     }
+  }
+
+  void ChessVisualizerComponent::detectionsCallback(const vision_msgs::msg::Detection2DArray::ConstSharedPtr msg)
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    latest_detections_ = msg->detections;
   }
 
   void ChessVisualizerComponent::loadPieceSprites(int cell_size, const std::string &pieces_dir)
@@ -145,6 +171,54 @@ namespace lekiwi_perception
       }
     }
     return occupancy_map;
+  }
+
+  void ChessVisualizerComponent::drawPieceDetections(
+      cv::Mat &frame, const std::vector<vision_msgs::msg::Detection2D> &detections)
+  {
+    for (const auto &det : detections)
+    {
+      if (det.results.empty())
+      {
+        continue;
+      }
+
+      int bw = static_cast<int>(det.bbox.size_x);
+      int bh = static_cast<int>(det.bbox.size_y);
+      int x1 = static_cast<int>(det.bbox.center.position.x - det.bbox.size_x / 2.0);
+      int y1 = static_cast<int>(det.bbox.center.position.y - det.bbox.size_y / 2.0);
+
+      x1 = std::clamp(x1, 0, frame.cols - 1);
+      y1 = std::clamp(y1, 0, frame.rows - 1);
+      bw = std::clamp(bw, 1, frame.cols - x1);
+      bh = std::clamp(bh, 1, frame.rows - y1);
+
+      const std::string &label = det.results[0].hypothesis.class_id;
+      float conf = det.results[0].hypothesis.score;
+
+      cv::Scalar color(0, 255, 0);
+      auto it = CLASS_COLORS_BGR.find(label);
+      if (it != CLASS_COLORS_BGR.end())
+      {
+        color = it->second;
+      }
+
+      cv::rectangle(frame, cv::Rect(x1, y1, bw, bh), color, 2);
+
+      std::stringstream label_ss;
+      label_ss << label << " " << std::fixed << std::setprecision(2) << conf;
+      std::string label_str = label_ss.str();
+
+      int baseline = 0;
+      cv::Size text_size = cv::getTextSize(label_str, cv::FONT_HERSHEY_SIMPLEX, 0.4, 1, &baseline);
+      int label_y1 = std::max(y1 - text_size.height - 4, 0);
+      cv::rectangle(
+          frame, cv::Rect(x1, label_y1, text_size.width + 4, text_size.height + 4),
+          color, -1);
+      cv::putText(
+          frame, label_str, cv::Point(x1 + 2, label_y1 + text_size.height + 1),
+          cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
+    }
   }
 
   void ChessVisualizerComponent::render2DBoardPanel(
@@ -264,7 +338,6 @@ namespace lekiwi_perception
     cv_bridge::CvImagePtr cv_ptr;
     try
     {
-      // Deep copy ensures memory safety even with intra-process zero-copy comms
       cv_ptr = cv_bridge::toCvCopy(msg, "bgr8");
     }
     catch (const cv_bridge::Exception &e)
@@ -277,6 +350,14 @@ namespace lekiwi_perception
     {
       return;
     }
+
+    // Overlay detections onto camera image
+    std::vector<vision_msgs::msg::Detection2D> dets;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      dets = latest_detections_;
+    }
+    drawPieceDetections(cv_ptr->image, dets);
 
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
@@ -320,7 +401,6 @@ namespace lekiwi_perception
 
   void ChessVisualizerComponent::guiThreadLoop()
   {
-    // Initialize window exclusively on this GUI thread for Qt event loop thread affinity
     cv::namedWindow(window_name_, cv::WINDOW_NORMAL);
     cv::resizeWindow(window_name_, 1360, 580);
 

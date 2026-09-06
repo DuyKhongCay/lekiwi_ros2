@@ -3,7 +3,7 @@
  * @brief Spatial mapping between camera pixel detections, board homography, and FEN state.
  *
  * Converts 2D piece bounding box locations into board square coordinates (`a1`..`h8`),
- * formats occupied board state into FEN notation string, and renders debug overlays.
+ * matches AprilTags to determine board orientation, and formats 8-rank piece placement strings.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -36,37 +36,35 @@ namespace lekiwi_perception::hailo
      */
     struct PieceDetection
     {
-        /// Piece label string (e.g. "w-king", "b-pawn").
+        /// Piece label string (e.g. "w-king", "b-pawn", "P", "p").
         std::string label;
         /// Hailo NPU neural network class ID.
         int class_id{0};
         /// Neural network detection confidence score (0.0 .. 1.0).
         float confidence{0.0F};
-        /// Bounding box rectangle in normalized/pixel coordinates.
+        /// Bounding box rectangle in normalized coordinates [0.0, 1.0].
         cv::Rect2f bbox;
-        /// Base ground contact point of the piece.
+        /// Base ground contact point of the piece in normalized coordinates.
         cv::Point2f base_pt;
         /// Algebraic square designation (e.g. "e4").
         std::string square;
     };
 
     /**
-     * @brief Complete board state representation.
+     * @brief Complete board state representation extracted from vision.
      */
     struct ChessboardState
     {
-        /// FEN notation string representing active board setup.
-        std::string fen;
+        /// 8-rank piece placement string (e.g. "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR").
+        std::string piece_placement;
         /// Total number of detected chess pieces.
         int num_pieces{0};
-        /// Index of top-left square corner.
+        /// Index of top-left square corner: 0 (TL), 1 (TR), 2 (BR), 3 (BL).
         int a1_corner_idx{0};
-        /// Perspective transformation matrix.
+        /// Perspective transformation matrix (3x3).
         cv::Mat homography_matrix;
-        /// Grid intersection points.
+        /// Grid intersection points (81 normalized coordinates).
         std::vector<cv::Point2f> grid_points_norm;
-        /// Outer boundary polygon points.
-        std::vector<cv::Point2f> poly_points_norm;
         /// Detected piece array.
         std::vector<PieceDetection> pieces;
         /// Occupancy map from square string to piece code.
@@ -74,7 +72,7 @@ namespace lekiwi_perception::hailo
     };
 
     /**
-     * @brief Utilities for decoding Hailo ROI metadata and generating FEN.
+     * @brief Utilities for decoding Hailo ROI metadata and mapping to chessboard squares.
      */
     class ChessVisionMapper
     {
@@ -104,14 +102,9 @@ namespace lekiwi_perception::hailo
 
         static std::string map_pixel_to_square(
             float cx, float cy, const cv::Mat &homography_matrix, int a1_corner_idx = 0);
+
         static std::string generate_fen(
             const std::map<std::string, std::string> &occupancy_map);
-        static void draw_chessboard_overlay(
-            cv::Mat &frame,
-            const std::vector<cv::Point2f> &grid_points,
-            const std::vector<cv::Point2f> &polygon_points = {});
-        static void draw_piece_detections(
-            cv::Mat &frame, const std::vector<PieceDetection> &pieces);
     };
 
 } // namespace lekiwi_perception::hailo

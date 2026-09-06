@@ -1,9 +1,9 @@
 /**
  * @file hailo_chess_inference_component.hpp
- * @brief Hailo-8 NPU perception component for chessboard segmentation and piece detection.
+ * @brief Perception node running Hailo chessboard and piece detection pipeline.
  *
- * Runs dual GStreamer Hailo pipelines (YOLOv8n-seg for board segmentation and YOLO11n for piece detection),
- * extracts bounding boxes and FEN board state, and publishes `/chess/fen` and `/chess/detections_2d`.
+ * Implements a lifecycle node managing camera frame inference through Hailo NPU,
+ * publishes piece detections, spatial board states (Full FEN), and optional debug images.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -12,41 +12,37 @@
 #ifndef LEKIWI_PERCEPTION__HAILO_CHESS_INFERENCE_COMPONENT_HPP_
 #define LEKIWI_PERCEPTION__HAILO_CHESS_INFERENCE_COMPONENT_HPP_
 
+#include <diagnostic_updater/diagnostic_updater.hpp>
 #include <gst/gst.h>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <vision_msgs/msg/detection2_d_array.hpp>
+#include <apriltag_msgs/msg/april_tag_detection_array.hpp>
+#include <lekiwi_interfaces/srv/set_cam_mode.hpp>
+#include <lekiwi_interfaces/msg/camera_mode.hpp>
 
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
-#include <diagnostic_updater/diagnostic_updater.hpp>
-#include "hailo/hailo_gst_pipeline.hpp"
+#include "hailo/chess_game_state_tracker.hpp"
 #include "hailo/chess_vision_mapper.hpp"
-#include "lekiwi_interfaces/msg/camera_mode.hpp"
-#include "lekiwi_interfaces/srv/set_cam_mode.hpp"
-#include "rclcpp/rclcpp.hpp"
-#include "rclcpp_lifecycle/lifecycle_node.hpp"
-#include "rclcpp_lifecycle/lifecycle_publisher.hpp"
-#include "apriltag_msgs/msg/april_tag_detection_array.hpp"
-#include "sensor_msgs/msg/image.hpp"
-#include "std_msgs/msg/string.hpp"
-#include "vision_msgs/msg/detection2_d_array.hpp"
+#include "hailo/hailo_gst_pipeline.hpp"
 
 namespace lekiwi_perception
 {
 
   /**
-   * @brief ROS 2 Lifecycle component managing Hailo-8 NPU inference for chess perception.
+   * @brief Lifecycle-managed component running neural network inference on camera frames.
    */
   class HailoChessInferenceComponent : public rclcpp_lifecycle::LifecycleNode
   {
   public:
-    /**
-     * @brief Constructs HailoChessInferenceComponent.
-     * @param[in] options Node options.
-     */
     explicit HailoChessInferenceComponent(const rclcpp::NodeOptions &options);
     ~HailoChessInferenceComponent() override;
 
@@ -93,10 +89,11 @@ namespace lekiwi_perception
     std::string pcs_hef_path_;
     std::string vdevice_group_id_{"lekiwi_chess"};
     std::string frame_id_{"stereo_left_optical"};
-    bool publish_debug_image_{true};
+    bool debug_image_{true};
     std::chrono::milliseconds transition_timeout_{5000};
 
     std::unique_ptr<HailoGstPipeline> hailo_pipeline_;
+    hailo::ChessGameStateTracker game_tracker_{3};
 
     rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::String>::SharedPtr fen_pub_;
     rclcpp_lifecycle::LifecyclePublisher<vision_msgs::msg::Detection2DArray>::SharedPtr detections_pub_;
