@@ -11,13 +11,20 @@ install(
     scripts/camera_mode_demo
     scripts/task_orchestrator
     scripts/lerobot_arm_bridge
+    scripts/calibrate_omni_base
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_fsm test/test_fsm.py)
   ament_add_pytest_test(test_task_orchestrator test/test_task_orchestrator.py)
+  ament_add_pytest_test(test_omni_calib test/test_omni_calib.py)
 endif()
 
 ament_package()
