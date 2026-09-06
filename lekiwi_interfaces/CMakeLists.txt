@@ -14,7 +14,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ServoTelemetry.msg"
   "msg/DriveStatus.msg"
   "srv/SetCamMode.srv"
-  "srv/SetDriveEnabled.srv"
+  "srv/SetTorqueEnabled.srv"
   "srv/ResetMotorBus.srv"
   DEPENDENCIES std_msgs
 )
