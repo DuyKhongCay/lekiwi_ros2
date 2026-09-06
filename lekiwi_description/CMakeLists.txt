@@ -3,7 +3,7 @@ project(lekiwi_description)
 
 find_package(ament_cmake REQUIRED)
 
-install(DIRECTORY urdf assets
+install(DIRECTORY urdf assets calib
   DESTINATION share/${PROJECT_NAME}
 )
 
