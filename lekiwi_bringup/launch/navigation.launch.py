@@ -9,30 +9,21 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    nav_share = FindPackageShare("lekiwi_navigation")
+    bringup_share = FindPackageShare("lekiwi_bringup")
 
-    default_map = PathJoinSubstitution([nav_share, "maps", "chessboard_arena.yaml"])
-    default_params = PathJoinSubstitution([nav_share, "config", "nav2_params.yaml"])
-    default_ekf_params = PathJoinSubstitution([nav_share, "config", "ekf.yaml"])
-    default_twist_mux_config = PathJoinSubstitution([nav_share, "config", "twist_mux.yaml"])
+    default_map = PathJoinSubstitution([bringup_share, "maps", "chessboard_arena.yaml"])
+    nav2_params = PathJoinSubstitution(
+        [bringup_share, "config", "navigation", "nav2_params.yaml"]
+    )
+    ekf_params = PathJoinSubstitution(
+        [bringup_share, "config", "navigation", "ekf.yaml"]
+    )
 
     # Launch arguments
     declare_map_yaml = DeclareLaunchArgument(
         "map",
         default_value=default_map,
         description="Full path to map YAML file to load",
-    )
-
-    declare_params_file = DeclareLaunchArgument(
-        "params_file",
-        default_value=default_params,
-        description="Full path to Nav2 parameters file",
-    )
-
-    declare_ekf_params_file = DeclareLaunchArgument(
-        "ekf_params_file",
-        default_value=default_ekf_params,
-        description="Full path to robot_localization EKF parameters file",
     )
 
     declare_use_sim_time = DeclareLaunchArgument(
@@ -47,18 +38,6 @@ def generate_launch_description():
         description="Automatically startup the Nav2 stack",
     )
 
-    declare_twist_mux_config = DeclareLaunchArgument(
-        "twist_mux_config",
-        default_value=default_twist_mux_config,
-        description="Path to twist_mux configuration file",
-    )
-
-    declare_cmd_vel_out = DeclareLaunchArgument(
-        "cmd_vel_out",
-        default_value="/omni_base_controller/cmd_vel",
-        description="Target driver topic for final arbitrated cmd_vel",
-    )
-
     # Lifecycle node names for Nav2
     lifecycle_nodes = [
         "map_server",
@@ -69,8 +48,6 @@ def generate_launch_description():
     ]
 
     use_sim_time = LaunchConfiguration("use_sim_time")
-    params_file = LaunchConfiguration("params_file")
-    ekf_params_file = LaunchConfiguration("ekf_params_file")
     map_yaml_file = LaunchConfiguration("map")
     autostart = LaunchConfiguration("autostart")
 
@@ -80,7 +57,7 @@ def generate_launch_description():
         executable="ekf_node",
         name="ekf_filter_node",
         output="screen",
-        parameters=[ekf_params_file, {"use_sim_time": use_sim_time}],
+        parameters=[ekf_params, {"use_sim_time": use_sim_time}],
     )
 
     # 1. Map Server
@@ -90,7 +67,7 @@ def generate_launch_description():
         name="map_server",
         output="screen",
         parameters=[
-            params_file,
+            nav2_params,
             {"yaml_filename": map_yaml_file, "use_sim_time": use_sim_time},
         ],
     )
@@ -101,7 +78,7 @@ def generate_launch_description():
         executable="planner_server",
         name="planner_server",
         output="screen",
-        parameters=[params_file, {"use_sim_time": use_sim_time}],
+        parameters=[nav2_params, {"use_sim_time": use_sim_time}],
     )
 
     # 3. Controller Server (DWB Local Planner)
@@ -110,7 +87,7 @@ def generate_launch_description():
         executable="controller_server",
         name="controller_server",
         output="screen",
-        parameters=[params_file, {"use_sim_time": use_sim_time}],
+        parameters=[nav2_params, {"use_sim_time": use_sim_time}],
         remappings=[
             ("cmd_vel", "/cmd_vel_nav"),
         ],
@@ -122,7 +99,7 @@ def generate_launch_description():
         executable="behavior_server",
         name="behavior_server",
         output="screen",
-        parameters=[params_file, {"use_sim_time": use_sim_time}],
+        parameters=[nav2_params, {"use_sim_time": use_sim_time}],
     )
 
     # 5. BT Navigator
@@ -131,7 +108,7 @@ def generate_launch_description():
         executable="bt_navigator",
         name="bt_navigator",
         output="screen",
-        parameters=[params_file, {"use_sim_time": use_sim_time}],
+        parameters=[nav2_params, {"use_sim_time": use_sim_time}],
     )
 
     # 6. Lifecycle Manager for Nav2
@@ -149,30 +126,11 @@ def generate_launch_description():
         ],
     )
 
-    # 7. Safety Command Arbiter: twist_mux
-    twist_mux_node = Node(
-        package="twist_mux",
-        executable="twist_mux",
-        name="twist_mux",
-        output="screen",
-        parameters=[
-            LaunchConfiguration("twist_mux_config"),
-            {"use_sim_time": use_sim_time},
-        ],
-        remappings=[
-            ("cmd_vel_out", LaunchConfiguration("cmd_vel_out")),
-        ],
-    )
-
     return LaunchDescription(
         [
             declare_map_yaml,
-            declare_params_file,
-            declare_ekf_params_file,
             declare_use_sim_time,
             declare_autostart,
-            declare_twist_mux_config,
-            declare_cmd_vel_out,
             ekf_node,
             map_server_node,
             planner_server_node,
@@ -180,6 +138,5 @@ def generate_launch_description():
             behavior_server_node,
             bt_navigator_node,
             lifecycle_manager_node,
-            twist_mux_node,
         ]
     )

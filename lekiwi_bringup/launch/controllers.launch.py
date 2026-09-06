@@ -24,7 +24,10 @@ def generate_launch_description():
         [description_share, "urdf", "lekiwi_robot.urdf.xacro"]
     )
     controller_config = PathJoinSubstitution(
-        [bringup_share, "config", "controllers", "lekiwi_controllers.yaml"]
+        [bringup_share, "config", "control", "lekiwi_controllers.yaml"]
+    )
+    twist_mux_config = PathJoinSubstitution(
+        [bringup_share, "config", "control", "twist_mux.yaml"]
     )
     joint_config_file = PathJoinSubstitution(
         [bringup_share, "config", "servos", "lekiwi_arm_calib.yaml"]
@@ -150,10 +153,25 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("imu_broadcaster")),
     )
 
+    twist_mux_node = Node(
+        package="twist_mux",
+        executable="twist_mux",
+        name="twist_mux",
+        output="screen",
+        parameters=[
+            twist_mux_config,
+            {"use_sim_time": use_sim_time},
+        ],
+        remappings=[
+            ("cmd_vel_out", "/omni_base_controller/cmd_vel"),
+        ],
+    )
+
     return LaunchDescription(
         [
             *declared_arguments,
             controller_manager,
+            twist_mux_node,
             joint_state_broadcaster,
             RegisterEventHandler(
                 OnProcessExit(

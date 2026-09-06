@@ -11,6 +11,7 @@
     camera_info_url: package://lekiwi_bringup/config/perception/camera_info/stereo_left.yaml
     frame_id: "stereo_left_optical"
     camera_name: "stereo_left"
+    output_size: 640
     active_modes: [1, 2]
     gscam_config: >
       libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" ! 
@@ -27,6 +28,7 @@
     camera_info_url: package://lekiwi_bringup/config/perception/camera_info/stereo_right.yaml
     frame_id: "stereo_right_optical"
     camera_name: "stereo_right"
+    output_size: 384
     active_modes: [3]
     gscam_config: >
       libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@88000/imx219@10" !
@@ -46,6 +48,7 @@
     camera_info_url: package://lekiwi_bringup/config/perception/camera_info/usb_wrist.yaml
     frame_id: "wrist_camera_optical"
     camera_name: "usb_wrist"
+    output_size: 384
     active_modes: [3]
     gscam_config: >
       v4l2src device=/dev/usb_wrist io-mode=mmap extra-controls="c,power_line_frequency=1" !
@@ -66,6 +69,7 @@
     camera_info_url: package://lekiwi_bringup/config/perception/camera_info/usb_side.yaml
     frame_id: "side_camera_optical"
     camera_name: "usb_side"
+    output_size: 384
     active_modes: [3]
     gscam_config: >
       v4l2src device=/dev/usb_side io-mode=mmap extra-controls="c,auto_exposure=1,exposure_time_absolute=200,gain=30,brightness=20,contrast=20,sharpness=10000" !

@@ -3,7 +3,7 @@ project(lekiwi_bringup)
 
 find_package(ament_cmake REQUIRED)
 
-install(DIRECTORY launch config
+install(DIRECTORY launch config maps
   DESTINATION share/${PROJECT_NAME}
   PATTERN "__pycache__" EXCLUDE
   PATTERN "*.pyc" EXCLUDE
@@ -11,7 +11,6 @@ install(DIRECTORY launch config
 
 install(FILES
   udev/99-lekiwi.rules
-  udev/99-teleop-lekiwi.rules
   DESTINATION share/${PROJECT_NAME}/udev
 )
 

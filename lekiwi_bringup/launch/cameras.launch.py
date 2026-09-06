@@ -27,16 +27,15 @@ def _camera_streamer_component(namespace, params_file):
 def generate_launch_description():
     """Launch CameraStreamerComponent drivers and Hailo chess perception component as composed nodes."""
     bringup_share = FindPackageShare("lekiwi_bringup")
-    tag_localization_share = FindPackageShare("lekiwi_tag_localization")
 
     gscam_params_file = PathJoinSubstitution(
         [bringup_share, "config", "perception", "gscam_cameras.yaml"]
     )
     apriltag_params_file = PathJoinSubstitution(
-        [tag_localization_share, "config", "apriltag_36h11.yaml"]
+        [bringup_share, "config", "localization", "apriltag_36h11.yaml"]
     )
     chessboard_params_file = PathJoinSubstitution(
-        [tag_localization_share, "config", "chessboard_tags.yaml"]
+        [bringup_share, "config", "localization", "chessboard_tags.yaml"]
     )
 
     camera_namespaces = [

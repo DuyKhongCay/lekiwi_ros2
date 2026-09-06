@@ -58,9 +58,7 @@ def generate_launch_description():
         plugin="magnetometer_pipeline::MagnetometerBiasRemoverNodelet",
         name="magnetometer_bias_remover",
         parameters=[
-            {
-                "use_sim_time": use_sim_time_param,
-            }
+            {"use_sim_time": use_sim_time_param},
         ],
         remappings=[
             ("imu/mag", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
@@ -76,10 +74,7 @@ def generate_launch_description():
         name="imu_filter",
         parameters=[
             default_imu_params,
-            {
-                "use_mag": True,
-                "use_sim_time": use_sim_time_param,
-            },
+            {"use_sim_time": use_sim_time_param},
         ],
         remappings=[
             ("imu/data_raw", "/lekiwi_imu_broadcaster/imu"),
@@ -95,9 +90,7 @@ def generate_launch_description():
         name="imu_transformer",
         parameters=[
             default_imu_params,
-            {
-                "use_sim_time": use_sim_time_param,
-            },
+            {"use_sim_time": use_sim_time_param},
         ],
         remappings=[
             ("imu_in", "/imu/data"),

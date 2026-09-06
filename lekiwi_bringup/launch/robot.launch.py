@@ -12,7 +12,6 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     """Top-level Bringup: Compose LeKiwi robot subsystems with streamlined configuration."""
     bringup_share = FindPackageShare("lekiwi_bringup")
-    nav_share = FindPackageShare("lekiwi_navigation")
 
     # Global and Subsystem Arguments
     declared_arguments = [
@@ -125,9 +124,11 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("teleop_gamepad")),
     )
 
+    teleop_uarm_share = FindPackageShare("teleop_zhongli_servo_hw")
+
     teleop_uarm = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution([bringup_share, "launch", "teleop_uarm.launch.py"])
+            PathJoinSubstitution([teleop_uarm_share, "launch", "teleop_uarm.launch.py"])
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
@@ -137,7 +138,7 @@ def generate_launch_description():
 
     navigation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution([nav_share, "launch", "navigation.launch.py"])
+            PathJoinSubstitution([bringup_share, "launch", "navigation.launch.py"])
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
