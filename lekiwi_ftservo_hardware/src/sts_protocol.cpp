@@ -412,4 +412,21 @@ namespace lekiwi_ftservo_hardware
     return write_packet(kBroadcastId, kInstructionSyncWrite, parameters, error);
   }
 
+  bool StsProtocol::sync_write_torque(
+      const std::vector<uint8_t> &ids, const std::vector<bool> &enable_states, std::string *error)
+  {
+    if (ids.empty() || ids.size() != enable_states.size())
+    {
+      set_error(error, "Torque sync-write IDs and enable states must have equal non-zero size");
+      return false;
+    }
+    std::vector<uint8_t> parameters{kTorqueEnableRegister, 1U};
+    for (size_t index = 0; index < ids.size(); ++index)
+    {
+      parameters.push_back(ids[index]);
+      parameters.push_back(static_cast<uint8_t>(enable_states[index] ? 1U : 0U));
+    }
+    return write_packet(kBroadcastId, kInstructionSyncWrite, parameters, error);
+  }
+
 } // namespace lekiwi_ftservo_hardware

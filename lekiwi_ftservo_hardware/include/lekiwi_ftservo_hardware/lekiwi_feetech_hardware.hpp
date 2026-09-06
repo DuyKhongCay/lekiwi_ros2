@@ -26,7 +26,9 @@
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <hardware_interface/system_interface.hpp>
 #include <rclcpp_lifecycle/state.hpp>
+#include <rclcpp/rclcpp.hpp>
 
+#include "lekiwi_interfaces/srv/set_torque_enabled.hpp"
 #include "lekiwi_ftservo_hardware/sts_protocol.hpp"
 
 namespace lekiwi_ftservo_hardware
@@ -217,6 +219,23 @@ namespace lekiwi_ftservo_hardware
     bool set_all_torque(bool enabled, std::string *error);
 
     /**
+     * @brief Enables or disables torque for a specific list of servo IDs.
+     *
+     * @param[in] ids Vector of servo hardware IDs.
+     * @param[in] enabled True to enable torque, false to disable.
+     * @param[out] error Error message string on failure.
+     * @return true If all specified servos acknowledged torque update, false otherwise.
+     */
+    bool set_joints_torque(const std::vector<uint8_t> &ids, bool enabled, std::string *error);
+
+    /**
+     * @brief Service callback for dynamically enabling/disabling torque (ARM, BASE, or ALL).
+     */
+    void handle_set_torque_enabled(
+        const std::shared_ptr<lekiwi_interfaces::srv::SetTorqueEnabled::Request> request,
+        std::shared_ptr<lekiwi_interfaces::srv::SetTorqueEnabled::Response> response);
+
+    /**
      * @brief Sends zero velocity (0 ticks) to all wheel joints.
      *
      * @param[out] error Error message string on failure.
@@ -245,14 +264,22 @@ namespace lekiwi_ftservo_hardware
     int baud_rate_{1000000};
     int timeout_ms_{20};
 
+    // Torque control state flags
+    std::atomic<bool> arm_torque_enabled_{true};
+    std::atomic<bool> base_torque_enabled_{true};
+
     // Async I/O Thread and Buffers
     std::thread io_worker_thread_;
     std::atomic<bool> io_running_{false};
     SharedState shared_state_;
     SharedCommand shared_command_;
 
-    // Diagnostic Updater
+    // Diagnostic Updater and Services
     std::shared_ptr<diagnostic_updater::Updater> updater_;
+    rclcpp::Service<lekiwi_interfaces::srv::SetTorqueEnabled>::SharedPtr set_torque_srv_;
+
+    // Mutex serializing all direct I/O interactions on the protocol_ instance
+    mutable std::mutex serial_mutex_;
   };
 
 } // namespace lekiwi_ftservo_hardware
