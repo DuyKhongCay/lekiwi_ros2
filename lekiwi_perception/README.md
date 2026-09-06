@@ -1,3 +1,4 @@
+
 # `lekiwi_perception`
 
 High-performance C++ ROS 2 package managing camera acquisition via GStreamer, zero-copy valve gating, Hailo-8/8L NPU hardware-accelerated deep learning inference, chessboard calibration, and FEN piece mapping.
@@ -26,6 +27,27 @@ Visual debugging component combining the debug camera image with digital 2D top-
 - Optional standalone OpenCV Qt GUI window.
 
 ---
+
+## 📦 Package Structure
+
+```text
+lekiwi_perception/
+├── CMakeLists.txt
+├── package.xml
+├── README.md
+├── config/
+│   └── calibration/                 # Calibration streaming configs for ROS camera calibration tool
+│       ├── stereo_left_conf.yaml
+│       ├── stereo_right_conf.yaml
+│       ├── usb_side_conf.yaml
+│       └── usb_wrist_conf.yaml
+├── include/
+├── resources/                       # Pre-compiled HEF neural network models and piece sprites
+│   ├── models/
+│   └── pieces/
+├── src/
+└── test/
+```
 
 ## 📡 Topics & Services
 

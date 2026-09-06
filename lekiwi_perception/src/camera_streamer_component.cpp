@@ -36,6 +36,7 @@ namespace lekiwi_perception
     declare_parameter<bool>("calib_mode", false);
     declare_parameter<std::vector<int64_t>>("active_modes", std::vector<int64_t>{});
     declare_parameter<std::string>("valve_name", "gate");
+    declare_parameter<int64_t>("output_size", 0);
 
     autostart_ = get_parameter("autostart").as_bool();
     if (autostart_)
@@ -82,6 +83,7 @@ namespace lekiwi_perception
       calib_mode_ = get_parameter("calib_mode").as_bool();
       active_modes_ = get_parameter("active_modes").as_integer_array();
       valve_name_ = get_parameter("valve_name").as_string();
+      output_size_ = get_parameter("output_size").as_int();
 
       if (gscam_config_.empty())
       {
@@ -636,17 +638,21 @@ namespace lekiwi_perception
 
     gst_buffer_unmap(buffer, &map);
 
+    const uint32_t target_w = (output_size_ > 0) ? static_cast<uint32_t>(output_size_) : img_msg->width;
+    const uint32_t target_h = (output_size_ > 0) ? static_cast<uint32_t>(output_size_) : img_msg->height;
+
     auto info_msg = std::make_unique<sensor_msgs::msg::CameraInfo>();
     if (camera_info_manager_)
     {
-      *info_msg = camera_info_manager_->getCameraInfo();
+      const auto raw_info = camera_info_manager_->getCameraInfo();
+      *info_msg = scale_camera_info(raw_info, target_w, target_h);
+    }
+    else
+    {
+      info_msg->width = target_w;
+      info_msg->height = target_h;
     }
     info_msg->header = header;
-    if (info_msg->width == 0 && info_msg->height == 0)
-    {
-      info_msg->width = img_msg->width;
-      info_msg->height = img_msg->height;
-    }
 
     image_pub_->publish(std::move(img_msg));
     if (info_pub_ && info_pub_->is_activated())
@@ -759,6 +765,54 @@ namespace lekiwi_perception
     {
       stat.add("Last Gst Status", last_gst_error_);
     }
+  }
+
+  sensor_msgs::msg::CameraInfo CameraStreamerComponent::scale_camera_info(
+      const sensor_msgs::msg::CameraInfo &orig_info,
+      uint32_t target_w, uint32_t target_h) const
+  {
+    // Rescales camera intrinsic matrix K and projection matrix P based on output resolution.
+    auto scaled_info = orig_info;
+    const uint32_t orig_w = orig_info.width;
+    const uint32_t orig_h = orig_info.height;
+
+    scaled_info.width = target_w;
+    scaled_info.height = target_h;
+
+    if (orig_w == 0 || orig_h == 0 || target_w == 0 || target_h == 0)
+    {
+      return scaled_info;
+    }
+
+    if (orig_w == target_w && orig_h == target_h)
+    {
+      return scaled_info;
+    }
+
+    const double sx = static_cast<double>(target_w) / static_cast<double>(orig_w);
+    const double sy = static_cast<double>(target_h) / static_cast<double>(orig_h);
+
+    // Scale Camera Matrix K (3x3 row-major)
+    // [fx,  0, cx]
+    // [ 0, fy, cy]
+    // [ 0,  0,  1]
+    scaled_info.k[0] = orig_info.k[0] * sx; // fx
+    scaled_info.k[2] = orig_info.k[2] * sx; // cx
+    scaled_info.k[4] = orig_info.k[4] * sy; // fy
+    scaled_info.k[5] = orig_info.k[5] * sy; // cy
+
+    // Scale Projection Matrix P (3x4 row-major)
+    // [fx',   0, cx', Tx]
+    // [  0, fy', cy', Ty]
+    // [  0,   0,   1,  0]
+    scaled_info.p[0] = orig_info.p[0] * sx; // fx'
+    scaled_info.p[2] = orig_info.p[2] * sx; // cx'
+    scaled_info.p[3] = orig_info.p[3] * sx; // Tx
+    scaled_info.p[5] = orig_info.p[5] * sy; // fy'
+    scaled_info.p[6] = orig_info.p[6] * sy; // cy'
+    scaled_info.p[7] = orig_info.p[7] * sy; // Ty
+
+    return scaled_info;
   }
 
 } // namespace lekiwi_perception

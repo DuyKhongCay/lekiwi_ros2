@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    camera_name: "usb_wrist"
+    frame_id: "wrist_camera_optical"
+    camera_info_url: ""
+    image_encoding: "rgb8"
+    use_sensor_data_qos: false
+    sync_sink: false
+    use_gst_timestamps: true
+    autostart: true
+    calib_mode: true
+    gscam_config: >
+      v4l2src device=/dev/usb_wrist io-mode=mmap extra-controls="c,power_line_frequency=1" !
+      valve name=gate drop=true !
+      image/jpeg,width=1280,height=720,framerate=25/1 !
+      queue leaky=downstream max-size-buffers=1 !
+      jpegdec !
+      video/x-raw,format=I420 !
+      videoconvert n-threads=4 !
+      video/x-raw,format=RGB

@@ -80,10 +80,13 @@ namespace lekiwi_perception
      */
     CallbackReturn on_error(const rclcpp_lifecycle::State &state) override;
 
-    // Public getters for testing / status introspection
+    // Public getters & helpers for testing / status introspection
     [[nodiscard]] bool is_streaming() const noexcept;
     [[nodiscard]] uint8_t current_camera_mode() const noexcept;
     [[nodiscard]] bool is_valve_open() const;
+    [[nodiscard]] sensor_msgs::msg::CameraInfo scale_camera_info(
+        const sensor_msgs::msg::CameraInfo &orig_info,
+        uint32_t target_w, uint32_t target_h) const;
 
   private:
     void on_camera_mode(const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg);
@@ -127,6 +130,7 @@ namespace lekiwi_perception
     bool calib_mode_{false};
     std::vector<int64_t> active_modes_;
     std::string valve_name_{"gate"};
+    int64_t output_size_{0};
 
     // State & Thread safety
     std::mutex gst_mutex_;

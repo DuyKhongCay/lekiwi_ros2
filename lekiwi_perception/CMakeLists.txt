@@ -155,7 +155,7 @@ install(TARGETS
 install(DIRECTORY include/
   DESTINATION include
 )
-install(DIRECTORY resources
+install(DIRECTORY resources config
   DESTINATION share/${PROJECT_NAME}
 )
 if(BUILD_TESTING)

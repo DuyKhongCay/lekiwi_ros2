@@ -140,3 +140,43 @@ TEST_F(CameraStreamerComponentTest, InvalidConfigHandling)
   // Configure should fail gracefully and not crash
   EXPECT_EQ(state.label(), "unconfigured");
 }
+
+TEST_F(CameraStreamerComponentTest, CameraInfoScalingWithOutputSize)
+{
+  // Validates intrinsic and projection matrix scaling when output_size is specified.
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({{"camera_name", "test_scaling_camera"},
+                               {"gscam_config", "videotestsrc is-live=true ! valve name=gate drop=true ! video/x-raw,format=RGB,width=640,height=640,framerate=10/1"},
+                               {"output_size", static_cast<int64_t>(640)},
+                               {"autostart", false}});
+
+  auto node = std::make_shared<lekiwi_perception::CameraStreamerComponent>(options);
+
+  sensor_msgs::msg::CameraInfo orig_info;
+  orig_info.width = 3280;
+  orig_info.height = 2464;
+  // K matrix: fx=2274.0, fy=2287.0, cx=1654.0, cy=1291.0
+  orig_info.k = {2274.0, 0.0, 1654.0, 0.0, 2287.0, 1291.0, 0.0, 0.0, 1.0};
+  // P matrix: fx=2298.0, fy=2303.0, cx=1650.0, cy=1277.0, Tx=10.0, Ty=20.0
+  orig_info.p = {2298.0, 0.0, 1650.0, 10.0, 0.0, 2303.0, 1277.0, 20.0, 0.0, 0.0, 1.0, 0.0};
+
+  const auto scaled = node->scale_camera_info(orig_info, 640, 640);
+
+  EXPECT_EQ(scaled.width, 640U);
+  EXPECT_EQ(scaled.height, 640U);
+
+  const double expected_sx = 640.0 / 3280.0;
+  const double expected_sy = 640.0 / 2464.0;
+
+  EXPECT_NEAR(scaled.k[0], 2274.0 * expected_sx, 1e-4);
+  EXPECT_NEAR(scaled.k[2], 1654.0 * expected_sx, 1e-4);
+  EXPECT_NEAR(scaled.k[4], 2287.0 * expected_sy, 1e-4);
+  EXPECT_NEAR(scaled.k[5], 1291.0 * expected_sy, 1e-4);
+
+  EXPECT_NEAR(scaled.p[0], 2298.0 * expected_sx, 1e-4);
+  EXPECT_NEAR(scaled.p[2], 1650.0 * expected_sx, 1e-4);
+  EXPECT_NEAR(scaled.p[3], 10.0 * expected_sx, 1e-4);
+  EXPECT_NEAR(scaled.p[5], 2303.0 * expected_sy, 1e-4);
+  EXPECT_NEAR(scaled.p[6], 1277.0 * expected_sy, 1e-4);
+  EXPECT_NEAR(scaled.p[7], 20.0 * expected_sy, 1e-4);
+}
