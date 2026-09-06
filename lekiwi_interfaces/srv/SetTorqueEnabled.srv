@@ -1,0 +1,12 @@
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
+
+uint8 TARGET_ALL=0
+uint8 TARGET_ARM=1
+uint8 TARGET_BASE=2
+
+uint8 target       # TARGET_ALL (0), TARGET_ARM (1), or TARGET_BASE (2)
+bool enabled       # true to enable torque, false to disable torque
+---
+bool success
+string message

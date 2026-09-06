@@ -54,7 +54,22 @@ def generate_launch_description():
         package="lekiwi_perception",
         plugin="lekiwi_perception::HailoChessInferenceComponent",
         name="hailo_chess_inference",
-        parameters=[{"publish_debug_image": True}],
+        parameters=[{"debug_image": True}],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
+    chess_engine_component = ComposableNode(
+        package="lekiwi_perception",
+        plugin="lekiwi_perception::ChessEngineComponent",
+        name="chess_engine",
+        parameters=[
+            {
+                "stockfish_path": "/usr/games/stockfish",
+                "think_time_ms": 1000,
+                "robot_color": "black",
+                "auto_play": True,
+            }
+        ],
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
@@ -88,6 +103,7 @@ def generate_launch_description():
     all_components = [
         *camera_components,
         inference_component,
+        chess_engine_component,
         apriltag_component,
         chessboard_estimator_component,
     ]

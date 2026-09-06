@@ -274,6 +274,20 @@ namespace lekiwi_ftservo_hardware
             const std::vector<uint8_t> &ids, const std::vector<int> &positions,
             std::string *error);
 
+        /**
+         * @brief Broadcasts synchronized torque enable commands (SYNC_WRITE) to servos.
+         *
+         * Atomically updates torque switch (0 or 1) at register @ref kTorqueEnableRegister across multiple servos.
+         *
+         * @param[in] ids Target servo IDs.
+         * @param[in] enable_states Vector of boolean enable states (true = enable, false = disable).
+         * @param[out] error Output string on failure.
+         * @return true If packet was transmitted successfully, false otherwise.
+         */
+        bool sync_write_torque(
+            const std::vector<uint8_t> &ids, const std::vector<bool> &enable_states,
+            std::string *error);
+
     private:
         /**
          * @brief Encapsulates payload into an STS frame, computes checksum, and writes to serial port.

@@ -89,4 +89,21 @@ namespace lekiwi_ftservo_hardware
     EXPECT_EQ(fast.position_ticks, 2048);
   }
 
+  /**
+   * @brief Verifies argument validation in sync_write_torque for empty or mismatched vectors.
+   */
+  TEST(StsProtocolTest, RejectsInvalidSyncWriteTorqueArguments)
+  {
+    StsProtocol proto;
+    std::string error;
+
+    // 1. Empty vectors should fail
+    EXPECT_FALSE(proto.sync_write_torque({}, {}, &error));
+    EXPECT_FALSE(error.empty());
+
+    // 2. Mismatched vectors should fail
+    EXPECT_FALSE(proto.sync_write_torque({1, 2}, {true}, &error));
+    EXPECT_FALSE(error.empty());
+  }
+
 } // namespace lekiwi_ftservo_hardware

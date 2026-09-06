@@ -1,0 +1,31 @@
+header:
+  parent_frame: base_footprint
+  child_frame: stereo_left_optical
+  is_eye_in_hand: false
+transform:
+  translation:
+    x: -0.041920086456104934
+    y: 0.034604699230900295
+    z: 0.4114751965215604
+  rotation:
+    x: -0.657804229167488
+    y: 0.6582644460968102
+    z: -0.2536944643822667
+    w: 0.2638572224443006
+metrics:
+  method: Park
+  translation:
+  - -0.041920086456104934
+  - 0.034604699230900295
+  - 0.4114751965215604
+  rotation_quat_xyzw:
+  - -0.657804229167488
+  - 0.6582644460968102
+  - -0.2536944643822667
+  - 0.2638572224443006
+  rotation_rpy_deg:
+  - -137.06313899504974
+  - 0.7799957549668606
+  - -89.73331544228083
+  residual_error: 0.027682175872024616
+  num_samples: 22

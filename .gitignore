@@ -186,3 +186,4 @@ outputs/
 # Dev folders
 .cache/*
 
+so101_kinematics_msgs

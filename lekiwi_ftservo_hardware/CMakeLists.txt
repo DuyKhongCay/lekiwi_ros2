@@ -9,6 +9,7 @@ find_package(PkgConfig REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(lekiwi_interfaces REQUIRED)
 pkg_check_modules(SERIAL REQUIRED libserial)
 
 add_library(lekiwi_feetech_hardware SHARED
@@ -28,6 +29,7 @@ target_link_libraries(lekiwi_feetech_hardware
     rclcpp::rclcpp
     rclcpp_lifecycle::rclcpp_lifecycle
     yaml-cpp
+    ${lekiwi_interfaces_TARGETS}
     ${SERIAL_LIBRARIES})
 
 pluginlib_export_plugin_description_file(
@@ -55,5 +57,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(lekiwi_ftservo_hardwareTargets HAS_LIBRARY_TARGET)
-ament_export_dependencies(diagnostic_updater hardware_interface pluginlib rclcpp rclcpp_lifecycle yaml-cpp)
+ament_export_dependencies(diagnostic_updater hardware_interface pluginlib rclcpp rclcpp_lifecycle yaml-cpp lekiwi_interfaces)
 ament_package()

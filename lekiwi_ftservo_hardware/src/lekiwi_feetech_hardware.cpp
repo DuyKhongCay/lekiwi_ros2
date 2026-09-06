@@ -275,12 +275,20 @@ namespace lekiwi_ftservo_hardware
       RCLCPP_INFO(
           rclcpp::get_logger("LeKiwiFeetechHardware"),
           "Diagnostic updater initialized for lekiwi_feetech_servos");
+
+      set_torque_srv_ = get_node()->create_service<lekiwi_interfaces::srv::SetTorqueEnabled>(
+          "~/set_torque_enabled",
+          std::bind(&LeKiwiFeetechHardwareInterface::handle_set_torque_enabled, this,
+                    std::placeholders::_1, std::placeholders::_2));
+      RCLCPP_INFO(
+          rclcpp::get_logger("LeKiwiFeetechHardware"),
+          "Service '~/set_torque_enabled' created successfully");
     }
     else
     {
       RCLCPP_WARN(
           rclcpp::get_logger("LeKiwiFeetechHardware"),
-          "Default node is not available. Diagnostic updater will not be published.");
+          "Default node is not available. Diagnostic updater and set_torque_enabled service will not be available.");
     }
 
     return hardware_interface::CallbackReturn::SUCCESS;
@@ -396,14 +404,136 @@ namespace lekiwi_ftservo_hardware
       }
       return false;
     }
+    std::vector<uint8_t> ids;
+    std::vector<bool> enable_states;
+    ids.reserve(joints_.size());
+    enable_states.reserve(joints_.size());
     for (const auto &joint : joints_)
     {
-      if (!protocol_->write_register(joint.id, kTorqueEnableRegister, {static_cast<uint8_t>(enabled ? 1 : 0)}, error))
+      ids.push_back(joint.id);
+      enable_states.push_back(enabled);
+    }
+    if (!protocol_->sync_write_torque(ids, enable_states, error))
+    {
+      return false;
+    }
+    arm_torque_enabled_ = enabled;
+    base_torque_enabled_ = enabled;
+    return true;
+  }
+
+  bool LeKiwiFeetechHardwareInterface::set_joints_torque(
+      const std::vector<uint8_t> &ids, const bool enabled, std::string *error)
+  {
+    if (!protocol_)
+    {
+      if (error != nullptr)
       {
-        return false;
+        *error = "Feetech protocol is not configured";
+      }
+      return false;
+    }
+    if (ids.empty())
+    {
+      return true;
+    }
+    const std::vector<bool> enable_states(ids.size(), enabled);
+    return protocol_->sync_write_torque(ids, enable_states, error);
+  }
+
+  void LeKiwiFeetechHardwareInterface::handle_set_torque_enabled(
+      const std::shared_ptr<lekiwi_interfaces::srv::SetTorqueEnabled::Request> request,
+      std::shared_ptr<lekiwi_interfaces::srv::SetTorqueEnabled::Response> response)
+  {
+    using SrvReq = lekiwi_interfaces::srv::SetTorqueEnabled::Request;
+
+    if (!protocol_)
+    {
+      response->success = false;
+      response->message = "Feetech protocol is not configured or port is closed";
+      return;
+    }
+
+    const uint8_t target = request->target;
+    const bool enabled = request->enabled;
+
+    if (target != SrvReq::TARGET_ALL && target != SrvReq::TARGET_ARM && target != SrvReq::TARGET_BASE)
+    {
+      response->success = false;
+      response->message = "Invalid target: " + std::to_string(target) + " (use 0=ALL, 1=ARM, 2=BASE)";
+      return;
+    }
+
+    const bool affects_arm = (target == SrvReq::TARGET_ALL || target == SrvReq::TARGET_ARM);
+    const bool affects_base = (target == SrvReq::TARGET_ALL || target == SrvReq::TARGET_BASE);
+
+    // 1. If re-enabling torque, latch current feedback into command buffer first (anti-jerk)
+    if (enabled)
+    {
+      std::lock_guard<std::mutex> lock_state(shared_state_.mutex);
+      std::lock_guard<std::mutex> lock_cmd(shared_command_.mutex);
+      for (size_t i = 0; i < joints_.size(); ++i)
+      {
+        const bool is_base_joint = joints_[i].velocity_command;
+        if (is_base_joint && affects_base)
+        {
+          set_command(joints_[i].name + "/" + hardware_interface::HW_IF_VELOCITY, 0.0);
+          shared_command_.commands[i] = 0.0;
+        }
+        else if (!is_base_joint && affects_arm)
+        {
+          const double cur_pos = shared_state_.positions[i];
+          if (std::isfinite(cur_pos))
+          {
+            set_command(joints_[i].name + "/" + hardware_interface::HW_IF_POSITION, cur_pos);
+            shared_command_.commands[i] = cur_pos;
+          }
+        }
+      }
+      shared_command_.has_new_command = false;
+    }
+
+    // 2. Collect target servo IDs
+    std::vector<uint8_t> target_ids;
+    for (const auto &joint : joints_)
+    {
+      if ((joint.velocity_command && affects_base) || (!joint.velocity_command && affects_arm))
+      {
+        target_ids.push_back(joint.id);
       }
     }
-    return true;
+
+    // 3. Atomically perform serial operations protected by serial_mutex_
+    std::string error;
+    {
+      std::lock_guard<std::mutex> lock_serial(serial_mutex_);
+      if (!enabled && affects_base)
+      {
+        (void)stop_wheels(&error);
+      }
+      if (!set_joints_torque(target_ids, enabled, &error))
+      {
+        response->success = false;
+        response->message = "Failed to update torque register: " + error;
+        return;
+      }
+    }
+
+    // 4. Update software gating flags
+    if (affects_arm)
+    {
+      arm_torque_enabled_ = enabled;
+    }
+    if (affects_base)
+    {
+      base_torque_enabled_ = enabled;
+    }
+
+    const std::string name = (target == SrvReq::TARGET_ARM) ? "Arm" : (target == SrvReq::TARGET_BASE) ? "Base"
+                                                                                                      : "All";
+    response->success = true;
+    response->message = name + " torque " + (enabled ? "enabled" : "disabled");
+    RCLCPP_INFO(rclcpp::get_logger("LeKiwiFeetechHardware"), "%s", response->message.c_str());
   }
 
   bool LeKiwiFeetechHardwareInterface::stop_wheels(std::string *error)
@@ -504,12 +634,25 @@ namespace lekiwi_ftservo_hardware
       // Every 10 iterations (~10 Hz), perform full diagnostic sync_read (15 bytes),
       // otherwise perform fast state sync_read (4 bytes).
       const bool do_full_diagnostic = (iteration_count % 10 == 0);
+      bool read_success = false;
 
-      if (do_full_diagnostic)
       {
-        if (protocol_->sync_read_diagnostics(joint_ids_, &diag_states, &error))
+        std::lock_guard<std::mutex> lock_serial(serial_mutex_);
+        if (do_full_diagnostic)
         {
-          std::lock_guard<std::mutex> lock(shared_state_.mutex);
+          read_success = protocol_->sync_read_diagnostics(joint_ids_, &diag_states, &error);
+        }
+        else
+        {
+          read_success = protocol_->sync_read_fast_state(joint_ids_, &fast_states, &error);
+        }
+      }
+
+      if (read_success)
+      {
+        std::lock_guard<std::mutex> lock(shared_state_.mutex);
+        if (do_full_diagnostic)
+        {
           for (size_t i = 0; i < num_joints; ++i)
           {
             const double pos_rad = (diag_states[i].position_ticks - 2048) * kRadiansPerEncoderTick;
@@ -531,21 +674,9 @@ namespace lekiwi_ftservo_hardware
             telem.moving = diag_states[i].moving;
             telem.status_flags = diag_states[i].status;
           }
-          shared_state_.valid = true;
-          shared_state_.last_read_time = std::chrono::steady_clock::now();
-          ++shared_state_.update_count;
         }
         else
         {
-          std::lock_guard<std::mutex> lock(shared_state_.mutex);
-          ++shared_state_.read_error_count;
-        }
-      }
-      else
-      {
-        if (protocol_->sync_read_fast_state(joint_ids_, &fast_states, &error))
-        {
-          std::lock_guard<std::mutex> lock(shared_state_.mutex);
           for (size_t i = 0; i < num_joints; ++i)
           {
             const double pos_rad = (fast_states[i].position_ticks - 2048) * kRadiansPerEncoderTick;
@@ -557,15 +688,15 @@ namespace lekiwi_ftservo_hardware
             shared_state_.telemetry[i].position_radians = pos_rad;
             shared_state_.telemetry[i].velocity_radians_per_second = vel_rad_s;
           }
-          shared_state_.valid = true;
-          shared_state_.last_read_time = std::chrono::steady_clock::now();
-          ++shared_state_.update_count;
         }
-        else
-        {
-          std::lock_guard<std::mutex> lock(shared_state_.mutex);
-          ++shared_state_.read_error_count;
-        }
+        shared_state_.valid = true;
+        shared_state_.last_read_time = std::chrono::steady_clock::now();
+        ++shared_state_.update_count;
+      }
+      else
+      {
+        std::lock_guard<std::mutex> lock(shared_state_.mutex);
+        ++shared_state_.read_error_count;
       }
 
       // 2. Hardware Write Phase:
@@ -607,11 +738,12 @@ namespace lekiwi_ftservo_hardware
           }
         }
 
-        if (!velocity_ids.empty() && !velocity_commands.empty())
+        std::lock_guard<std::mutex> lock_serial(serial_mutex_);
+        if (base_torque_enabled_ && !velocity_ids.empty() && !velocity_commands.empty())
         {
           protocol_->sync_write_velocity(velocity_ids, velocity_commands, &error);
         }
-        if (!position_ids.empty() && !position_commands.empty())
+        if (arm_torque_enabled_ && !position_ids.empty() && !position_commands.empty())
         {
           protocol_->sync_write_position(position_ids, position_commands, &error);
         }

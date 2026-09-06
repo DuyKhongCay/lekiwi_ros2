@@ -12,9 +12,15 @@
   <xacro:arg name="imu_auto_calibrate_gyro" default="true"/>
   <xacro:arg name="imu_gyro_calib_samples" default="500"/>
 
+  <xacro:arg name="camera_calib_file" default="$(find lekiwi_description)/calib/handeye_calib_stereo_left.yaml"/>
+
   <!-- Keep the CAD-generated kinematic model separate from control metadata. -->
   <xacro:include filename="$(find lekiwi_description)/urdf/duykhongcay_lekiwi.urdf"/>
   <xacro:include filename="$(find lekiwi_description)/urdf/ros2_control.xacro"/>
+  <xacro:include filename="$(find lekiwi_description)/urdf/sensors_calibration.xacro"/>
+
+  <!-- Apply Hand-Eye Extrinsics Calibration for Stereo Left Camera -->
+  <xacro:stereo_camera_calibration calib_file="$(arg camera_calib_file)"/>
 
   <xacro:if value="$(arg use_ros2_control)">
     <xacro:lekiwi_ros2_control hardware_type="$(arg hardware_type)" usb_port="$(arg usb_port)" joint_config_file="$(arg joint_config_file)"/>

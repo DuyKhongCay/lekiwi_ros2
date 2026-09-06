@@ -49,6 +49,7 @@ List only high-impact production dependencies (frameworks, data, transport, auth
 colcon build --symlink-install --cmake-args -GNinja
 
 # Build single focused package
+colcon build --symlink-install --packages-select handeye_calibration
 colcon build --symlink-install --packages-select lekiwi_perception --cmake-args -GNinja
 colcon build --symlink-install --packages-select lekiwi_tag_localization --cmake-args -GNinja
 colcon build --symlink-install --packages-select lekiwi_navigation --cmake-args -GNinja
@@ -83,6 +84,8 @@ ros2 launch lekiwi_navigation navigation.launch.py
   - [`lekiwi_bringup/config/controllers/lekiwi_controllers.yaml`](file:///root/docker_ws/lekiwi_ros2/lekiwi_bringup/config/controllers/lekiwi_controllers.yaml) (ros2_control controller manager configurations)
   - [`lekiwi_bringup/config/servos/lekiwi_arm_calib.yaml`](file:///root/docker_ws/lekiwi_ros2/lekiwi_bringup/config/servos/lekiwi_arm_calib.yaml) (Joint limits, drive mode, homing offset, velocity ratios)
   - [`lekiwi_bringup/config/servos/uarm_teleop_calib.yaml`](file:///root/docker_ws/lekiwi_ros2/lekiwi_bringup/config/servos/uarm_teleop_calib.yaml) (uArm leader arm physical calibration and joint remapping configs)
+  - [`lekiwi_description/calib/handeye_calib_stereo_left.yaml`](file:///root/docker_ws/lekiwi_ros2/lekiwi_description/calib/handeye_calib_stereo_left.yaml) (Calibrated Extrinsics transform for stereo left camera to base_footprint)
+  - [`handeye_calibration/config/handeye_params.yaml`](file:///root/docker_ws/lekiwi_ros2/handeye_calibration/config/handeye_params.yaml) (ChArUco detector and Hand-Eye calibration solver configuration)
   - [`lekiwi_bringup/config/perception/gscam_cameras.yaml`](file:///root/docker_ws/lekiwi_ros2/lekiwi_bringup/config/perception/gscam_cameras.yaml) (GStreamer pipelines for 4 camera endpoints with valve gating)
   - [`lekiwi_bringup/config/perception/pisp_tuning/imx219_noir.json`](file:///root/docker_ws/lekiwi_ros2/lekiwi_bringup/config/perception/pisp_tuning/imx219_noir.json) (PiSP libcamera tuning file for Raspberry Pi 5 CSI cameras)
   - [`lekiwi_tag_localization/config/chessboard_tags.yaml`](file:///root/docker_ws/lekiwi_ros2/lekiwi_tag_localization/config/chessboard_tags.yaml) (AprilTag layout and chessboard geometry definitions)

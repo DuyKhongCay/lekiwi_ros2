@@ -1,6 +1,6 @@
 /**
  * @file test_chess_vision_mapper.cpp
- * @brief Unit tests for ChessVisionMapper 2D AprilTag matching and square mapping.
+ * @brief Unit tests for ChessVisionMapper and ChessGameStateTracker.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "hailo/chess_vision_mapper.hpp"
+#include "hailo/chess_game_state_tracker.hpp"
 
 using namespace lekiwi_perception::hailo;
 
@@ -141,3 +142,52 @@ TEST(ChessVisionMapperTest, MatchA1CornerFallbackWhenEmpty)
   EXPECT_EQ(ChessVisionMapper::match_a1_corner_index(grid, empty_tags, 2), 2);
 }
 
+TEST(ChessVisionMapperTest, GeneratePiecePlacementPure)
+{
+  std::map<std::string, std::string> occupancy;
+  // Starting position piece placement
+  occupancy["a8"] = "r"; occupancy["b8"] = "n"; occupancy["c8"] = "b"; occupancy["d8"] = "q";
+  occupancy["e8"] = "k"; occupancy["f8"] = "b"; occupancy["g8"] = "n"; occupancy["h8"] = "r";
+  for (char f : {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'}) {
+    occupancy[std::string(1, f) + "7"] = "p";
+    occupancy[std::string(1, f) + "2"] = "P";
+  }
+  occupancy["a1"] = "R"; occupancy["b1"] = "N"; occupancy["c1"] = "B"; occupancy["d1"] = "Q";
+  occupancy["e1"] = "K"; occupancy["f1"] = "B"; occupancy["g1"] = "N"; occupancy["h1"] = "R";
+
+  std::string fen = ChessVisionMapper::generate_fen(occupancy);
+  EXPECT_EQ(fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR");
+}
+
+TEST(ChessGameStateTrackerTest, ValidMoveDebounceAndFullFen)
+{
+  ChessGameStateTracker tracker(2); // Debounce window = 2 frames
+
+  std::string white_e4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR"; // White e4
+
+  // Frame 1: unstable debounce
+  GameStateResult res1 = tracker.update(white_e4);
+  EXPECT_FALSE(res1.is_board_stable);
+  EXPECT_FALSE(res1.is_legal_move);
+
+  // Frame 2: stable debounce -> transition accepted
+  GameStateResult res2 = tracker.update(white_e4);
+  EXPECT_TRUE(res2.is_board_stable);
+  EXPECT_TRUE(res2.is_legal_move);
+  EXPECT_EQ(res2.last_move, "e2e4");
+  EXPECT_EQ(res2.full_fen, "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
+}
+
+TEST(ChessGameStateTrackerTest, RejectIllegalMove)
+{
+  ChessGameStateTracker tracker(1); // Debounce window = 1 frame
+
+  // White king suddenly leaps to e4 (illegal opening)
+  std::string illegal_king = "rnbqkbnr/pppppppp/8/8/4K3/8/PPPPPPPP/RNBQ1BNR";
+
+  GameStateResult res = tracker.update(illegal_king);
+  EXPECT_TRUE(res.is_board_stable);
+  EXPECT_FALSE(res.is_legal_move);
+  // Full FEN remains at starting position
+  EXPECT_EQ(res.full_fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+}
