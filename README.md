@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B%20%7C%203.12-3776AB.svg?logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Production ROS 2 workspace for the **LeKiwi Robot**, featuring an omnidirectional mobile base, 6-DoF robotic arm, dual CSI stereo perception with Hailo-8/8L NPU hardware acceleration, LeRobot imitation learning integration, and `ros2_control` hardware abstraction.
+Production ROS 2 workspace for the **LeKiwi Robot**, featuring an omnidirectional mobile base, 6-DoF robotic arm, dual CSI stereo perception with Hailo-8/8L NPU hardware acceleration, AprilTag arena localization, Nav2 holonomic navigation, dedicated OpenCV Hand-Eye calibration, LeRobot imitation learning integration, and `ros2_control` hardware abstraction.
 
 ---
 
@@ -46,17 +46,19 @@ Production ROS 2 workspace for the **LeKiwi Robot**, featuring an omnidirectiona
 
 | Package | Language / Type | Description |
 |:---|:---:|:---|
-| [`lekiwi_interfaces`](lekiwi_interfaces/) | ROS 2 Interfaces | Custom messages (`CameraMode`, `HailoInferenceStatus`, `DriveStatus`, `ServoTelemetry`) and services (`SetCamMode`, `ResetMotorBus`, `SetDriveEnabled`). |
+| [`lekiwi_interfaces`](lekiwi_interfaces/) | ROS 2 Interfaces | Custom messages (`CameraMode`, `DriveStatus`, `ServoTelemetry`) and services (`SetCamMode`, `ResetMotorBus`, `SetTorqueEnabled`). |
 | [`lekiwi_perception`](lekiwi_perception/) | C++ Components | Lifecycle GStreamer camera streamer components, HailoRT NPU YOLO inference component, chessboard detection, FEN generator, and visualizer. |
+| [`lekiwi_tag_localization`](lekiwi_tag_localization/) | C++ Nodes | AprilTag 36h11 fiducial board detection, OpenCV `solvePnP` 6-DoF pose estimation, and TF broadcasting (`map` / `chessboard`). |
+| [`lekiwi_navigation`](lekiwi_navigation/) | Nav2 / Config | Nav2 holonomic navigation (SmacPlanner2D + DWB), sensorless static costmaps, and priority `twist_mux` arbitration with E-Stop. |
+| [`handeye_calibration`](handeye_calibration/) | Python / OpenCV | Native OpenCV GUI hand-eye calibration (Eye-to-Hand & Eye-in-Hand), lead-through auto-torque control, and ChArUco target generation. |
 | [`lekiwi_control`](lekiwi_control/) | Python / `rclpy` | Four-mode camera/task finite-state machine (FSM), lifecycle boot orchestrator, and LeRobot arm trajectory bridge. |
 | [`lekiwi_ftservo_hardware`](lekiwi_ftservo_hardware/) | C++ `ros2_control` | `SystemInterface` hardware plugin for 9 Feetech STS servos on a 1 Mbps serial bus with asynchronous I/O worker thread. |
 | [`lekiwi_icm20948_hardware`](lekiwi_icm20948_hardware/) | C++ `ros2_control` | `SensorInterface` hardware plugin for ICM-20948 9-DoF IMU communicating over I2C (`/dev/i2c-1`). |
-| [`lekiwi_description`](lekiwi_description/) | URDF / Xacro | Kinematic robot description, CAD STL meshes, joint limits, transmissions, and `ros2_control` macros. |
+| [`lekiwi_description`](lekiwi_description/) | URDF / Xacro | Kinematic robot description, CAD STL meshes, joint limits, transmissions, `sensors_calibration.xacro` macro, and `ros2_control` definitions. |
 | [`lekiwi_bringup`](lekiwi_bringup/) | Launch & Config | System launch compositions (`robot.launch.py`), YAML configs, controllers, calibration files, and udev rules. |
-| [`lekiwi_navigation`](lekiwi_navigation/) | Roadmap / Nav2 | Nav2 integration package for autonomous omni-wheel navigation (in development). |
 | [`teleop_zhongli_servo_hw`](teleop_zhongli_servo_hw/) | C++ Driver / Remapper | Dedicated driver, interactive calibration CLI, and ROS 2 publisher for Zhongli / uArm leader teleoperation. |
 | [`scripts`](scripts/) | Python Utilities | Developer diagnostics and image capture tools (`analyzing_traces.py`, `save_image.py`). |
-| [`deprecated`](deprecated/) | Archived | Legacy nodes and backups (`hailo_perception_node`, `lekiwi_hardwares`), ignored via `COLCON_IGNORE`. |
+| [`deprecated`](deprecated/) | Archived | Legacy nodes and backups (`hailo_perception_node`, `lekiwi_hardwares`), isolated via `COLCON_IGNORE`. |
 
 ---
 
@@ -69,9 +71,7 @@ Production ROS 2 workspace for the **LeKiwi Robot**, featuring an omnidirectiona
 colcon build --symlink-install
 
 # Or build specific packages
-colcon build --packages-select lekiwi_interfaces lekiwi_perception lekiwi_control lekiwi_ftservo_hardware
-
-# Source workspace setup
+colcon build --packages-select lekiwi_interfaces lekiwi_perception lekiwi_control lekiwi_ftservo_hardware handeye_calibration lekiwi_tag_localization
 source install/setup.bash
 ```
 
@@ -97,6 +97,7 @@ ros2 launch lekiwi_bringup cameras.launch.py use_test_sources:=true
 ros2 launch lekiwi_bringup control.launch.py start_lerobot_bridge:=true
 ros2 launch lekiwi_bringup imu.launch.py
 ros2 launch lekiwi_bringup teleop.launch.py start_teleop:=true
+ros2 launch handeye_calibration handeye_calibration.launch.py image_topic:=/cameras/stereo_left/image_raw camera_info_topic:=/cameras/stereo_left/camera_info
 ```
 
 ---
@@ -107,11 +108,13 @@ Install the udev rules to symlink serial devices and configure proper access per
 
 ```bash
 sudo cp lekiwi_bringup/udev/99-lekiwi.rules /etc/udev/rules.d/
+sudo cp lekiwi_bringup/udev/99-teleop-lekiwi.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
 Device symlinks configured:
 - `/dev/lekiwi_serial`: Feetech STS motor bus (1,000,000 baud).
+- `/dev/uarm_leader`: Zhongli leader arm teleoperation serial bus.
 - `/dev/i2c-1`: Raspberry Pi 5 I2C bus for ICM-20948 IMU (`0x68`).
 - `/dev/usb_wrist`, `/dev/usb_side`: USB camera nodes.
 - `/dev/gamepad`: Teleoperation joystick.

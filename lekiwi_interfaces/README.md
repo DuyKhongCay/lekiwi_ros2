@@ -20,26 +20,7 @@ Defines the four discrete operational modes of the robot perception and control 
 
 ---
 
-### 2. `HailoInferenceStatus.msg`
-Monitors the runtime health and performance of the HailoRT neural network inference pipeline:
-
-| Constant | Value | Description |
-|---|---|---|
-| `PIPELINE_STOPPED` | `0` | Pipeline unconfigured or deactivated. |
-| `PIPELINE_STARTING` | `1` | GStreamer / Hailo device initialization in progress. |
-| `PIPELINE_RUNNING` | `2` | Real-time frame inference active and healthy. |
-| `PIPELINE_STOPPING` | `3` | Graceful pipeline teardown in progress. |
-| `PIPELINE_ERROR` | `4` | Hardware, driver, or GStreamer bus error occurred. |
-
-- **Fields**:
-  - `std_msgs/Header header`
-  - `uint8 pipeline_state`
-  - `string last_error`
-  - `float32 fps`
-
----
-
-### 3. `DriveStatus.msg`
+### 2. `DriveStatus.msg`
 Health, error counters, and communication status of the mobile base and motor bus:
 
 - **Fields**:
@@ -56,7 +37,7 @@ Health, error counters, and communication status of the mobile base and motor bu
 
 ---
 
-### 4. `ServoTelemetry.msg`
+### 3. `ServoTelemetry.msg`
 High-frequency diagnostic telemetry for the 3 omnidirectional base wheel servos (Left, Back, Right):
 
 - **Fields**:
@@ -89,8 +70,15 @@ Restart the serial communication bus and re-enable motor torque without restarti
 - **Request**: (empty)
 - **Response**: `bool success`, `string message`
 
-### 3. `SetDriveEnabled.srv`
-Enable or disable mobile base motor torque:
-- **Request**: `bool enable`
-- **Response**: `bool success`, `string message`
-
+### 3. `SetTorqueEnabled.srv`
+Enable or disable motor torque for the entire robot, arm only, or base only:
+- **Constants**:
+  - `uint8 TARGET_ALL = 0`
+  - `uint8 TARGET_ARM = 1`
+  - `uint8 TARGET_BASE = 2`
+- **Request**:
+  - `uint8 target`
+  - `bool enabled`
+- **Response**:
+  - `bool success`
+  - `string message`

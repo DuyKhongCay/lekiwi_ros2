@@ -15,20 +15,20 @@ Keep generated `build/`, `install/`, and `log/` directories out of source change
 
 ## File editing
 
-- Direct edits to source and configuration files are allowed; `.ipynb` files remain excluded.
-- Use the standard Linux `patch` utility for file changes, with a unified diff.
-- Run `patch` from the workspace root and use repository-relative paths; do not use absolute paths or custom rewrite scripts.
-- `patch` applies the diff directly and does not depend on Git metadata or higher-level editing tools.
-- It remains subject to the sandbox and the user's authorization; do not use it to bypass either boundary.
-- Keep every patch limited to the requested files, inspect the result, and run the relevant validator or test when one exists.
-- If `patch` fails, report the blocking error and request direction rather than trying unrelated write mechanisms.
+- Always use the IDE's dedicated editing tools/APIs (`replace_file_content` for editing existing code) to ensure diff tracking is visible directly in chat.
+- **Never** use shell commands (`cat << EOF`, `echo >`, `sed`, `tee`, `python script`, etc.) to write or overwrite source code files.
+- Keep every edit focused and limited strictly to the requested files.
+- Inspect the modified file and verify changes with the appropriate build or test command after editing.
 
 ## Agent-Specific Instructions
 
 - Respond to users in Vietnamese; write code comments in English.
 - Always use **Mermaid** syntax (` ```mermaid `) whenever drawing diagrams, charts, pipelines, or architectural graphs.
+- **Strict Protection of Agent Skills**: The agent is strictly **FORBIDDEN** from modifying, deleting, overwriting, creating, or running commands that mutate files within `.agents/skills/`, `.agents/`, or `skills-lock.json`. The agent may ONLY read skill files. Any installation, modification, or deletion of skills must be done manually by the user.
 
 ## Build, Test, and Development Commands
+
+- **Centralized Build Outputs**: All ROS packages (whether built from inside or outside the project, e.g. third-party or submodules) MUST always output their build artifacts directly into the project workspace root's `build/`, `install/`, and `log/` directories (`/root/docker_ws/build`, `/root/docker_ws/install`, `/root/docker_ws/log`). Never allow nested or separate `build/`/`install/` directories inside individual package subfolders. Always use `--build-base /root/docker_ws/build --install-base /root/docker_ws/install --log-base /root/docker_ws/log` (or run `colcon build` directly from `/root/docker_ws`).
 
 From the workspace root, source your ROS 2 installation, then use:
 
