@@ -16,8 +16,9 @@ core.*
 deprecated/
 install/
 log/
-scripts/
+/scripts/
 CMakeFiles/
+
 cross_reference/
 zenoh_pi5.json
 so101_camera_calibration
