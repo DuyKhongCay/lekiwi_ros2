@@ -26,12 +26,12 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
         )
         self.dist_coeffs = np.zeros((5, 1), dtype=np.float64)
 
-        # Ground truth tag positions (nominal 0.385m + slight offsets, z variations)
+        # Ground truth tag positions (nominal 0.385m + slight offsets, planar z=0)
         self.gt_tags = {
             1: {"center": [0.0, 0.0, 0.0], "yaw": 0.0},
-            4: {"center": [0.3842, 0.0012, 0.0015], "yaw": 0.005},
-            3: {"center": [0.3838, 0.3845, 0.0008], "yaw": -0.003},
-            6: {"center": [0.0005, 0.3840, 0.0010], "yaw": 0.004},
+            4: {"center": [0.3842, 0.0012, 0.0], "yaw": 0.005},
+            3: {"center": [0.3838, 0.3845, 0.0], "yaw": -0.003},
+            6: {"center": [0.0005, 0.3840, 0.0], "yaw": 0.004},
         }
         self.tag_sz = 0.02
 
@@ -93,12 +93,10 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
 
             frames_dets.append(frame_det)
 
-        z_priors = [0.0, 0.0015, 0.0008, 0.0010]
         solver = ChessboardTagCalibSolver(
             tag_ids=(1, 4, 3, 6),
             tag_sz=self.tag_sz,
             nominal_dist=0.38,
-            z_priors=z_priors,
         )
 
         res = solver.solve(frames_dets, self.cam_mat, self.dist_coeffs)

@@ -8,16 +8,15 @@
     cam_info_path: "package://lekiwi_bringup/config/perception/camera_info/stereo_left.yaml"
 
     # Physical chessboard AprilTag parameters
-    tag_ids: [1, 4, 3, 6]
+    tag_ids: [0, 1, 2, 3]
     tag_names: ["A1", "H1", "H8", "A8"]
-    tag_sz: 0.02
-    nominal_dist: 0.38
-    z_priors: [0.0034, 0.0034, 0.0034, 0.0034]
+    tag_sz: 0.015
+    nominal_dist: 0.39
 
     # Live capture & optimization settings
     min_tags_cnt: 2
     target_caps_cnt: 50
-    auto_cap_interval_sec: 1.0
+    auto_cap_interval_sec: 3.0
 
     # GUI visualizer settings
     window_name: "LeKiwi Chessboard Tag Calibrator"

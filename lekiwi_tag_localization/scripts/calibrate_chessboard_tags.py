@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Chessboard AprilTag Distance & Pose Calibrator for LeKiwi.
-Optimizes 3D tag coordinates (x, y, z) and yaw using multi-view Bundle Adjustment.
+Chessboard AprilTag Distance & Planar Pose Calibrator for LeKiwi.
+Optimizes 2D tag coordinates (x, y) and yaw on the planar board (z=0) using multi-view Bundle Adjustment.
 Standard ROS 2 Node with interactive OpenCV capture and visualization.
 """
 
@@ -31,17 +31,14 @@ except ImportError:
 
 
 class ChessboardTagCalibSolver:
-    """Solves optimal 3D coordinates and orientations for chessboard tags using Bundle Adjustment."""
+    """Solves optimal 2D coordinates (x, y) and yaw for planar chessboard tags using Bundle Adjustment."""
 
-    def __init__(
-        self, tag_ids=(1, 4, 3, 6), tag_sz=0.02, nominal_dist=0.38, z_priors=None
-    ):
+    def __init__(self, tag_ids=(1, 4, 3, 6), tag_sz=0.02, nominal_dist=0.38):
         self.tag_ids = list(tag_ids)
         self.tag_sz = tag_sz
         self.nominal_dist = nominal_dist
-        self.z_priors = list(z_priors) if z_priors is not None else [0.0] * len(tag_ids)
 
-    def _get_local_corners(self, center_pt, sz, yaw_rad):
+    def _get_local_corners(self, center_xy, sz, yaw_rad):
         h = sz / 2.0
         local_pts = np.array(
             [[-h, -h, 0.0], [h, -h, 0.0], [h, h, 0.0], [-h, h, 0.0]], dtype=np.float64
@@ -50,24 +47,22 @@ class ChessboardTagCalibSolver:
         rot_mat = np.array(
             [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64
         )
-        return (rot_mat @ local_pts.T).T + np.array(center_pt, dtype=np.float64)
+        center_3d = np.array([center_xy[0], center_xy[1], 0.0], dtype=np.float64)
+        return (rot_mat @ local_pts.T).T + center_3d
 
     def init_params(self):
         d = self.nominal_dist
-        z = self.z_priors
+        # 9 parameters for tags 1, 2, 3: [x1, y1, yaw1, x2, y2, yaw2, x3, y3, yaw3]
         init_tags = np.array(
             [
                 d,
                 0.0,
-                z[1],
                 0.0,  # Tag 1 (H1)
                 d,
                 d,
-                z[2],
                 0.0,  # Tag 2 (H8)
                 0.0,
                 d,
-                z[3],
                 0.0,  # Tag 3 (A8)
             ],
             dtype=np.float64,
@@ -75,36 +70,30 @@ class ChessboardTagCalibSolver:
 
         lb = np.array(
             [
-                d - 0.05,
-                -0.05,
-                z[1] - 0.005,
-                -math.pi / 4.0,
-                d - 0.05,
-                d - 0.05,
-                z[2] - 0.005,
-                -math.pi / 4.0,
-                -0.05,
-                d - 0.05,
-                z[3] - 0.005,
-                -math.pi / 4.0,
+                d - 0.10,
+                -0.10,
+                -math.pi / 4.0,  # Tag 1 (H1)
+                d - 0.10,
+                d - 0.10,
+                -math.pi / 4.0,  # Tag 2 (H8)
+                -0.10,
+                d - 0.10,
+                -math.pi / 4.0,  # Tag 3 (A8)
             ],
             dtype=np.float64,
         )
 
         ub = np.array(
             [
-                d + 0.05,
-                0.05,
-                z[1] + 0.005,
-                math.pi / 4.0,
-                d + 0.05,
-                d + 0.05,
-                z[2] + 0.005,
-                math.pi / 4.0,
-                0.05,
-                d + 0.05,
-                z[3] + 0.005,
-                math.pi / 4.0,
+                d + 0.10,
+                0.10,
+                math.pi / 4.0,  # Tag 1 (H1)
+                d + 0.10,
+                d + 0.10,
+                math.pi / 4.0,  # Tag 2 (H8)
+                0.10,
+                d + 0.10,
+                math.pi / 4.0,  # Tag 3 (A8)
             ],
             dtype=np.float64,
         )
@@ -113,15 +102,13 @@ class ChessboardTagCalibSolver:
 
     def build_3d_corners(self, tag_params):
         corners_3d = {
-            self.tag_ids[0]: self._get_local_corners(
-                [0.0, 0.0, self.z_priors[0]], self.tag_sz, 0.0
-            )
+            self.tag_ids[0]: self._get_local_corners([0.0, 0.0], self.tag_sz, 0.0)
         }
         for idx in range(1, 4):
-            base = (idx - 1) * 4
-            px, py, pz, yaw = tag_params[base : base + 4]
+            base = (idx - 1) * 3
+            px, py, yaw = tag_params[base : base + 3]
             corners_3d[self.tag_ids[idx]] = self._get_local_corners(
-                [px, py, pz], self.tag_sz, yaw
+                [px, py], self.tag_sz, yaw
             )
         return corners_3d
 
@@ -176,10 +163,10 @@ class ChessboardTagCalibSolver:
         upper_bnds = np.concatenate([ub, np.full(num_cams * 6, np.inf)])
 
         def reproj_residual_func(param_vec):
-            current_3d = self.build_3d_corners(param_vec[:12])
+            current_3d = self.build_3d_corners(param_vec[:9])
             residuals = []
             for k_idx, current_dets in enumerate(valid_frames):
-                c_offset = 12 + k_idx * 6
+                c_offset = 9 + k_idx * 6
                 rvec = param_vec[c_offset : c_offset + 3].reshape(3, 1)
                 tvec = param_vec[c_offset + 3 : c_offset + 6].reshape(3, 1)
                 for tag_id, observed_corners in current_dets.items():
@@ -203,7 +190,7 @@ class ChessboardTagCalibSolver:
             verbose=0,
         )
 
-        opt_tags = res.x[:12]
+        opt_tags = res.x[:9]
         residuals = reproj_residual_func(res.x)
 
         tag_results = {
@@ -211,19 +198,19 @@ class ChessboardTagCalibSolver:
                 "name": "A1",
                 "x": 0.0,
                 "y": 0.0,
-                "z": float(self.z_priors[0]),
+                "z": 0.0,
                 "yaw": 0.0,
             }
         }
         names = ["H1", "H8", "A8"]
         for idx in range(1, 4):
-            b = (idx - 1) * 4
+            b = (idx - 1) * 3
             tag_results[self.tag_ids[idx]] = {
                 "name": names[idx - 1],
                 "x": float(opt_tags[b]),
                 "y": float(opt_tags[b + 1]),
-                "z": float(opt_tags[b + 2]),
-                "yaw": float(opt_tags[b + 3]),
+                "z": 0.0,
+                "yaw": float(opt_tags[b + 2]),
             }
 
         return {
@@ -271,21 +258,21 @@ def save_to_chessboard_yaml(res_data, target_file):
         config = yaml.safe_load(f)
 
     tags = res_data["tags"]
-    tag_ids = [1, 4, 3, 6]
+    tag_ids = list(tags.keys())
     coords = {
-        tid: np.array([tags[tid]["x"], tags[tid]["y"], tags[tid]["z"]])
+        tid: np.array([tags[tid]["x"], tags[tid]["y"]])
         for tid in tag_ids
     }
 
-    d_a1_h1 = np.linalg.norm(coords[4] - coords[1])
-    d_a1_a8 = np.linalg.norm(coords[6] - coords[1])
+    d_a1_h1 = np.linalg.norm(coords[tag_ids[1]] - coords[tag_ids[0]])
+    d_a1_a8 = np.linalg.norm(coords[tag_ids[3]] - coords[tag_ids[0]])
     avg_dist = round(float((d_a1_h1 + d_a1_a8) / 2.0), 4)
 
     params = config["/**"]["ros__parameters"]
     params["tag_distance"] = avg_dist
     params["tags"]["positions_x"] = [round(tags[tid]["x"], 4) for tid in tag_ids]
     params["tags"]["positions_y"] = [round(tags[tid]["y"], 4) for tid in tag_ids]
-    params["tags"]["positions_z"] = [round(tags[tid]["z"], 4) for tid in tag_ids]
+    params["tags"]["positions_z"] = [0.0, 0.0, 0.0, 0.0]
     params["tags"]["yaws"] = [round(tags[tid]["yaw"], 4) for tid in tag_ids]
 
     with open(resolved, "w", encoding="utf-8") as f:
@@ -295,7 +282,7 @@ def save_to_chessboard_yaml(res_data, target_file):
 
 
 class ChessboardTagCalibratorNode(Node):
-    """ROS 2 Node providing interactive multi-view capture and Bundle Adjustment calibration."""
+    """ROS 2 Node providing interactive multi-view capture and planar Bundle Adjustment calibration."""
 
     def __init__(self):
         super().__init__("chessboard_tag_calibrator")
@@ -309,7 +296,6 @@ class ChessboardTagCalibratorNode(Node):
             "tag_names": ["A1", "H1", "H8", "A8"],
             "tag_sz": 0.02,
             "nominal_dist": 0.38,
-            "z_priors": [0.0, 0.0, 0.0, 0.0],
             "min_tags_cnt": 2,
             "target_caps_cnt": 50,
             "auto_cap_interval_sec": 1.0,
@@ -332,7 +318,6 @@ class ChessboardTagCalibratorNode(Node):
             tag_ids=self.tag_ids,
             tag_sz=self.tag_sz,
             nominal_dist=self.nominal_dist,
-            z_priors=self.z_priors,
         )
 
         # Internal state
@@ -367,7 +352,7 @@ class ChessboardTagCalibratorNode(Node):
             f"Calibrator listening to {self.img_topic} & {self.tag_dets_topic}"
         )
 
-        # GUI timer running at ~30 Hz (Default GUI enabled, library handles any display error)
+        # GUI timer running at ~30 Hz
         self.gui_timer = self.create_timer(0.033, self._gui_timer_cb)
 
     def _img_cb(self, msg):
@@ -403,10 +388,14 @@ class ChessboardTagCalibratorNode(Node):
             if now - self.last_auto_cap_time >= self.auto_cap_interval_sec:
                 if len(self.captured_frames) >= self.target_caps_cnt:
                     self.auto_cap_enabled = False
-                    self.notification_msg = f"Auto-cap done: {self.target_caps_cnt} frames"
+                    self.notification_msg = (
+                        f"Auto-cap done: {self.target_caps_cnt} frames"
+                    )
                     self.notification_color = (0, 255, 255)
                     self.notification_time = now
-                    self.get_logger().info(f"Target sample count ({self.target_caps_cnt}) reached.")
+                    self.get_logger().info(
+                        f"Target sample count ({self.target_caps_cnt}) reached."
+                    )
                 elif (
                     sum(1 for tid in self.tag_ids if tid in tag_map)
                     >= self.min_tags_cnt
@@ -422,14 +411,18 @@ class ChessboardTagCalibratorNode(Node):
         }
         if len(valid) >= self.min_tags_cnt:
             self.captured_frames.append(valid)
-            self.notification_msg = f"Captured #{len(self.captured_frames)} ({len(valid)} tags)"
+            self.notification_msg = (
+                f"Captured #{len(self.captured_frames)} ({len(valid)} tags)"
+            )
             self.notification_color = (0, 255, 0)
             self.notification_time = time.time()
             self.get_logger().info(
                 f"[CAPTURE] Added frame #{len(self.captured_frames)} with {len(valid)} tags"
             )
             return True
-        self.notification_msg = f"Failed: need >= {self.min_tags_cnt} tags (have {len(valid)})"
+        self.notification_msg = (
+            f"Failed: need >= {self.min_tags_cnt} tags (have {len(valid)})"
+        )
         self.notification_color = (0, 100, 255)
         self.notification_time = time.time()
         self.get_logger().warn(
@@ -448,7 +441,7 @@ class ChessboardTagCalibratorNode(Node):
             return
 
         self.get_logger().info(
-            f"Solving Bundle Adjustment on {len(self.captured_frames)} frames..."
+            f"Solving Planar Bundle Adjustment on {len(self.captured_frames)} frames..."
         )
         try:
             res = self.solver.solve(
@@ -460,30 +453,36 @@ class ChessboardTagCalibratorNode(Node):
             self.get_logger().error(f"Optimization failed: {e}")
 
     def _print_calib_report(self, res):
-        print("\n" + "=" * 64 + "\n          CALIBRATION RESULTS REPORT\n" + "=" * 64)
+        print("\n" + "=" * 60 + "\n          PLANAR CALIBRATION RESULTS REPORT\n" + "=" * 60)
         print(
             f"Frames: {res['num_frames']} | Mean Error: {res['mean_err']:.4f}px | RMS Error: {res['rms_err']:.4f}px\n"
         )
         tags = res["tags"]
-        print("ID | Name |    X (m)   |    Y (m)   |    Z (m)   |  Yaw (deg)")
-        print("-" * 64)
+        print("ID | Name |    X (m)   |    Y (m)   |  Yaw (deg)")
+        print("-" * 50)
         for tid in self.tag_ids:
             if tid in tags:
                 t = tags[tid]
                 print(
-                    f"{tid:2d} | {t['name']:4s} | {t['x']:10.4f} | {t['y']:10.4f} | {t['z']:10.4f} | {math.degrees(t['yaw']):9.2f}"
+                    f"{tid:2d} | {t['name']:4s} | {t['x']:10.4f} | {t['y']:10.4f} | {math.degrees(t['yaw']):9.2f}"
                 )
 
         coords = {
-            tid: np.array([tags[tid]["x"], tags[tid]["y"], tags[tid]["z"]])
+            tid: np.array([tags[tid]["x"], tags[tid]["y"]])
             for tid in self.tag_ids
         }
-        edges = [("A1->H1", 1, 4), ("H1->H8", 4, 3), ("H8->A8", 3, 6), ("A8->A1", 6, 1)]
-        print("\nCorner Distances:")
+        t0, t1, t2, t3 = self.tag_ids[0], self.tag_ids[1], self.tag_ids[2], self.tag_ids[3]
+        edges = [
+            ("A1->H1", t0, t1),
+            ("H1->H8", t1, t2),
+            ("H8->A8", t2, t3),
+            ("A8->A1", t3, t0),
+        ]
+        print("\nCorner Distances (Planar 2D):")
         for label, u, v in edges:
             dist = np.linalg.norm(coords[u] - coords[v])
             print(f"  - {label:6s}: {dist * 1000.0:6.2f} mm ({dist:.4f} m)")
-        print("=" * 64 + "\n")
+        print("=" * 60 + "\n")
 
     def save_calibration(self):
         if self.calib_res is None:
@@ -544,12 +543,13 @@ class ChessboardTagCalibratorNode(Node):
             )
 
         # Draw perimeter lines
-        for t1, t2 in [(1, 4), (4, 3), (3, 6), (6, 1)]:
-            if t1 in tag_centers and t2 in tag_centers:
+        t0, t1, t2, t3 = self.tag_ids[0], self.tag_ids[1], self.tag_ids[2], self.tag_ids[3]
+        for u, v in [(t0, t1), (t1, t2), (t2, t3), (t3, t0)]:
+            if u in tag_centers and v in tag_centers:
                 cv2.line(
                     canvas,
-                    tag_centers[t1],
-                    tag_centers[t2],
+                    tag_centers[u],
+                    tag_centers[v],
                     (255, 200, 0),
                     1,
                     cv2.LINE_AA,
@@ -655,7 +655,6 @@ class ChessboardTagCalibratorNode(Node):
         elif key in (ord("q"), ord("Q"), 27):  # Q or ESC
             cv2.destroyAllWindows()
             rclpy.shutdown()
-
 
 
 def main(args=None):
