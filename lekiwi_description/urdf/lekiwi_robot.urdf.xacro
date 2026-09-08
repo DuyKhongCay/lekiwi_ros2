@@ -12,7 +12,7 @@
   <xacro:arg name="imu_auto_calibrate_gyro" default="true"/>
   <xacro:arg name="imu_gyro_calib_samples" default="500"/>
 
-  <xacro:arg name="camera_calib_file" default="$(find lekiwi_description)/calib/handeye_calib_stereo_left.yaml"/>
+  <xacro:arg name="camera_calib_file" default="$(find lekiwi_description)/config/calibration/handeye_calib_stereo_left.yaml"/>
 
   <!-- Keep the CAD-generated kinematic model separate from control metadata. -->
   <xacro:include filename="$(find lekiwi_description)/urdf/duykhongcay_lekiwi.urdf"/>

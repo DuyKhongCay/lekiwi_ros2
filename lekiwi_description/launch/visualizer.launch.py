@@ -13,28 +13,21 @@
 # limitations under the License.
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
-from launch.substitutions import (
-    Command,
-    LaunchConfiguration,
-    PathJoinSubstitution,
-)
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # Generate launch description for LeKiwi visualizer tools on host PC.
-    visualizer_share = FindPackageShare("lekiwi_visualizer")
+    """Launch RViz2 visualizer with optional description and joint_state_publisher_gui."""
     description_share = FindPackageShare("lekiwi_description")
 
     default_rviz_config = PathJoinSubstitution(
-        [visualizer_share, "config", "rviz", "lekiwi_full.rviz"]
-    )
-    xacro_file = PathJoinSubstitution(
-        [description_share, "urdf", "lekiwi_robot.urdf.xacro"]
+        [description_share, "config", "rviz", "lekiwi_full.rviz"]
     )
 
     declared_arguments = [
@@ -49,24 +42,52 @@ def generate_launch_description():
             description="Use simulation clock if true.",
         ),
         DeclareLaunchArgument(
+            "gui",
+            default_value="false",
+            description="Run joint_state_publisher_gui for offline model inspection.",
+        ),
+        DeclareLaunchArgument(
             "publish_robot_state",
             default_value="true",
-            description=(
-                "Run robot_state_publisher on host PC if robot SBC only"
-                " publishes joint_states."
-            ),
+            description="Launch robot_state_publisher via description.launch.py if true.",
+        ),
+        DeclareLaunchArgument(
+            "hardware_type",
+            default_value="mock",
+            description="Hardware interface type: real or mock.",
+        ),
+        DeclareLaunchArgument(
+            "imu_hardware_type",
+            default_value="mock",
+            description="IMU hardware interface type: real or mock.",
         ),
     ]
 
     rviz_config = LaunchConfiguration("rviz_config")
     use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
     publish_robot_state = LaunchConfiguration("publish_robot_state")
+    gui = LaunchConfiguration("gui")
 
-    robot_description_content = ParameterValue(
-        Command(["xacro ", xacro_file]),
-        value_type=str,
+    description_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([description_share, "launch", "description.launch.py"])
+        ),
+        launch_arguments={
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "hardware_type": LaunchConfiguration("hardware_type"),
+            "imu_hardware_type": LaunchConfiguration("imu_hardware_type"),
+        }.items(),
+        condition=IfCondition(publish_robot_state),
     )
-    robot_description = {"robot_description": robot_description_content}
+
+    jsp_gui_node = Node(
+        package="joint_state_publisher_gui",
+        executable="joint_state_publisher_gui",
+        name="joint_state_publisher_gui",
+        output="screen",
+        parameters=[{"use_sim_time": use_sim_time}],
+        condition=IfCondition(gui),
+    )
 
     rviz_node = Node(
         package="rviz2",
@@ -75,30 +96,16 @@ def generate_launch_description():
         output="screen",
         arguments=["-d", rviz_config],
         parameters=[
-            robot_description,
             {"use_sim_time": use_sim_time},
         ],
     )
 
-    rsp_node = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        name="robot_state_publisher",
-        output="screen",
-        parameters=[
-            robot_description,
-            {
-                "use_sim_time": use_sim_time,
-                "publish_frequency": 50.0,
-            },
-        ],
-        condition=IfCondition(publish_robot_state),
-    )
-	ros-jazzy-rqt-plot
     return LaunchDescription(
         [
             *declared_arguments,
+            description_launch,
+            jsp_gui_node,
             rviz_node,
-            rsp_node,
         ]
     )
+

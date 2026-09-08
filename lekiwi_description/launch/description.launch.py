@@ -13,36 +13,25 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
-import os
-from ament_index_python.packages import (
-    get_package_share_directory,
-    PackageNotFoundError,
-)
-
-
 def generate_launch_description():
     """Publish the robot model (URDF/xacro) and robot_state_publisher."""
-    try:
-        bringup_share = get_package_share_directory("lekiwi_bringup")
-        default_joint_config = os.path.join(
-            bringup_share, "config", "servos", "lekiwi_arm_calib.yaml"
-        )
-    except PackageNotFoundError:
-        default_joint_config = ""
     description_share = FindPackageShare("lekiwi_description")
     xacro_file = PathJoinSubstitution(
         [description_share, "urdf", "lekiwi_robot.urdf.xacro"]
+    )
+    default_joint_config = PathJoinSubstitution(
+        [description_share, "config", "calibration", "sts3215_servos_calib.yaml"]
     )
 
     declared_arguments = [
         DeclareLaunchArgument(
             "hardware_type",
-            default_value="mock",
+            default_value="true",
             description="Hardware type: real or mock",
         ),
         DeclareLaunchArgument(
             "imu_hardware_type",
-            default_value="mock",
+            default_value="true",
             description="IMU hardware type: real or mock",
         ),
         DeclareLaunchArgument(
@@ -57,37 +46,21 @@ def generate_launch_description():
         ),
     ]
 
-    # Fallback to pure CAD URDF if xacro command is not installed in current environment
-    urdf_raw_file = PathJoinSubstitution(
-        [description_share, "urdf", "duykhongcay_lekiwi.urdf"]
+    robot_description_content = ParameterValue(
+        Command(
+            [
+                "xacro ",
+                xacro_file,
+                " hardware_type:=",
+                LaunchConfiguration("hardware_type"),
+                " imu_hardware_type:=",
+                LaunchConfiguration("imu_hardware_type"),
+                " joint_config_file:=",
+                LaunchConfiguration("joint_config_file"),
+            ]
+        ),
+        value_type=str,
     )
-
-    import shutil
-
-    has_xacro = shutil.which("xacro") is not None
-
-    if has_xacro:
-        robot_description_content = ParameterValue(
-            Command(
-                [
-                    "xacro ",
-                    xacro_file,
-                    " hardware_type:=",
-                    LaunchConfiguration("hardware_type"),
-                    " imu_hardware_type:=",
-                    LaunchConfiguration("imu_hardware_type"),
-                    " joint_config_file:=",
-                    LaunchConfiguration("joint_config_file"),
-                ]
-            ),
-            value_type=str,
-        )
-    else:
-        robot_description_content = ParameterValue(
-            Command(["cat ", urdf_raw_file]),
-            value_type=str,
-        )
-
     robot_description = {"robot_description": robot_description_content}
 
     rsp_node = Node(
@@ -112,3 +85,4 @@ def generate_launch_description():
             rsp_node,
         ]
     )
+
