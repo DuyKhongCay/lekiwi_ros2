@@ -1,37 +1,44 @@
 /**
  * @file chessboard_pose_estimator.hpp
- * @brief AprilTag-based chessboard pose estimation, TF broadcasting, and orientation mapping.
+ * @brief Direct AprilTag/Aruco chessboard pose estimation, TF broadcasting, and map anchor locking.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
  */
 
-#ifndef LEKIWI_TAG_LOCALIZATION__CHESSBOARD_POSE_ESTIMATOR_HPP_
-#define LEKIWI_TAG_LOCALIZATION__CHESSBOARD_POSE_ESTIMATOR_HPP_
+#ifndef APRILTAG_LOCALIZER__CHESSBOARD_POSE_ESTIMATOR_HPP_
+#define APRILTAG_LOCALIZER__CHESSBOARD_POSE_ESTIMATOR_HPP_
 
-#include <memory>
+#include <atomic>
+#include <chrono>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
-#include <opencv2/opencv.hpp>
+#include <opencv2/aruco.hpp>
 #include <opencv2/calib3d.hpp>
+#include <opencv2/opencv.hpp>
 
-#include "rclcpp/rclcpp.hpp"
+#include "cv_bridge/cv_bridge.hpp"
 #include "apriltag_msgs/msg/april_tag_detection_array.hpp"
-#include "sensor_msgs/msg/camera_info.hpp"
-#include "std_srvs/srv/trigger.hpp"
+#include "diagnostic_updater/diagnostic_updater.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
-#include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "lekiwi_interfaces/msg/camera_mode.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
+#include "sensor_msgs/msg/image.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 #include "tf2/LinearMath/Transform.hpp"
-#include "tf2_ros/transform_broadcaster.h"
-#include "tf2_ros/static_transform_broadcaster.h"
 #include "tf2_ros/buffer.h"
+#include "tf2_ros/static_transform_broadcaster.h"
+#include "tf2_ros/transform_broadcaster.h"
 #include "tf2_ros/transform_listener.h"
 
-namespace lekiwi_tag_localization
+namespace apriltag_localizer
 {
 
   /**
@@ -57,30 +64,32 @@ namespace lekiwi_tag_localization
      * @param[in] center 3D center in chessboard_frame.
      * @param[in] size Edge length in meters (e.g. 0.02).
      * @param[in] yaw_rad In-plane rotation around Z axis in radians. Default is 0.0.
-     * @return 4 3D points ordered CCW: bottom-left, bottom-right, top-right, top-left.
+     * @return 4 3D points ordered CCW matching ArUco: top-left, top-right, bottom-right, bottom-left.
      */
     static std::vector<cv::Point3d> compute_tag_corners(
         const cv::Point3d &center, double size, double yaw_rad = 0.0);
 
     /**
-     * @brief Estimates chessboard pose T_cam^board using Single-Tag or Multi-Tag PnP.
-     * @param[in] detections Array of detected AprilTags with 2D corner positions.
+     * @brief Estimates chessboard pose T_cam^board from detected tag corners and IDs.
+     * @param[in] marker_corners Detected 2D marker corners from ArucoDetector.
+     * @param[in] marker_ids Detected marker IDs.
      * @param[in] tag_configs Map of configured tags with their fixed 3D layout on the board.
-     * @param[in] camera_matrix 3x3 intrinsic camera matrix.
+     * @param[in] camera_mat 3x3 intrinsic camera matrix.
      * @param[in] dist_coeffs Camera distortion coefficients vector.
      * @param[out] rvec 3x1 Rodrigues rotation vector of the board in camera optical frame.
      * @param[out] tvec 3x1 translation vector of the board in camera optical frame.
-     * @param[out] used_tags_count Number of valid board tags used in PnP estimation.
+     * @param[out] used_tags_cnt Number of valid board tags used in PnP estimation.
      * @return True if pose estimation succeeds and satisfies validity constraints, false otherwise.
      */
     static bool estimate_board_pose(
-        const std::vector<apriltag_msgs::msg::AprilTagDetection> &detections,
+        const std::vector<std::vector<cv::Point2f>> &marker_corners,
+        const std::vector<int> &marker_ids,
         const std::map<int, TagConfig> &tag_configs,
-        const cv::Mat &camera_matrix,
+        const cv::Mat &camera_mat,
         const cv::Mat &dist_coeffs,
         cv::Mat &rvec,
         cv::Mat &tvec,
-        int &used_tags_count);
+        int &used_tags_cnt);
 
     /**
      * @brief Computes T_cam^board from a single tag's T_cam^tag using T_cam^board = T_cam^tag * (T_board^tag)^-1.
@@ -98,24 +107,10 @@ namespace lekiwi_tag_localization
         double tag_yaw_board,
         cv::Mat &rvec_board,
         cv::Mat &tvec_board);
-
-    /**
-     * @brief Generates a Keepout Polygon around the chessboard with safety margin.
-     * @param[in] frame_id TF frame ID for the header (typically chessboard_frame).
-     * @param[in] stamp Timestamp for the polygon header.
-     * @param[in] board_size Physical side length of the chessboard in meters. Default is 0.38.
-     * @param[in] margin Safety buffer distance around the board perimeter in meters. Default is 0.035.
-     * @return PolygonStamped message representing the bounding keepout area for Nav2 costmap.
-     */
-    static geometry_msgs::msg::PolygonStamped create_keepout_polygon(
-        const std::string &frame_id,
-        const rclcpp::Time &stamp,
-        double board_size = 0.38,
-        double margin = 0.035);
   };
 
   /**
-   * @brief ROS 2 Node that consumes AprilTag detections, publishes poses, TFs, orientation, and costmap polygon.
+   * @brief ROS 2 Node that detects AprilTags in images, publishes robot poses, TFs, and diagnostics.
    */
   class ChessboardPoseEstimator : public rclcpp::Node
   {
@@ -133,9 +128,14 @@ namespace lekiwi_tag_localization
 
   private:
     /**
-     * @brief Declares and loads ROS parameters for tag layouts, frame IDs, and keepout margins.
+     * @brief Declares and loads ROS parameters for tag layouts and frame IDs.
      */
     void load_parameters();
+
+    /**
+     * @brief Initializes OpenCV Aruco detector dictionary and parameters.
+     */
+    void init_detector();
 
     /**
      * @brief Callback invoked when camera calibration info arrives.
@@ -144,10 +144,16 @@ namespace lekiwi_tag_localization
     void on_camera_info(const sensor_msgs::msg::CameraInfo::ConstSharedPtr &msg);
 
     /**
-     * @brief Callback invoked when AprilTag detections are published.
-     * @param[in] msg Const shared pointer to AprilTagDetectionArray message.
+     * @brief Callback invoked when camera mode changes.
+     * @param[in] msg Const shared pointer to CameraMode message.
      */
-    void on_tag_detections(const apriltag_msgs::msg::AprilTagDetectionArray::ConstSharedPtr &msg);
+    void on_camera_mode(const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg);
+
+    /**
+     * @brief Callback invoked when a camera image frame arrives.
+     * @param[in] msg Const shared pointer to Image message.
+     */
+    void on_image(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
 
     /**
      * @brief Service callback to lock the map->odom anchor transform from the latest tag detection.
@@ -164,26 +170,30 @@ namespace lekiwi_tag_localization
         std::shared_ptr<std_srvs::srv::Trigger::Response> response);
 
     /**
-     * @brief Timer callback that publishes the keepout costmap polygon and static TF transform.
+     * @brief Periodic timer callback that broadcasts static TF and map->odom transform if anchored.
      */
-    void publish_keepout_and_static_tf();
+    void publish_static_and_anchor_tf();
+
+    /**
+     * @brief Populates diagnostics status with framerate, latency, tag health, and anchor state.
+     * @param[out] stat Diagnostics status wrapper to populate.
+     */
+    void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
 
     // Node Parameters
-    std::string tag_family_{"36h11"};
+    bool calib_{false};
+    std::string tag_family_{"16h5"};
     double tag_size_{0.02};
-    double tag_distance_{0.38};
+    double detection_rate_hz_{2.0};
     std::string map_frame_{"map"};
     std::string odom_frame_{"odom"};
     std::string chessboard_frame_{"chessboard_frame"};
     std::string camera_frame_{"stereo_left_optical"};
     std::string base_frame_{"base_link"};
-    std::vector<double> chessboard_pose_in_map_{1.0, 0.0, 0.75, 0.0, 0.0, 0.0};
+    std::vector<double> chessboard_pose_in_map_{0.0, 0.0, 0.004, 0.0, 0.0, 0.0};
     bool publish_tf_{true};
     bool publish_map_to_chessboard_{true};
-    bool publish_camera_to_board_{true};
     bool publish_map_to_odom_{true};
-    double keepout_margin_{0.035};
-    double keepout_rate_{2.0};
 
     // Calibration & Config
     std::map<int, TagConfig> tag_configs_;
@@ -191,13 +201,17 @@ namespace lekiwi_tag_localization
     cv::Mat dist_coeffs_;
     bool has_camera_info_{false};
 
+    // OpenCV Aruco Detector
+    cv::Ptr<cv::aruco::Dictionary> aruco_dict_;
+    cv::Ptr<cv::aruco::DetectorParameters> aruco_params_;
+
     // ROS 2 Interfaces
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
-    rclcpp::Subscription<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_detections_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+    rclcpp::Subscription<lekiwi_interfaces::msg::CameraMode>::SharedPtr camera_mode_sub_;
 
-    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr board_pose_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr robot_pose_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr costmap_polygon_pub_;
+    rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_detections_pub_;
 
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr lock_anchor_srv_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_anchor_srv_;
@@ -207,7 +221,11 @@ namespace lekiwi_tag_localization
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-    rclcpp::TimerBase::SharedPtr keepout_timer_;
+    rclcpp::TimerBase::SharedPtr tf_timer_;
+
+    // State gating & execution control
+    uint8_t current_camera_mode_{lekiwi_interfaces::msg::CameraMode::STANDBY};
+    rclcpp::Time last_detection_time_{0, 0, RCL_ROS_TIME};
 
     // Anchor lock state
     bool is_anchored_{false};
@@ -216,12 +234,26 @@ namespace lekiwi_tag_localization
     tf2::Transform latest_T_map_base_;
     rclcpp::Time latest_detection_stamp_;
 
-    // Last known poses for smoothing / initial guess
+    // Last known poses
     cv::Mat last_rvec_;
     cv::Mat last_tvec_;
     bool has_last_pose_{false};
+
+    // Diagnostics & Telemetry
+    diagnostic_updater::Updater diagnostic_updater_{this};
+    std::atomic<double> last_e2e_latency_ms_{0.0};
+    std::atomic<double> last_process_time_ms_{0.0};
+    std::atomic<float> current_fps_{0.0F};
+    std::atomic<uint64_t> frame_counter_{0};
+    std::chrono::steady_clock::time_point last_fps_time_;
+    uint64_t last_fps_frame_count_{0};
+    std::atomic<int> last_detected_tags_count_{0};
+    std::atomic<int> last_used_tags_count_{0};
+    std::mutex diag_mutex_;
+    std::string last_detected_tag_ids_str_{"None"};
+    std::string last_diag_error_;
   };
 
-} // namespace lekiwi_tag_localization
+} // namespace apriltag_localizer
 
-#endif // LEKIWI_TAG_LOCALIZATION__CHESSBOARD_POSE_ESTIMATOR_HPP_
+#endif // APRILTAG_LOCALIZER__CHESSBOARD_POSE_ESTIMATOR_HPP_

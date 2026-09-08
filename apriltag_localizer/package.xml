@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>lekiwi_tag_localization</name>
+  <name>apriltag_localizer</name>
   <version>0.1.0</version>
-  <description>AprilTag (36h11) localization, chessboard pose estimation, TF broadcasting, Nav2 keepout, and board orientation mapper for LeKiwi</description>
+  <description>AprilTag (36h11/16h5) localization, chessboard pose estimation, and TF broadcasting for LeKiwi</description>
   <maintainer email="duykhongcay@lekiwi.labs">DuyKhongCay</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,18 +11,19 @@
 
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
+  <depend>diagnostic_updater</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
-  <depend>apriltag_msgs</depend>
+  <depend>lekiwi_interfaces</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>image_geometry</depend>
+  <depend>apriltag_msgs</depend>
   <exec_depend>rclpy</exec_depend>
-
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_lint_auto</test_depend>

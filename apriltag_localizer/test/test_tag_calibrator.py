@@ -26,12 +26,12 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
         )
         self.dist_coeffs = np.zeros((5, 1), dtype=np.float64)
 
-        # Ground truth tag positions (nominal 0.385m + slight offsets, planar z=0)
+        # Ground truth tag positions (nominal 0.385m + slight offsets, z variations)
         self.gt_tags = {
             1: {"center": [0.0, 0.0, 0.0], "yaw": 0.0},
-            4: {"center": [0.3842, 0.0012, 0.0], "yaw": 0.005},
-            3: {"center": [0.3838, 0.3845, 0.0], "yaw": -0.003},
-            6: {"center": [0.0005, 0.3840, 0.0], "yaw": 0.004},
+            4: {"center": [0.3842, 0.0012, 0.0015], "yaw": 0.005},
+            3: {"center": [0.3838, 0.3845, 0.0008], "yaw": -0.003},
+            6: {"center": [0.0005, 0.3840, 0.0010], "yaw": 0.004},
         }
         self.tag_sz = 0.02
 
@@ -97,6 +97,7 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
             tag_ids=(1, 4, 3, 6),
             tag_sz=self.tag_sz,
             nominal_dist=0.38,
+            z_height=0.0,
         )
 
         res = solver.solve(frames_dets, self.cam_mat, self.dist_coeffs)
@@ -122,6 +123,50 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
         self.assertAlmostEqual(
             recovered_h8["y"], 0.3845, delta=0.002, msg="H8 Y recovered within 2mm"
         )
+
+    def test_save_to_chessboard_yaml(self):
+        import tempfile
+        import yaml
+        from calibrate_chessboard_tags import save_to_chessboard_yaml
+
+        # Test saving calibration results with arbitrary tag IDs
+        calib_res = {
+            "tags": {
+                0: {"name": "A1", "x": 0.0, "y": 0.0, "z": 0.004, "yaw": 0.0},
+                1: {"name": "H1", "x": 0.39, "y": 0.0, "z": 0.004, "yaw": 0.0},
+                2: {"name": "H8", "x": 0.39, "y": 0.39, "z": 0.004, "yaw": 0.0},
+                3: {"name": "A8", "x": 0.0, "y": 0.39, "z": 0.004, "yaw": 0.0},
+            }
+        }
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml", delete=False) as tf:
+            temp_path = tf.name
+            init_content = {
+                "/**": {
+                    "ros__parameters": {
+                        "tag_distance": 0.38,
+                        "tags": {
+                            "ids": [0, 1, 2, 3],
+                            "positions_x": [0.0, 0.0, 0.0, 0.0],
+                            "positions_y": [0.0, 0.0, 0.0, 0.0],
+                            "positions_z": [0.0, 0.0, 0.0, 0.0],
+                            "yaws": [0.0, 0.0, 0.0, 0.0],
+                        },
+                    }
+                }
+            }
+            yaml.dump(init_content, tf)
+
+        try:
+            save_to_chessboard_yaml(calib_res, temp_path, tag_ids=[0, 1, 2, 3])
+            with open(temp_path, "r") as f:
+                saved = yaml.safe_load(f)["/**"]["ros__parameters"]
+            self.assertEqual(saved["tags"]["ids"], [0, 1, 2, 3])
+            self.assertEqual(saved["tags"]["positions_x"], [0.0, 0.39, 0.39, 0.0])
+            self.assertEqual(saved["tags"]["positions_y"], [0.0, 0.0, 0.39, 0.39])
+            self.assertEqual(saved["tag_distance"], 0.39)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
 
 if __name__ == "__main__":

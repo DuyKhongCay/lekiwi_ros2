@@ -6,16 +6,16 @@
  * @copyright Apache-2.0
  */
 
-#include <gtest/gtest.h>
 #include <cmath>
 #include <vector>
+#include <gtest/gtest.h>
 
-#include <opencv2/opencv.hpp>
 #include <opencv2/calib3d.hpp>
+#include <opencv2/opencv.hpp>
 
-#include "lekiwi_tag_localization/chessboard_pose_estimator.hpp"
+#include "apriltag_localizer/chessboard_pose_estimator.hpp"
 
-using namespace lekiwi_tag_localization;
+using namespace apriltag_localizer;
 
 TEST(PoseSolverTest, TagCornersComputation)
 {
@@ -47,10 +47,10 @@ TEST(PoseSolverTest, SingleTagMathematicalIdentity)
 {
   // Test T_cam^board = T_cam^tag * (T_board^tag)^-1 for all 4 tags
   const std::vector<std::pair<int, cv::Point3d>> tags = {
-      {1, cv::Point3d(0.00, 0.00, 0.0)},
-      {4, cv::Point3d(0.38, 0.00, 0.0)},
-      {3, cv::Point3d(0.38, 0.38, 0.0)},
-      {6, cv::Point3d(0.00, 0.38, 0.0)}};
+      {0, cv::Point3d(0.00, 0.00, 0.0)},
+      {1, cv::Point3d(0.38, 0.00, 0.0)},
+      {2, cv::Point3d(0.38, 0.38, 0.0)},
+      {3, cv::Point3d(0.00, 0.38, 0.0)}};
 
   // Known ground truth camera-to-board pose
   cv::Mat rvec_gt = (cv::Mat_<double>(3, 1) << 0.1, -0.2, 0.05);
@@ -101,12 +101,6 @@ TEST(PoseSolverTest, SingleTagAndMultiTagPnPAccuracy)
   const cv::Mat dist_coeffs = cv::Mat::zeros(5, 1, CV_64F);
 
   // True board pose: camera at (0.19, 0.19, 0.6) looking straight down at board
-  // In optical frame: +Z is optical axis forward, +X right, +Y down
-  // Let board +X align with camera +X, board +Y align with camera -Y, board +Z with camera -Z
-  // Rotation matrix:
-  // [ 1  0  0 ]
-  // [ 0 -1  0 ]
-  // [ 0  0 -1 ]
   cv::Mat R_gt = (cv::Mat_<double>(3, 3) << 1.0, 0.0, 0.0,
                   0.0, -1.0, 0.0,
                   0.0, 0.0, -1.0);
@@ -117,10 +111,10 @@ TEST(PoseSolverTest, SingleTagAndMultiTagPnPAccuracy)
   // Setup tag configs for 4 tags
   std::map<int, TagConfig> tag_configs;
   const std::vector<std::pair<int, cv::Point3d>> tags = {
-      {1, cv::Point3d(0.00, 0.00, 0.0)},
-      {4, cv::Point3d(0.38, 0.00, 0.0)},
-      {3, cv::Point3d(0.38, 0.38, 0.0)},
-      {6, cv::Point3d(0.00, 0.38, 0.0)}};
+      {0, cv::Point3d(0.00, 0.00, 0.0)},
+      {1, cv::Point3d(0.38, 0.00, 0.0)},
+      {2, cv::Point3d(0.38, 0.38, 0.0)},
+      {3, cv::Point3d(0.00, 0.38, 0.0)}};
   for (const auto &t : tags)
   {
     TagConfig cfg;
@@ -131,31 +125,33 @@ TEST(PoseSolverTest, SingleTagAndMultiTagPnPAccuracy)
     tag_configs[cfg.id] = cfg;
   }
 
-  // Generate synthetic 2D detections
-  std::vector<apriltag_msgs::msg::AprilTagDetection> detections;
+  // Generate synthetic 2D marker detections
+  std::vector<std::vector<cv::Point2f>> marker_corners;
+  std::vector<int> marker_ids;
   for (const auto &t : tags)
   {
-    apriltag_msgs::msg::AprilTagDetection det;
-    det.id = t.first;
     const auto &corners_3d = tag_configs[t.first].corners_board;
     std::vector<cv::Point2d> projected;
     cv::projectPoints(corners_3d, rvec_gt, tvec_gt, camera_matrix, dist_coeffs, projected);
-    for (size_t i = 0; i < 4U; ++i)
+
+    std::vector<cv::Point2f> tag_corners_2f;
+    for (const auto &pt : projected)
     {
-      det.corners[i].x = projected[i].x;
-      det.corners[i].y = projected[i].y;
+      tag_corners_2f.emplace_back(static_cast<float>(pt.x), static_cast<float>(pt.y));
     }
-    detections.push_back(det);
+    marker_corners.push_back(tag_corners_2f);
+    marker_ids.push_back(t.first);
   }
 
   // 1. Test Single-Tag detection for each individual tag
-  for (size_t i = 0; i < detections.size(); ++i)
+  for (size_t i = 0; i < marker_ids.size(); ++i)
   {
-    std::vector<apriltag_msgs::msg::AprilTagDetection> single_det = {detections[i]};
+    std::vector<std::vector<cv::Point2f>> single_corners = {marker_corners[i]};
+    std::vector<int> single_ids = {marker_ids[i]};
     cv::Mat rvec_est, tvec_est;
     int used_tags = 0;
     const bool ok = PoseSolver::estimate_board_pose(
-        single_det, tag_configs, camera_matrix, dist_coeffs, rvec_est, tvec_est, used_tags);
+        single_corners, single_ids, tag_configs, camera_matrix, dist_coeffs, rvec_est, tvec_est, used_tags);
 
     EXPECT_TRUE(ok);
     EXPECT_EQ(used_tags, 1);
@@ -169,7 +165,7 @@ TEST(PoseSolverTest, SingleTagAndMultiTagPnPAccuracy)
     cv::Mat rvec_est, tvec_est;
     int used_tags = 0;
     const bool ok = PoseSolver::estimate_board_pose(
-        detections, tag_configs, camera_matrix, dist_coeffs, rvec_est, tvec_est, used_tags);
+        marker_corners, marker_ids, tag_configs, camera_matrix, dist_coeffs, rvec_est, tvec_est, used_tags);
 
     EXPECT_TRUE(ok);
     EXPECT_EQ(used_tags, 4);
@@ -177,24 +173,4 @@ TEST(PoseSolverTest, SingleTagAndMultiTagPnPAccuracy)
     EXPECT_NEAR(tvec_est.at<double>(1), tvec_gt.at<double>(1), 1e-4);
     EXPECT_NEAR(tvec_est.at<double>(2), tvec_gt.at<double>(2), 1e-4);
   }
-}
-
-
-TEST(PoseSolverTest, KeepoutPolygonDimensions)
-{
-  const rclcpp::Time stamp(100, 0);
-  const auto poly = PoseSolver::create_keepout_polygon("chessboard_frame", stamp, 0.38, 0.035);
-
-  EXPECT_EQ(poly.header.frame_id, "chessboard_frame");
-  EXPECT_EQ(poly.polygon.points.size(), 4U);
-
-  // Check bounds: -0.035 to 0.415 -> length 0.450
-  EXPECT_NEAR(poly.polygon.points[0].x, -0.035F, 1e-4);
-  EXPECT_NEAR(poly.polygon.points[0].y, -0.035F, 1e-4);
-  EXPECT_NEAR(poly.polygon.points[1].x, 0.415F, 1e-4);
-  EXPECT_NEAR(poly.polygon.points[1].y, -0.035F, 1e-4);
-  EXPECT_NEAR(poly.polygon.points[2].x, 0.415F, 1e-4);
-  EXPECT_NEAR(poly.polygon.points[2].y, 0.415F, 1e-4);
-  EXPECT_NEAR(poly.polygon.points[3].x, -0.035F, 1e-4);
-  EXPECT_NEAR(poly.polygon.points[3].y, 0.415F, 1e-4);
 }
