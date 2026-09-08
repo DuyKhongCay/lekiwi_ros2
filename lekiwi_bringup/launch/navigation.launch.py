@@ -15,9 +15,6 @@ def generate_launch_description():
     nav2_params = PathJoinSubstitution(
         [bringup_share, "config", "navigation", "nav2_params.yaml"]
     )
-    ekf_params = PathJoinSubstitution(
-        [bringup_share, "config", "navigation", "ekf.yaml"]
-    )
 
     # Launch arguments
     declare_map_yaml = DeclareLaunchArgument(
@@ -50,15 +47,6 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     map_yaml_file = LaunchConfiguration("map")
     autostart = LaunchConfiguration("autostart")
-
-    # 0. EKF Odometry Fusion (Wheel Odom vx, vy + IMU yaw, wz -> /odometry/filtered & TF odom->base_footprint)
-    ekf_node = Node(
-        package="robot_localization",
-        executable="ekf_node",
-        name="ekf_filter_node",
-        output="screen",
-        parameters=[ekf_params, {"use_sim_time": use_sim_time}],
-    )
 
     # 1. Map Server
     map_server_node = Node(
@@ -131,7 +119,6 @@ def generate_launch_description():
             declare_map_yaml,
             declare_use_sim_time,
             declare_autostart,
-            ekf_node,
             map_server_node,
             planner_server_node,
             controller_server_node,

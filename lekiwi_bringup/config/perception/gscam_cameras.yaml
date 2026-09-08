@@ -3,8 +3,9 @@
     camera_info_url: ""
     use_sensor_data_qos: true
     sync_sink: false
-    use_gst_timestamps: true
+    use_gst_timestamps: false
     image_encoding: "rgb8"
+    add_border: false
 
 /cameras/stereo_left/gscam:
   ros__parameters:
@@ -12,7 +13,8 @@
     frame_id: "stereo_left_optical"
     camera_name: "stereo_left"
     output_size: 640
-    active_modes: [1, 2]
+    add_border: true
+    active_modes: [0, 2]
     gscam_config: >
       libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" ! 
       valve name=gate drop=true ! 
@@ -23,6 +25,7 @@
       videoflip method="rotate-180" ! 
       videoconvert n-threads=4 ! 
       video/x-raw,format=RGB
+
 /cameras/stereo_right/gscam:
   ros__parameters:
     camera_info_url: package://lekiwi_bringup/config/perception/camera_info/stereo_right.yaml
@@ -39,8 +42,8 @@
       videoscale n-threads=4 !
       video/x-raw,format=NV12,width=384,height=384,pixel-aspect-ratio=1/1 !
       videoflip method="rotate-180" !
-      videoconvert n-threads=4 !
-      video/x-raw,format=RGB
+      jpegenc quality=80 idct-method=ifast !
+      image/jpeg
 
 
 /cameras/usb_wrist/gscam:
@@ -62,7 +65,8 @@
       video/x-raw,format=I420,width=384,height=384,pixel-aspect-ratio=1/1 !
       videobalance contrast=1.2 brightness=-0.2 !
       videoconvert n-threads=4 !
-      video/x-raw,format=RGB
+      jpegenc quality=80 idct-method=ifast !
+      image/jpeg
 
 /cameras/usb_side/gscam:
   ros__parameters:
@@ -85,7 +89,8 @@
       video/x-raw,format=I420,width=384,height=384,pixel-aspect-ratio=1/1 !
       videoflip method="counterclockwise" !
       videoconvert n-threads=4 !
-      video/x-raw,format=RGB
+      jpegenc quality=80 idct-method=ifast !
+      image/jpeg
     # videomedian filtersize=5 lum-only=true !
     # gamma gamma=1.8 !
     # videobalance contrast=0.9 !

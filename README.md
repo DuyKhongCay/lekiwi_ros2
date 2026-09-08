@@ -48,7 +48,7 @@ Production ROS 2 workspace for the **LeKiwi Robot**, featuring an omnidirectiona
 |:---|:---:|:---|
 | [`lekiwi_interfaces`](lekiwi_interfaces/) | ROS 2 Interfaces | Custom messages (`CameraMode`, `DriveStatus`, `ServoTelemetry`) and services (`SetCamMode`, `ResetMotorBus`, `SetTorqueEnabled`). |
 | [`lekiwi_perception`](lekiwi_perception/) | C++ Components | Lifecycle GStreamer camera streamer components, HailoRT NPU YOLO inference component, chessboard detection, FEN generator, and visualizer. |
-| [`lekiwi_tag_localization`](lekiwi_tag_localization/) | C++ Nodes | AprilTag 36h11 fiducial board detection, OpenCV `solvePnP` 6-DoF pose estimation, and TF broadcasting (`map` / `chessboard`). |
+| [`apriltag_localizer`](apriltag_localizer/) | C++ Nodes | AprilTag 36h11/16h5 fiducial board detection, OpenCV `solvePnP` 6-DoF pose estimation, TF broadcasting, and real-time diagnostics. |
 | [`lekiwi_navigation`](lekiwi_navigation/) | Nav2 / Config | Nav2 holonomic navigation (SmacPlanner2D + DWB), sensorless static costmaps, and priority `twist_mux` arbitration with E-Stop. |
 | [`handeye_calibration`](handeye_calibration/) | Python / OpenCV | Native OpenCV GUI hand-eye calibration (Eye-to-Hand & Eye-in-Hand), lead-through auto-torque control, and ChArUco target generation. |
 | [`lekiwi_control`](lekiwi_control/) | Python / `rclpy` | Four-mode camera/task finite-state machine (FSM), lifecycle boot orchestrator, and LeRobot arm trajectory bridge. |
@@ -71,7 +71,7 @@ Production ROS 2 workspace for the **LeKiwi Robot**, featuring an omnidirectiona
 colcon build --symlink-install
 
 # Or build specific packages
-colcon build --packages-select lekiwi_interfaces lekiwi_perception lekiwi_control lekiwi_ftservo_hardware handeye_calibration lekiwi_tag_localization
+colcon build --packages-select lekiwi_interfaces lekiwi_perception lekiwi_control lekiwi_ftservo_hardware handeye_calibration apriltag_localizer
 source install/setup.bash
 ```
 

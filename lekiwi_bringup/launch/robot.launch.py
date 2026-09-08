@@ -6,12 +6,18 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     """Top-level Bringup: Compose LeKiwi robot subsystems with streamlined configuration."""
     bringup_share = FindPackageShare("lekiwi_bringup")
+    description_share = FindPackageShare("lekiwi_description")
+
+    ekf_params = PathJoinSubstitution(
+        [bringup_share, "config", "localization", "ekf.yaml"]
+    )
 
     # Global and Subsystem Arguments
     declared_arguments = [
@@ -29,6 +35,11 @@ def generate_launch_description():
             "use_sim_time",
             default_value="false",
             description="Use simulation clock if true",
+        ),
+        DeclareLaunchArgument(
+            "enable_ekf",
+            default_value="true",
+            description="Start robot_localization EKF odometry fusion",
         ),
         DeclareLaunchArgument(
             "arm_controller",
@@ -65,7 +76,7 @@ def generate_launch_description():
     # Subsystem Includes
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution([bringup_share, "launch", "description.launch.py"])
+            PathJoinSubstitution([description_share, "launch", "description.launch.py"])
         ),
         launch_arguments={
             "hardware_type": LaunchConfiguration("hardware_type"),
@@ -146,12 +157,25 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("navigation")),
     )
 
+    ekf_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_filter_node",
+        output="screen",
+        parameters=[
+            ekf_params,
+            {"use_sim_time": LaunchConfiguration("use_sim_time")},
+        ],
+        condition=IfCondition(LaunchConfiguration("enable_ekf")),
+    )
+
     return LaunchDescription(
         [
             *declared_arguments,
             description,
             controllers,
             imu,
+            ekf_node,
             cameras,
             control,
             diagnostics,

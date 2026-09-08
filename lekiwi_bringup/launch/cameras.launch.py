@@ -18,6 +18,7 @@ def _camera_streamer_component(namespace, params_file):
         parameters=[params_file],
         remappings=[
             ("camera/image_raw", "image_raw"),
+            ("camera/image_raw/compressed", "image_raw/compressed"),
             ("camera/camera_info", "camera_info"),
         ],
         extra_arguments=[{"use_intra_process_comms": True}],
@@ -30,9 +31,6 @@ def generate_launch_description():
 
     gscam_params_file = PathJoinSubstitution(
         [bringup_share, "config", "perception", "gscam_cameras.yaml"]
-    )
-    apriltag_params_file = PathJoinSubstitution(
-        [bringup_share, "config", "localization", "apriltag_36h11.yaml"]
     )
     chessboard_params_file = PathJoinSubstitution(
         [bringup_share, "config", "localization", "chessboard_tags.yaml"]
@@ -72,28 +70,15 @@ def generate_launch_description():
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
-    apriltag_component = ComposableNode(
-        package="apriltag_ros",
-        plugin="AprilTagNode",
-        name="apriltag_detector",
-        namespace="",
-        remappings=[
-            ("image_rect", "/cameras/stereo_left/image_raw"),
-            ("camera_info", "/cameras/stereo_left/camera_info"),
-            ("detections", "/tag_detections"),
-        ],
-        parameters=[apriltag_params_file],
-        extra_arguments=[{"use_intra_process_comms": True}],
-    )
-
     chessboard_estimator_component = ComposableNode(
-        package="lekiwi_tag_localization",
-        plugin="lekiwi_tag_localization::ChessboardPoseEstimator",
+        package="apriltag_localizer",
+        plugin="apriltag_localizer::ChessboardPoseEstimator",
         name="chessboard_pose_estimator",
         namespace="",
         remappings=[
-            ("/cameras/stereo_left/camera_info", "/cameras/stereo_left/camera_info"),
-            ("/tag_detections", "/tag_detections"),
+            ("~/image_raw", "/cameras/stereo_left/image_raw"),
+            ("~/camera_info", "/cameras/stereo_left/camera_info"),
+            ("~/camera_mode", "/system/camera_mode"),
         ],
         parameters=[chessboard_params_file],
         extra_arguments=[{"use_intra_process_comms": True}],
@@ -103,7 +88,6 @@ def generate_launch_description():
         *camera_components,
         inference_component,
         chess_engine_component,
-        apriltag_component,
         chessboard_estimator_component,
     ]
 

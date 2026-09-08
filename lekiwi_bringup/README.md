@@ -66,7 +66,11 @@ ros2 launch lekiwi_bringup robot.launch.py \
 ### 2. Isolated Subsystem Debugging
 ```bash
 # Description and controllers only:
-ros2 launch lekiwi_bringup description.launch.py hardware_type:=mock start_controller_manager:=true activate_controllers:=true
+ros2 launch lekiwi_description description.launch.py hardware_type:=mock
+```
+
+# Controllers only:
+ros2 launch lekiwi_bringup controllers.launch.py hardware_type:=mock
 
 # Composed perception container only:
 ros2 launch lekiwi_bringup cameras.launch.py use_test_sources:=true
@@ -94,17 +98,13 @@ ros2 run rqt_robot_monitor rqt_robot_monitor
 
 ## ⚙️ Configuration Directories (`config/`)
 
-- `config/controllers/lekiwi_controllers.yaml`: `ros2_control` controller configurations (`arm_controller`, `omni_base_controller`, `lekiwi_imu_broadcaster`, `joint_state_broadcaster`).
-- `config/servos/lekiwi_arm_calib.yaml`: Follower arm & base wheel Feetech STS3215 IDs, homing offsets, limits, and velocity scale factors.
-- `config/servos/uarm_teleop_calib.yaml`: Leader arm physical calibration PWM and joint kinematic mapping.
-- `config/control/orchestrator.yaml`: High-level FSM & camera mode coordination.
-- `config/control/gamepad_base_teleop.yaml`: Button and axis mappings for joystick base teleoperation.
-- `config/control/uarm_teleop.yaml`: Runtime node parameters for uArm leader teleoperation node.
-- `config/diagnostics/lekiwi_analyzers.yaml`: Diagnostic analyzer grouping hierarchy (`/LeKiwi/System`, `/LeKiwi/Hardware`, `/LeKiwi/Perception`) for `diagnostic_aggregator`.
-- `config/sensors/imu_filter.yaml`: IMU Madgwick orientation estimation and covariance tuning.
-- `config/perception/gscam_cameras.yaml`: GStreamer pipeline declarations for all 4 camera endpoints with valve gating.
-- `config/perception/calibration/`: Intrinsic camera calibration matrices for stereo and USB cameras.
-- `config/hardware/DuyKhongCay.json`: Hardware servo calibration baseline reference.
+- `config/control/`: High-level FSM orchestrator, gamepad teleop, and uArm parameters.
+- `config/controllers/`: `ros2_control` controller configurations (`arm_controller`, `omni_base_controller`, `lekiwi_imu_broadcaster`, `joint_state_broadcaster`).
+- `config/diagnostics/`: Diagnostic analyzer grouping hierarchy for `diagnostic_aggregator`.
+- `config/localization/`: EKF robot localization (`ekf.yaml`) and AprilTag chessboard layout parameters (`chessboard_tags.yaml`, `chessboard_tags_calib.yaml`).
+- `config/navigation/`: Nav2 stack parameter configuration (`nav2_params.yaml`).
+- `config/perception/`: GStreamer pipelines (`gscam_cameras.yaml`) and intrinsic camera calibration matrices.
+- `config/sensors/`: IMU Madgwick orientation estimation parameters (`imu_filter.yaml`).
 
 ---
 
