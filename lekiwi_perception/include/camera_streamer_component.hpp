@@ -32,6 +32,7 @@
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "rclcpp_lifecycle/lifecycle_publisher.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
+#include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/image.hpp"
 
 namespace lekiwi_perception
@@ -109,7 +110,10 @@ namespace lekiwi_perception
     // ROS 2 publishers and subscriptions
     std::shared_ptr<camera_info_manager::CameraInfoManager> camera_info_manager_;
     rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+    rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_image_pub_;
     rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::CameraInfo>::SharedPtr info_pub_;
+    bool publish_raw_{true};
+    bool publish_compressed_{false};
     rclcpp::Subscription<lekiwi_interfaces::msg::CameraMode>::SharedPtr mode_sub_;
     rclcpp::TimerBase::SharedPtr autostart_timer_;
     rclcpp::TimerBase::SharedPtr monitor_timer_;
@@ -131,6 +135,7 @@ namespace lekiwi_perception
     std::vector<int64_t> active_modes_;
     std::string valve_name_{"gate"};
     int64_t output_size_{0};
+    bool add_border_{false};
 
     // State & Thread safety
     std::mutex gst_mutex_;

@@ -29,11 +29,18 @@ find_package(Boost REQUIRED COMPONENTS system filesystem)
 find_package(PkgConfig REQUIRED)
 
 include(FetchContent)
-FetchContent_Declare(
-  chess_library
-  GIT_REPOSITORY https://github.com/Disservin/chess-library.git
-  GIT_TAG        master
-)
+if(EXISTS "/root/docker_ws/chess-library")
+  FetchContent_Declare(
+    chess_library
+    SOURCE_DIR /root/docker_ws/chess-library
+  )
+else()
+  FetchContent_Declare(
+    chess_library
+    GIT_REPOSITORY https://github.com/Disservin/chess-library.git
+    GIT_TAG        master
+  )
+endif()
 FetchContent_MakeAvailable(chess_library)
 
 pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET

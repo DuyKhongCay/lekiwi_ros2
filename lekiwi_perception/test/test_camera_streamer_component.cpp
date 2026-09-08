@@ -41,7 +41,7 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
   options.parameter_overrides({{"camera_name", "test_camera"},
                                {"frame_id", "test_camera_optical"},
                                {"gscam_config", "videotestsrc is-live=true ! valve name=gate drop=true ! video/x-raw,format=RGB,width=320,height=240,framerate=15/1"},
-                               {"active_modes", std::vector<int64_t>{1, 2}},
+                               {"active_modes", std::vector<int64_t>{0, 2}},
                                {"autostart", false}});
 
   auto node = std::make_shared<lekiwi_perception::CameraStreamerComponent>(options);
@@ -60,35 +60,23 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
   state = node->activate();
   ASSERT_EQ(state.label(), "active");
 
-  // In STANDBY mode (0), even when active, camera is not allowed in active_modes [1, 2]
-  EXPECT_FALSE(node->is_streaming());
-  EXPECT_FALSE(node->is_valve_open());
+  // In STANDBY mode (0), active_modes [0, 2] allows streaming immediately without subscribers
+  EXPECT_TRUE(node->is_streaming());
+  EXPECT_TRUE(node->is_valve_open());
 
-  // Create a subscriber to satisfy subscriber gating
-  auto helper_node = std::make_shared<rclcpp::Node>("test_subscriber_node");
-  size_t msg_count = 0;
-  auto sub = helper_node->create_subscription<sensor_msgs::msg::Image>(
-      "camera/image_raw", rclcpp::SensorDataQoS(),
-      [&msg_count](const sensor_msgs::msg::Image::ConstSharedPtr)
-      {
-        msg_count++;
-      });
-
-  // Switch mode to NAVIGATING (1)
-  auto mode_msg = std::make_shared<lekiwi_interfaces::msg::CameraMode>();
-  mode_msg->value = lekiwi_interfaces::msg::CameraMode::NAVIGATING;
-
-  // Let executor process subscriber graph connection and mode
+  auto helper_node = std::make_shared<rclcpp::Node>("test_helper_node");
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node->get_node_base_interface());
   exec.add_node(helper_node);
 
-  // Directly trigger mode callback
   auto mode_pub = helper_node->create_publisher<lekiwi_interfaces::msg::CameraMode>(
       "/camera_mode", rclcpp::QoS(1).reliable().transient_local());
+
+  // Switch mode to NAVIGATING (1) -> should drop/gate since 1 is not in [0, 2]
+  auto mode_msg = std::make_shared<lekiwi_interfaces::msg::CameraMode>();
+  mode_msg->value = lekiwi_interfaces::msg::CameraMode::NAVIGATING;
   mode_pub->publish(*mode_msg);
 
-  // Spin briefly to process mode message and timer
   for (int i = 0; i < 10; ++i)
   {
     exec.spin_some();
@@ -96,10 +84,24 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
   }
 
   EXPECT_EQ(node->current_camera_mode(), lekiwi_interfaces::msg::CameraMode::NAVIGATING);
+  EXPECT_FALSE(node->is_streaming());
+  EXPECT_FALSE(node->is_valve_open());
+
+  // Switch mode to CHESS_THINKING (2) -> should open since 2 is in [0, 2]
+  mode_msg->value = lekiwi_interfaces::msg::CameraMode::CHESS_THINKING;
+  mode_pub->publish(*mode_msg);
+
+  for (int i = 0; i < 10; ++i)
+  {
+    exec.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  EXPECT_EQ(node->current_camera_mode(), lekiwi_interfaces::msg::CameraMode::CHESS_THINKING);
   EXPECT_TRUE(node->is_streaming());
   EXPECT_TRUE(node->is_valve_open());
 
-  // Switch mode to MANIPULATION_LEROBOT (3) -> should gate/drop
+  // Switch mode to MANIPULATION_LEROBOT (3) -> should drop/gate
   mode_msg->value = lekiwi_interfaces::msg::CameraMode::MANIPULATION_LEROBOT;
   mode_pub->publish(*mode_msg);
 
@@ -128,6 +130,64 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
   EXPECT_EQ(state.label(), "finalized");
 }
 
+TEST_F(CameraStreamerComponentTest, Mode3CompressedPublisher)
+{
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({{"camera_name", "test_jpeg_camera"},
+                               {"frame_id", "test_jpeg_optical"},
+                               {"gscam_config", "videotestsrc is-live=true ! valve name=gate drop=true ! video/x-raw,format=I420,width=320,height=240,framerate=15/1 ! jpegenc quality=80 ! image/jpeg"},
+                               {"active_modes", std::vector<int64_t>{3}},
+                               {"autostart", false}});
+
+  auto node = std::make_shared<lekiwi_perception::CameraStreamerComponent>(options);
+  auto state = node->configure();
+  ASSERT_EQ(state.label(), "inactive");
+  state = node->activate();
+  ASSERT_EQ(state.label(), "active");
+
+  // In STANDBY mode (0), active_modes [3] will drop
+  EXPECT_FALSE(node->is_streaming());
+  EXPECT_FALSE(node->is_valve_open());
+
+  auto helper_node = std::make_shared<rclcpp::Node>("test_jpeg_helper");
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(node->get_node_base_interface());
+  exec.add_node(helper_node);
+
+  size_t compressed_count = 0;
+  auto comp_sub = helper_node->create_subscription<sensor_msgs::msg::CompressedImage>(
+      "camera/image_raw/compressed", rclcpp::SensorDataQoS(),
+      [&compressed_count](const sensor_msgs::msg::CompressedImage::ConstSharedPtr msg)
+      {
+        if (msg && msg->format == "jpeg" && !msg->data.empty())
+        {
+          compressed_count++;
+        }
+      });
+
+  auto mode_pub = helper_node->create_publisher<lekiwi_interfaces::msg::CameraMode>(
+      "/camera_mode", rclcpp::QoS(1).reliable().transient_local());
+
+  auto mode_msg = std::make_shared<lekiwi_interfaces::msg::CameraMode>();
+  mode_msg->value = lekiwi_interfaces::msg::CameraMode::MANIPULATION_LEROBOT;
+  mode_pub->publish(*mode_msg);
+
+  for (int i = 0; i < 20; ++i)
+  {
+    exec.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  }
+
+  EXPECT_EQ(node->current_camera_mode(), lekiwi_interfaces::msg::CameraMode::MANIPULATION_LEROBOT);
+  EXPECT_TRUE(node->is_streaming());
+  EXPECT_TRUE(node->is_valve_open());
+  EXPECT_GT(compressed_count, 0U);
+
+  node->deactivate();
+  node->cleanup();
+  node->shutdown();
+}
+
 TEST_F(CameraStreamerComponentTest, InvalidConfigHandling)
 {
   rclcpp::NodeOptions options;
@@ -141,16 +201,18 @@ TEST_F(CameraStreamerComponentTest, InvalidConfigHandling)
   EXPECT_EQ(state.label(), "unconfigured");
 }
 
-TEST_F(CameraStreamerComponentTest, CameraInfoScalingWithOutputSize)
+TEST_F(CameraStreamerComponentTest, CameraInfoScalingWithOutputSizeAddBorder)
 {
-  // Validates intrinsic and projection matrix scaling when output_size is specified.
+  // Validates intrinsic and projection matrix scaling when add_border is true (letterbox padding).
   rclcpp::NodeOptions options;
   options.parameter_overrides({{"camera_name", "test_scaling_camera"},
                                {"gscam_config", "videotestsrc is-live=true ! valve name=gate drop=true ! video/x-raw,format=RGB,width=640,height=640,framerate=10/1"},
                                {"output_size", static_cast<int64_t>(640)},
+                               {"add_border", true},
                                {"autostart", false}});
 
   auto node = std::make_shared<lekiwi_perception::CameraStreamerComponent>(options);
+  node->configure();
 
   sensor_msgs::msg::CameraInfo orig_info;
   orig_info.width = 3280;
@@ -165,18 +227,60 @@ TEST_F(CameraStreamerComponentTest, CameraInfoScalingWithOutputSize)
   EXPECT_EQ(scaled.width, 640U);
   EXPECT_EQ(scaled.height, 640U);
 
-  const double expected_sx = 640.0 / 3280.0;
-  const double expected_sy = 640.0 / 2464.0;
+  const double expected_s = 640.0 / 3280.0;
+  const double active_h = 2464.0 * expected_s;
+  const double expected_pad_y = (640.0 - active_h) / 2.0;
 
-  EXPECT_NEAR(scaled.k[0], 2274.0 * expected_sx, 1e-4);
-  EXPECT_NEAR(scaled.k[2], 1654.0 * expected_sx, 1e-4);
-  EXPECT_NEAR(scaled.k[4], 2287.0 * expected_sy, 1e-4);
-  EXPECT_NEAR(scaled.k[5], 1291.0 * expected_sy, 1e-4);
+  EXPECT_NEAR(scaled.k[0], 2274.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.k[2], 1654.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.k[4], 2287.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.k[5], 1291.0 * expected_s + expected_pad_y, 1e-4);
 
-  EXPECT_NEAR(scaled.p[0], 2298.0 * expected_sx, 1e-4);
-  EXPECT_NEAR(scaled.p[2], 1650.0 * expected_sx, 1e-4);
-  EXPECT_NEAR(scaled.p[3], 10.0 * expected_sx, 1e-4);
-  EXPECT_NEAR(scaled.p[5], 2303.0 * expected_sy, 1e-4);
-  EXPECT_NEAR(scaled.p[6], 1277.0 * expected_sy, 1e-4);
-  EXPECT_NEAR(scaled.p[7], 20.0 * expected_sy, 1e-4);
+  EXPECT_NEAR(scaled.p[0], 2298.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.p[2], 1650.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.p[3], 10.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.p[5], 2303.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.p[6], 1277.0 * expected_s + expected_pad_y, 1e-4);
+  EXPECT_NEAR(scaled.p[7], 20.0 * expected_s, 1e-4);
+}
+
+TEST_F(CameraStreamerComponentTest, CameraInfoScalingWithOutputSizeCrop)
+{
+  // Validates intrinsic and projection matrix scaling when add_border is false (center crop).
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({{"camera_name", "test_scaling_camera_crop"},
+                               {"gscam_config", "videotestsrc is-live=true ! valve name=gate drop=true ! video/x-raw,format=RGB,width=384,height=384,framerate=10/1"},
+                               {"output_size", static_cast<int64_t>(384)},
+                               {"add_border", false},
+                               {"autostart", false}});
+
+  auto node = std::make_shared<lekiwi_perception::CameraStreamerComponent>(options);
+  node->configure();
+
+  sensor_msgs::msg::CameraInfo orig_info;
+  orig_info.width = 1640;
+  orig_info.height = 1232;
+  // K matrix: fx=1137.0, fy=1143.0, cx=827.0, cy=645.0
+  orig_info.k = {1137.0, 0.0, 827.0, 0.0, 1143.0, 645.0, 0.0, 0.0, 1.0};
+  orig_info.p = {1149.0, 0.0, 825.0, 5.0, 0.0, 1151.0, 638.0, 10.0, 0.0, 0.0, 1.0, 0.0};
+
+  const auto scaled = node->scale_camera_info(orig_info, 384, 384);
+
+  EXPECT_EQ(scaled.width, 384U);
+  EXPECT_EQ(scaled.height, 384U);
+
+  const double crop_x = (1640.0 - 1232.0) / 2.0; // 204.0
+  const double expected_s = 384.0 / 1232.0;
+
+  EXPECT_NEAR(scaled.k[0], 1137.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.k[2], (827.0 - crop_x) * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.k[4], 1143.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.k[5], 645.0 * expected_s, 1e-4);
+
+  EXPECT_NEAR(scaled.p[0], 1149.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.p[2], (825.0 - crop_x) * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.p[3], 5.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.p[5], 1151.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.p[6], 638.0 * expected_s, 1e-4);
+  EXPECT_NEAR(scaled.p[7], 10.0 * expected_s, 1e-4);
 }

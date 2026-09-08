@@ -37,6 +37,7 @@ namespace lekiwi_perception
     declare_parameter<std::vector<int64_t>>("active_modes", std::vector<int64_t>{});
     declare_parameter<std::string>("valve_name", "gate");
     declare_parameter<int64_t>("output_size", 0);
+    declare_parameter<bool>("add_border", false);
 
     autostart_ = get_parameter("autostart").as_bool();
     if (autostart_)
@@ -84,6 +85,7 @@ namespace lekiwi_perception
       active_modes_ = get_parameter("active_modes").as_integer_array();
       valve_name_ = get_parameter("valve_name").as_string();
       output_size_ = get_parameter("output_size").as_int();
+      add_border_ = get_parameter("add_border").as_bool();
 
       if (gscam_config_.empty())
       {
@@ -98,8 +100,29 @@ namespace lekiwi_perception
         camera_info_manager_->loadCameraInfo(camera_info_url_);
       }
 
+      const bool only_mode_3 = !active_modes_.empty() &&
+                               std::all_of(active_modes_.begin(), active_modes_.end(), [](int64_t m)
+                                           { return m == 3; });
+      if (only_mode_3)
+      {
+        publish_raw_ = false;
+        publish_compressed_ = true;
+      }
+      else
+      {
+        publish_raw_ = true;
+        publish_compressed_ = false;
+      }
+
       rclcpp::QoS qos = use_sensor_data_qos_ ? rclcpp::SensorDataQoS() : rclcpp::QoS(1);
-      image_pub_ = create_publisher<sensor_msgs::msg::Image>("camera/image_raw", qos);
+      if (publish_raw_)
+      {
+        image_pub_ = create_publisher<sensor_msgs::msg::Image>("camera/image_raw", qos);
+      }
+      if (publish_compressed_)
+      {
+        compressed_image_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>("camera/image_raw/compressed", qos);
+      }
       info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>("camera/camera_info", qos);
 
       rclcpp::QoS mode_qos(1);
@@ -215,6 +238,10 @@ namespace lekiwi_perception
       {
         image_pub_->on_activate();
       }
+      if (compressed_image_pub_)
+      {
+        compressed_image_pub_->on_activate();
+      }
       if (info_pub_)
       {
         info_pub_->on_activate();
@@ -291,6 +318,10 @@ namespace lekiwi_perception
       {
         image_pub_->on_deactivate();
       }
+      if (compressed_image_pub_)
+      {
+        compressed_image_pub_->on_deactivate();
+      }
       if (info_pub_)
       {
         info_pub_->on_deactivate();
@@ -303,6 +334,11 @@ namespace lekiwi_perception
     catch (const std::exception &e)
     {
       RCLCPP_ERROR(get_logger(), "Exception during on_deactivate: %s", e.what());
+      return CallbackReturn::FAILURE;
+    }
+    catch (...)
+    {
+      RCLCPP_ERROR(get_logger(), "Unknown exception during on_deactivate");
       return CallbackReturn::FAILURE;
     }
   }
@@ -380,6 +416,7 @@ namespace lekiwi_perception
 
     mode_sub_.reset();
     image_pub_.reset();
+    compressed_image_pub_.reset();
     info_pub_.reset();
     camera_info_manager_.reset();
     is_streaming_.store(false);
@@ -404,24 +441,15 @@ namespace lekiwi_perception
 
   void CameraStreamerComponent::update_valve_state()
   {
-    const bool is_active = (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+    const uint8_t state_id = get_current_state().id();
+    const bool is_active = (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE ||
+                            state_id == lifecycle_msgs::msg::State::TRANSITION_STATE_ACTIVATING);
     const uint8_t mode = current_camera_mode_.load();
 
     const bool mode_allowed = active_modes_.empty() ||
                               (std::find(active_modes_.begin(), active_modes_.end(), static_cast<int64_t>(mode)) != active_modes_.end());
 
-    size_t sub_count = 0;
-    if (image_pub_)
-    {
-      sub_count += image_pub_->get_subscription_count() + image_pub_->get_intra_process_subscription_count();
-    }
-    if (info_pub_)
-    {
-      sub_count += info_pub_->get_subscription_count() + info_pub_->get_intra_process_subscription_count();
-    }
-    const bool has_subscribers = (sub_count > 0);
-
-    const bool should_stream = calib_mode_ || (is_active && mode_allowed && has_subscribers);
+    const bool should_stream = calib_mode_ || (is_active && mode_allowed);
     const bool prev_streaming = is_streaming_.exchange(should_stream);
 
     if (valve_ != nullptr)
@@ -434,10 +462,10 @@ namespace lekiwi_perception
     {
       RCLCPP_INFO(
           get_logger(),
-          "[%s] Valve state changed: %s (calib_mode=%d, mode=%u, allowed=%d, sub_count=%zu, active=%d)",
+          "[%s] Valve state changed: %s (calib_mode=%d, mode=%u, allowed=%d, active=%d)",
           camera_name_.c_str(),
           should_stream ? "OPEN (streaming)" : "DROPPING (idle)",
-          calib_mode_ ? 1 : 0, mode, mode_allowed, sub_count, is_active);
+          calib_mode_ ? 1 : 0, mode, mode_allowed, is_active);
     }
   }
 
@@ -531,7 +559,14 @@ namespace lekiwi_perception
 
   void CameraStreamerComponent::process_sample(GstSample *sample)
   {
-    if (!is_streaming_.load() || !image_pub_ || !image_pub_->is_activated())
+    if (!is_streaming_.load())
+    {
+      return;
+    }
+
+    const bool raw_active = (image_pub_ && image_pub_->is_activated());
+    const bool comp_active = (compressed_image_pub_ && compressed_image_pub_->is_activated());
+    if (!raw_active && !comp_active)
     {
       return;
     }
@@ -560,67 +595,68 @@ namespace lekiwi_perception
       return;
     }
 
-    GstVideoInfo video_info;
-    gst_video_info_init(&video_info);
-    const bool has_video_info = gst_video_info_from_caps(&video_info, caps);
-
     std_msgs::msg::Header header;
     header.frame_id = frame_id_;
-    if (use_gst_timestamps_ && GST_BUFFER_PTS_IS_VALID(buffer) && GST_BUFFER_PTS(buffer) > 0U)
-    {
-      header.stamp = rclcpp::Time(static_cast<int64_t>(GST_BUFFER_PTS(buffer)), RCL_SYSTEM_TIME);
-    }
-    else
-    {
-      header.stamp = now();
-    }
 
-    auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
-    img_msg->header = header;
+    const auto now_time = now();
+    double gst_pipeline_lat_ms = 0.0;
+    int64_t pipeline_lat_ns = 0;
+    bool has_valid_pipeline_lat = false;
 
-    if (has_video_info)
+    if (pipeline_ != nullptr && (GST_BUFFER_PTS_IS_VALID(buffer) || GST_BUFFER_DTS_IS_VALID(buffer)))
     {
-      img_msg->width = static_cast<uint32_t>(GST_VIDEO_INFO_WIDTH(&video_info));
-      img_msg->height = static_cast<uint32_t>(GST_VIDEO_INFO_HEIGHT(&video_info));
-      img_msg->encoding = image_encoding_;
-      img_msg->is_bigendian = false;
-
-      uint32_t bpp = 3;
-      if (image_encoding_ == "mono8" || image_encoding_ == "8UC1")
+      GstClock *clock = gst_element_get_clock(pipeline_);
+      if (clock != nullptr)
       {
-        bpp = 1;
+        const GstClockTime now_gst = gst_clock_get_time(clock);
+        const GstClockTime base_time = gst_element_get_base_time(pipeline_);
+        const GstClockTime pts = GST_BUFFER_PTS_IS_VALID(buffer) ? GST_BUFFER_PTS(buffer) : GST_BUFFER_DTS(buffer);
+
+        if (GST_CLOCK_TIME_IS_VALID(now_gst) && GST_CLOCK_TIME_IS_VALID(base_time) && GST_CLOCK_TIME_IS_VALID(pts))
+        {
+          const GstClockTime buffer_capture_time = base_time + pts;
+          if (now_gst >= buffer_capture_time)
+          {
+            const GstClockTime diff_ns = now_gst - buffer_capture_time;
+            pipeline_lat_ns = static_cast<int64_t>(diff_ns);
+            gst_pipeline_lat_ms = static_cast<double>(diff_ns) * 1e-6;
+            has_valid_pipeline_lat = true;
+          }
+        }
+        gst_object_unref(clock);
       }
-      else if (image_encoding_ == "rgba8" || image_encoding_ == "bgra8")
-      {
-        bpp = 4;
-      }
-      img_msg->step = img_msg->width * bpp;
-      img_msg->data.resize(static_cast<std::size_t>(img_msg->step) * img_msg->height);
+    }
 
-      const gsize stride = GST_VIDEO_INFO_PLANE_STRIDE(&video_info, 0);
-      if (stride == 0 || stride == img_msg->step)
+    if (use_gst_timestamps_)
+    {
+      if (has_valid_pipeline_lat)
       {
-        const std::size_t copy_size = std::min(map.size, img_msg->data.size());
-        std::memcpy(img_msg->data.data(), map.data, copy_size);
+        header.stamp = now_time - rclcpp::Duration::from_nanoseconds(pipeline_lat_ns);
       }
       else
       {
-        for (uint32_t r = 0; r < img_msg->height; ++r)
-        {
-          if ((r + 1) * stride <= map.size && (r + 1) * img_msg->step <= img_msg->data.size())
-          {
-            std::memcpy(
-                img_msg->data.data() + static_cast<std::size_t>(r) * img_msg->step,
-                map.data + static_cast<std::size_t>(r) * stride,
-                img_msg->step);
-          }
-        }
+        header.stamp = now_time;
       }
+      // In use_gst_timestamps mode, latency is embedded into header.stamp
+      current_latency_ms_.store(0.0);
     }
     else
     {
-      // Non-raw or JPEG caps fallback
-      GstStructure *structure = gst_caps_get_structure(caps, 0);
+      header.stamp = now_time;
+      // In decoupled mode, measure and store GStreamer pipeline latency separately
+      current_latency_ms_.store(has_valid_pipeline_lat ? gst_pipeline_lat_ms : 0.0);
+    }
+
+    GstStructure *structure = gst_caps_get_structure(caps, 0);
+
+    const gchar *media_type = structure ? gst_structure_get_name(structure) : "";
+    const bool is_jpeg = (g_strcmp0(media_type, "image/jpeg") == 0);
+
+    uint32_t frame_width = 0;
+    uint32_t frame_height = 0;
+
+    if (is_jpeg)
+    {
       int width = 0;
       int height = 0;
       if (structure != nullptr)
@@ -628,18 +664,109 @@ namespace lekiwi_perception
         gst_structure_get_int(structure, "width", &width);
         gst_structure_get_int(structure, "height", &height);
       }
-      img_msg->width = static_cast<uint32_t>(width);
-      img_msg->height = static_cast<uint32_t>(height);
-      img_msg->encoding = image_encoding_;
-      img_msg->is_bigendian = false;
-      img_msg->step = static_cast<uint32_t>(map.size);
-      img_msg->data.assign(map.data, map.data + map.size);
+      frame_width = static_cast<uint32_t>(width);
+      frame_height = static_cast<uint32_t>(height);
+
+      if (comp_active)
+      {
+        auto comp_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+        comp_msg->header = header;
+        comp_msg->format = "jpeg";
+        comp_msg->data.assign(map.data, map.data + map.size);
+        compressed_image_pub_->publish(std::move(comp_msg));
+      }
+      else if (raw_active)
+      {
+        // Fallback: publish JPEG payload into Image message data if only raw_active
+        auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
+        img_msg->header = header;
+        img_msg->width = frame_width;
+        img_msg->height = frame_height;
+        img_msg->encoding = "jpeg";
+        img_msg->is_bigendian = false;
+        img_msg->step = static_cast<uint32_t>(map.size);
+        img_msg->data.assign(map.data, map.data + map.size);
+        image_pub_->publish(std::move(img_msg));
+      }
+    }
+    else
+    {
+      GstVideoInfo video_info;
+      gst_video_info_init(&video_info);
+      const bool has_video_info = gst_video_info_from_caps(&video_info, caps);
+
+      auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
+      img_msg->header = header;
+
+      if (has_video_info)
+      {
+        img_msg->width = static_cast<uint32_t>(GST_VIDEO_INFO_WIDTH(&video_info));
+        img_msg->height = static_cast<uint32_t>(GST_VIDEO_INFO_HEIGHT(&video_info));
+        img_msg->encoding = image_encoding_;
+        img_msg->is_bigendian = false;
+
+        uint32_t bpp = 3;
+        if (image_encoding_ == "mono8" || image_encoding_ == "8UC1")
+        {
+          bpp = 1;
+        }
+        else if (image_encoding_ == "rgba8" || image_encoding_ == "bgra8")
+        {
+          bpp = 4;
+        }
+        img_msg->step = img_msg->width * bpp;
+        img_msg->data.resize(static_cast<std::size_t>(img_msg->step) * img_msg->height);
+
+        const gsize stride = GST_VIDEO_INFO_PLANE_STRIDE(&video_info, 0);
+        if (stride == 0 || stride == img_msg->step)
+        {
+          const std::size_t copy_size = std::min(map.size, img_msg->data.size());
+          std::memcpy(img_msg->data.data(), map.data, copy_size);
+        }
+        else
+        {
+          for (uint32_t r = 0; r < img_msg->height; ++r)
+          {
+            if ((r + 1) * stride <= map.size && (r + 1) * img_msg->step <= img_msg->data.size())
+            {
+              std::memcpy(
+                  img_msg->data.data() + static_cast<std::size_t>(r) * img_msg->step,
+                  map.data + static_cast<std::size_t>(r) * stride,
+                  img_msg->step);
+            }
+          }
+        }
+      }
+      else
+      {
+        int width = 0;
+        int height = 0;
+        if (structure != nullptr)
+        {
+          gst_structure_get_int(structure, "width", &width);
+          gst_structure_get_int(structure, "height", &height);
+        }
+        img_msg->width = static_cast<uint32_t>(width);
+        img_msg->height = static_cast<uint32_t>(height);
+        img_msg->encoding = image_encoding_;
+        img_msg->is_bigendian = false;
+        img_msg->step = static_cast<uint32_t>(map.size);
+        img_msg->data.assign(map.data, map.data + map.size);
+      }
+
+      frame_width = img_msg->width;
+      frame_height = img_msg->height;
+
+      if (raw_active)
+      {
+        image_pub_->publish(std::move(img_msg));
+      }
     }
 
     gst_buffer_unmap(buffer, &map);
 
-    const uint32_t target_w = (output_size_ > 0) ? static_cast<uint32_t>(output_size_) : img_msg->width;
-    const uint32_t target_h = (output_size_ > 0) ? static_cast<uint32_t>(output_size_) : img_msg->height;
+    const uint32_t target_w = (output_size_ > 0) ? static_cast<uint32_t>(output_size_) : frame_width;
+    const uint32_t target_h = (output_size_ > 0) ? static_cast<uint32_t>(output_size_) : frame_height;
 
     auto info_msg = std::make_unique<sensor_msgs::msg::CameraInfo>();
     if (camera_info_manager_)
@@ -654,21 +781,9 @@ namespace lekiwi_perception
     }
     info_msg->header = header;
 
-    image_pub_->publish(std::move(img_msg));
     if (info_pub_ && info_pub_->is_activated())
     {
       info_pub_->publish(std::move(info_msg));
-    }
-
-    if (GST_BUFFER_PTS_IS_VALID(buffer) && GST_BUFFER_PTS(buffer) > 0U)
-    {
-      const auto now_ns = now().nanoseconds();
-      const auto pts_ns = static_cast<int64_t>(GST_BUFFER_PTS(buffer));
-      if (now_ns > pts_ns)
-      {
-        const double lat_ms = static_cast<double>(now_ns - pts_ns) * 1e-6;
-        current_latency_ms_.store(lat_ms);
-      }
     }
 
     frame_counter_.fetch_add(1, std::memory_order_relaxed);
@@ -735,9 +850,18 @@ namespace lekiwi_perception
     }
     else if (streaming)
     {
-      stat.summaryf(
-          diagnostic_msgs::msg::DiagnosticStatus::OK,
-          "Streaming active (%.1f FPS, %.1f ms latency)", fps, latency_ms);
+      if (use_gst_timestamps_)
+      {
+        stat.summaryf(
+            diagnostic_msgs::msg::DiagnosticStatus::OK,
+            "Streaming active (%.1f FPS, use_gst_timestamps=true)", fps);
+      }
+      else
+      {
+        stat.summaryf(
+            diagnostic_msgs::msg::DiagnosticStatus::OK,
+            "Streaming active (%.1f FPS, %.1f ms latency)", fps, latency_ms);
+      }
     }
     else
     {
@@ -751,15 +875,18 @@ namespace lekiwi_perception
     stat.add("Frame ID", frame_id_);
     stat.add("Stream State", streaming ? "Streaming" : (valve_open ? "Valve Open (Idle)" : "Gated (Dropping)"));
     stat.addf("Framerate (FPS)", "%.1f", fps);
-    stat.addf("Gst to ROS Latency (ms)", "%.2f", latency_ms);
-    stat.add("Total Frames Published", current_count);
-
-    size_t sub_count = 0;
-    if (image_pub_)
+    stat.add("Use GST Timestamps", use_gst_timestamps_ ? "true" : "false");
+    if (use_gst_timestamps_)
     {
-      sub_count += image_pub_->get_subscription_count() + image_pub_->get_intra_process_subscription_count();
+      stat.add("Gst to ROS Latency", "N/A (use_gst_timestamps=true)");
     }
-    stat.add("Image Subscribers Count", sub_count);
+    else
+    {
+      stat.addf("Gst to ROS Latency (ms)", "%.2f", latency_ms);
+    }
+    stat.add("Total Frames Published", current_count);
+    stat.add("Publish Raw", publish_raw_ ? "true" : "false");
+    stat.add("Publish Compressed", publish_compressed_ ? "true" : "false");
 
     if (!last_gst_error_.empty())
     {
@@ -789,28 +916,91 @@ namespace lekiwi_perception
       return scaled_info;
     }
 
-    const double sx = static_cast<double>(target_w) / static_cast<double>(orig_w);
-    const double sy = static_cast<double>(target_h) / static_cast<double>(orig_h);
+    const double orig_ar = static_cast<double>(orig_w) / static_cast<double>(orig_h);
+    const double target_ar = static_cast<double>(target_w) / static_cast<double>(target_h);
 
-    // Scale Camera Matrix K (3x3 row-major)
-    // [fx,  0, cx]
-    // [ 0, fy, cy]
-    // [ 0,  0,  1]
-    scaled_info.k[0] = orig_info.k[0] * sx; // fx
-    scaled_info.k[2] = orig_info.k[2] * sx; // cx
-    scaled_info.k[4] = orig_info.k[4] * sy; // fy
-    scaled_info.k[5] = orig_info.k[5] * sy; // cy
+    double sx = 1.0;
+    double sy = 1.0;
+    double offset_x = 0.0;
+    double offset_y = 0.0;
 
-    // Scale Projection Matrix P (3x4 row-major)
-    // [fx',   0, cx', Tx]
-    // [  0, fy', cy', Ty]
-    // [  0,   0,   1,  0]
-    scaled_info.p[0] = orig_info.p[0] * sx; // fx'
-    scaled_info.p[2] = orig_info.p[2] * sx; // cx'
-    scaled_info.p[3] = orig_info.p[3] * sx; // Tx
-    scaled_info.p[5] = orig_info.p[5] * sy; // fy'
-    scaled_info.p[6] = orig_info.p[6] * sy; // cy'
-    scaled_info.p[7] = orig_info.p[7] * sy; // Ty
+    if (add_border_)
+    {
+      // Aspect-ratio-preserving scale with letterbox padding (e.g. videoscale add-borders=true)
+      if (orig_ar >= target_ar)
+      {
+        const double s = static_cast<double>(target_w) / static_cast<double>(orig_w);
+        sx = s;
+        sy = s;
+        offset_x = 0.0;
+        const double active_h = static_cast<double>(orig_h) * s;
+        offset_y = (static_cast<double>(target_h) - active_h) / 2.0;
+      }
+      else
+      {
+        const double s = static_cast<double>(target_h) / static_cast<double>(orig_h);
+        sx = s;
+        sy = s;
+        const double active_w = static_cast<double>(orig_w) * s;
+        offset_x = (static_cast<double>(target_w) - active_w) / 2.0;
+        offset_y = 0.0;
+      }
+
+      // Scale Camera Matrix K (3x3 row-major)
+      scaled_info.k[0] = orig_info.k[0] * sx;
+      scaled_info.k[2] = orig_info.k[2] * sx + offset_x;
+      scaled_info.k[4] = orig_info.k[4] * sy;
+      scaled_info.k[5] = orig_info.k[5] * sy + offset_y;
+
+      // Scale Projection Matrix P (3x4 row-major)
+      scaled_info.p[0] = orig_info.p[0] * sx;
+      scaled_info.p[2] = orig_info.p[2] * sx + offset_x;
+      scaled_info.p[3] = orig_info.p[3] * sx;
+      scaled_info.p[5] = orig_info.p[5] * sy;
+      scaled_info.p[6] = orig_info.p[6] * sy + offset_y;
+      scaled_info.p[7] = orig_info.p[7] * sy;
+    }
+    else
+    {
+      // Aspect-ratio-preserving scale with center cropping (e.g. videocrop left/right or top/bottom)
+      double crop_x = 0.0;
+      double crop_y = 0.0;
+      double s = 1.0;
+
+      if (orig_ar > target_ar)
+      {
+        const double cropped_w = static_cast<double>(orig_h) * target_ar;
+        crop_x = (static_cast<double>(orig_w) - cropped_w) / 2.0;
+        s = static_cast<double>(target_w) / cropped_w;
+      }
+      else if (orig_ar < target_ar)
+      {
+        const double cropped_h = static_cast<double>(orig_w) / target_ar;
+        crop_y = (static_cast<double>(orig_h) - cropped_h) / 2.0;
+        s = static_cast<double>(target_h) / cropped_h;
+      }
+      else
+      {
+        s = static_cast<double>(target_w) / static_cast<double>(orig_w);
+      }
+
+      sx = s;
+      sy = s;
+
+      // Scale Camera Matrix K (3x3 row-major)
+      scaled_info.k[0] = orig_info.k[0] * sx;
+      scaled_info.k[2] = (orig_info.k[2] - crop_x) * sx;
+      scaled_info.k[4] = orig_info.k[4] * sy;
+      scaled_info.k[5] = (orig_info.k[5] - crop_y) * sy;
+
+      // Scale Projection Matrix P (3x4 row-major)
+      scaled_info.p[0] = orig_info.p[0] * sx;
+      scaled_info.p[2] = (orig_info.p[2] - crop_x) * sx;
+      scaled_info.p[3] = orig_info.p[3] * sx;
+      scaled_info.p[5] = orig_info.p[5] * sy;
+      scaled_info.p[6] = (orig_info.p[6] - crop_y) * sy;
+      scaled_info.p[7] = orig_info.p[7] * sy;
+    }
 
     return scaled_info;
   }
