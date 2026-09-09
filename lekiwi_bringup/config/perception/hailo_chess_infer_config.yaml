@@ -1,0 +1,19 @@
+/**:
+  ros__parameters:
+    # Frame IDs & Topics
+    frame_id: "stereo_left_optical"
+    camera_topic: "/cameras/stereo_left/image_raw"
+    fen_topic: "/chess/fen"
+    detections_topic: "/chess/detections_2d"
+    tag_centers_topic: "/chess/tag_centers"
+
+    # Hailo Hardware & Models (empty string defaults to package share directory)
+    vdevice_group_id: "lekiwi_chess"
+    board_hef_path: ""
+    pcs_hef_path: ""
+
+    # Pipeline & Processing Parameters
+    transition_timeout_ms: 5000
+    history_window_size: 3
+    confidence_threshold: 0.35
+    autostart: true

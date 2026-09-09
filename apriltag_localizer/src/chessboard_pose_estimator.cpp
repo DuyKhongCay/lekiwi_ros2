@@ -164,6 +164,8 @@ namespace apriltag_localizer
       // Publishers
       robot_pose_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
           "/chessboard/robot_pose", rclcpp::QoS(10));
+      tag_centers_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
+          "/chess/tag_centers", rclcpp::SensorDataQoS());
 
       // Services
       lock_anchor_srv_ = create_service<std_srvs::srv::Trigger>(
@@ -211,27 +213,13 @@ namespace apriltag_localizer
 
   void ChessboardPoseEstimator::init_detector()
   {
-    // Static lookup table without dynamic memory allocation (supporting 16h5 and 36h11)
-    struct TagDictEntry
-    {
-      std::string_view name;
-      cv::aruco::PREDEFINED_DICTIONARY_NAME dict;
-    };
-    static constexpr TagDictEntry kDicts[] = {
-        {"16h5", cv::aruco::DICT_APRILTAG_16h5},
-        {"tag16h5", cv::aruco::DICT_APRILTAG_16h5},
-        {"36h11", cv::aruco::DICT_APRILTAG_36h11},
-        {"tag36h11", cv::aruco::DICT_APRILTAG_36h11}};
-
-    cv::aruco::PREDEFINED_DICTIONARY_NAME selected_dict = cv::aruco::DICT_APRILTAG_16h5;
-    for (const auto &entry : kDicts)
-    {
-      if (tag_family_ == entry.name)
-      {
-        selected_dict = entry.dict;
-        break;
-      }
-    }
+    const auto dict_id = (tag_family_.find("36h11") != std::string::npos)
+                             ? cv::aruco::DICT_APRILTAG_36h11
+                             : cv::aruco::DICT_APRILTAG_16h5;
+    aruco_dict_ = cv::aruco::getPredefinedDictionary(dict_id);
+    aruco_params_ = cv::aruco::DetectorParameters::create();
+    aruco_params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
+  }
 
     aruco_dict_ = cv::aruco::getPredefinedDictionary(selected_dict);
     aruco_params_ = cv::aruco::DetectorParameters::create();
@@ -432,6 +420,36 @@ namespace apriltag_localizer
       last_process_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
       frame_counter_.fetch_add(1, std::memory_order_relaxed);
       return;
+    }
+
+    // Publish lightweight normalized tag centers for HailoChessInferenceComponent
+    if (tag_centers_pub_ && cv_ptr->image.cols > 0 && cv_ptr->image.rows > 0)
+    {
+      geometry_msgs::msg::PolygonStamped poly_msg;
+      poly_msg.header = msg->header;
+      poly_msg.polygon.points.reserve(marker_ids.size());
+
+      const double img_w = static_cast<double>(cv_ptr->image.cols);
+      const double img_h = static_cast<double>(cv_ptr->image.rows);
+
+      for (size_t i = 0; i < marker_ids.size(); ++i)
+      {
+        if (marker_corners[i].size() == 4U)
+        {
+          const double cx = (marker_corners[i][0].x + marker_corners[i][1].x +
+                             marker_corners[i][2].x + marker_corners[i][3].x) / 4.0;
+          const double cy = (marker_corners[i][0].y + marker_corners[i][1].y +
+                             marker_corners[i][2].y + marker_corners[i][3].y) / 4.0;
+
+          geometry_msgs::msg::Point32 pt;
+          pt.x = static_cast<float>(cx / img_w);
+          pt.y = static_cast<float>(cy / img_h);
+          pt.z = static_cast<float>(marker_ids[i]);
+          poly_msg.polygon.points.push_back(pt);
+        }
+      }
+
+      tag_centers_pub_->publish(poly_msg);
     }
 
     cv::Mat rvec, tvec;

@@ -1,9 +1,9 @@
 /**
  * @file chess_visualizer_component.hpp
- * @brief Chessboard and FEN state visualization component for LeKiwi perception.
+ * @brief Headless chess detection overlay and 2D board compressed image publisher for RViz / Host PC.
  *
- * Subscribes to `/chess/debug_image`, `/chess/detections_2d`, and `/chess/fen`.
- * Renders detection bounding boxes and a 2D digital chessboard overlay side-by-side.
+ * Subscribes to raw camera image, `/chess/detections_2d`, and `/chess/fen`.
+ * Publishes `/chess/overlay_image/compressed` and `/chess/board_2d/compressed`.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -11,44 +11,38 @@
 
 #pragma once
 
-#include <rclcpp/callback_group.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <vision_msgs/msg/detection2_d_array.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 
 #include <opencv2/opencv.hpp>
-#include <condition_variable>
 #include <memory>
 #include <string>
 #include <map>
 #include <vector>
 #include <mutex>
-#include <thread>
 #include <atomic>
 
 namespace lekiwi_perception
 {
 
   /**
-   * @brief Node for rendering side-by-side camera debug and digital 2D chessboard overlays.
+   * @brief Headless component rendering piece bounding box overlays and 2D board panels to compressed image topics.
    */
   class ChessVisualizerComponent : public rclcpp::Node
   {
   public:
-    /**
-     * @brief Constructs ChessVisualizerComponent.
-     * @param[in] options Node options.
-     */
     explicit ChessVisualizerComponent(const rclcpp::NodeOptions &options);
-    ~ChessVisualizerComponent() override;
+    ~ChessVisualizerComponent() override = default;
 
   private:
     /**
-     * Receive debug camera image and render 2D side-by-side visualization.
+     * Callback for raw camera image frame: renders overlay and 2D board, encodes to JPEG and publishes.
      */
-    void debugImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
+    void cameraImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
 
     /**
      * Receive latest FEN string update.
@@ -83,41 +77,33 @@ namespace lekiwi_perception
      */
     std::map<std::string, std::string> parseFenToOccupancy(const std::string &fen_str);
 
-    // Dedicated thread for OpenCV Qt GUI event loop
-    void guiThreadLoop();
-
     // ROS 2 Communications
-    rclcpp::CallbackGroup::SharedPtr callback_group_;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr debug_image_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fen_sub_;
     rclcpp::Subscription<vision_msgs::msg::Detection2DArray>::SharedPtr detections_sub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr visual_image_pub_;
 
-    // Visualization state
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr overlay_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr board_2d_pub_;
+
+    // Parameters & State
+    std::string camera_topic_{"/cameras/stereo_left/image_raw"};
+    std::string fen_topic_{"/chess/fen"};
+    std::string detections_topic_{"/chess/detections_2d"};
+    int jpeg_quality_{80};
+    int board_panel_size_{480};
+
     std::string current_fen_;
     std::string last_valid_fen_;
     std::vector<vision_msgs::msg::Detection2D> latest_detections_;
     std::string pieces_dir_;
-    bool gui_display_ = false;
-    std::string window_name_;
     std::map<std::string, cv::Mat> sprite_cache_;
-    int cached_cell_size_ = 0;
+    int cached_cell_size_{0};
     std::mutex state_mutex_;
-    std::condition_variable cv_var_;
-
-    // Dedicated GUI Thread
-    std::thread gui_thread_;
-    std::atomic<bool> is_running_{false};
-
-    // Frame buffer
-    cv::Mat latest_image_;
-    std_msgs::msg::Header latest_header_;
-    bool has_new_frame_ = false;
 
     // FPS calculation
-    double last_fps_time_ = 0.0;
-    int frame_count_ = 0;
-    float rolling_fps_ = 0.0f;
+    double last_fps_time_{0.0};
+    int frame_count_{0};
+    float rolling_fps_{0.0F};
   };
 
 } // namespace lekiwi_perception

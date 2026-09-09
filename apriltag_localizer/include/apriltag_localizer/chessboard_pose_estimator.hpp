@@ -24,6 +24,7 @@
 #include "cv_bridge/cv_bridge.hpp"
 #include "apriltag_msgs/msg/april_tag_detection_array.hpp"
 #include "diagnostic_updater/diagnostic_updater.hpp"
+#include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "lekiwi_interfaces/msg/camera_mode.hpp"
@@ -212,6 +213,7 @@ namespace apriltag_localizer
 
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr robot_pose_pub_;
     rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_detections_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr tag_centers_pub_;
 
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr lock_anchor_srv_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_anchor_srv_;

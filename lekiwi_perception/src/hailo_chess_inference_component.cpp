@@ -36,32 +36,27 @@ namespace lekiwi_perception
   HailoChessInferenceComponent::CallbackReturn HailoChessInferenceComponent::on_configure(
       const rclcpp_lifecycle::State &)
   {
-    try
-    {
-      const std::string models_dir = ament_index_cpp::get_package_share_directory("lekiwi_perception") + "/resources/models";
-      board_hef_path_ = models_dir + "/yolov8n-seg.hef";
-      pcs_hef_path_ = models_dir + "/yolo11n.hef";
-    }
-    catch (const std::exception &e)
-    {
-      board_hef_path_ = "resources/models/yolov8n-seg.hef";
-      pcs_hef_path_ = "resources/models/yolo11n.hef";
-      RCLCPP_WARN(
-          get_logger(),
-          "Failed to locate lekiwi_perception package share directory: %s. Falling back to relative paths.",
-          e.what());
-    }
-
-    RCLCPP_INFO(get_logger(), "Board HEF path: %s", board_hef_path_.c_str());
-    RCLCPP_INFO(get_logger(), "Pieces HEF path: %s", pcs_hef_path_.c_str());
+    // Parameters
+    board_hef_path_ = declare_parameter<std::string>("board_hef_path", "/resources/model/yolov8n-seg.hef");
+    pcs_hef_path_ = declare_parameter<std::string>("pcs_hef_path", "/resources/model/yolo11n.hef");
+    camera_topic_ = declare_parameter<std::string>("camera_topic", "/cameras/stereo_left/image_raw");
+    fen_topic_ = declare_parameter<std::string>("fen_topic", "/chess/fen");
+    detections_topic_ = declare_parameter<std::string>("detections_topic", "/chess/detections_2d");
+    tag_centers_topic_ = declare_parameter<std::string>("tag_centers_topic", "/chess/tag_centers");
 
     frame_id_ = declare_parameter<std::string>("frame_id", "stereo_left_optical");
-    debug_image_ = declare_parameter<bool>("debug_image", true);
+    vdevice_group_id_ = declare_parameter<std::string>("vdevice_group_id", "lekiwi_chess");
+    board_hef_path_ = declare_parameter<std::string>("board_hef_path", "");
+    pcs_hef_path_ = declare_parameter<std::string>("pcs_hef_path", "");
+    confidence_threshold_ = declare_parameter<double>("confidence_threshold", 0.35);
+    const int history_window = declare_parameter<int>("history_window_size", 3);
     transition_timeout_ = std::chrono::milliseconds(declare_parameter<int>("transition_timeout_ms", 5000));
 
-    fen_pub_ = create_publisher<std_msgs::msg::String>("/chess/fen", rclcpp::SensorDataQoS());
-    detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>("/chess/detections_2d", rclcpp::SensorDataQoS());
-    debug_image_pub_ = create_publisher<sensor_msgs::msg::Image>("/chess/debug_image", rclcpp::SensorDataQoS());
+
+    game_tracker_ = std::make_unique<hailo::ChessGameStateTracker>(history_window);
+
+    fen_pub_ = create_publisher<std_msgs::msg::String>(fen_topic_, rclcpp::SensorDataQoS());
+    detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>(detections_topic_, rclcpp::SensorDataQoS());
 
     mode_srv_ = create_service<lekiwi_interfaces::srv::SetCamMode>(
         "~/set_mode",
@@ -69,14 +64,14 @@ namespace lekiwi_perception
                   std::placeholders::_1, std::placeholders::_2));
 
     image_sub_ = create_subscription<sensor_msgs::msg::Image>(
-        "/cameras/stereo_left/image_raw",
+        camera_topic_,
         rclcpp::SensorDataQoS(),
         std::bind(&HailoChessInferenceComponent::handle_image_input, this, std::placeholders::_1));
 
-    tag_detections_sub_ = create_subscription<apriltag_msgs::msg::AprilTagDetectionArray>(
-        "/tag_detections",
+    tag_centers_sub_ = create_subscription<geometry_msgs::msg::PolygonStamped>(
+        tag_centers_topic_,
         rclcpp::SensorDataQoS(),
-        std::bind(&HailoChessInferenceComponent::handle_tag_detections, this, std::placeholders::_1));
+        std::bind(&HailoChessInferenceComponent::handle_tag_centers, this, std::placeholders::_1));
 
     hailo_pipeline_ = std::make_unique<HailoGstPipeline>(
         [this](GstSample *sample, GstElement *pipeline)
@@ -103,7 +98,6 @@ namespace lekiwi_perception
   {
     fen_pub_->on_activate();
     detections_pub_->on_activate();
-    debug_image_pub_->on_activate();
 
     pipeline_state_ = "STARTING";
     std::string error;
@@ -147,7 +141,6 @@ namespace lekiwi_perception
 
     fen_pub_->on_deactivate();
     detections_pub_->on_deactivate();
-    debug_image_pub_->on_deactivate();
 
     RCLCPP_INFO(get_logger(), "HailoChessInferenceComponent deactivated");
     return CallbackReturn::SUCCESS;
@@ -191,48 +184,34 @@ namespace lekiwi_perception
     }
     mode_srv_.reset();
     image_sub_.reset();
-    tag_detections_sub_.reset();
+    tag_centers_sub_.reset();
     {
       std::lock_guard<std::mutex> lock(tags_mutex_);
       latest_tags_.clear();
     }
     fen_pub_.reset();
     detections_pub_.reset();
-    debug_image_pub_.reset();
     a1_corner_idx_.store(0);
     current_camera_mode_.store(lekiwi_interfaces::msg::CameraMode::STANDBY);
     pipeline_state_ = "STOPPED";
   }
 
-  void HailoChessInferenceComponent::handle_tag_detections(
-      const apriltag_msgs::msg::AprilTagDetectionArray::ConstSharedPtr &msg)
+  void HailoChessInferenceComponent::handle_tag_centers(
+      const geometry_msgs::msg::PolygonStamped::ConstSharedPtr &msg)
   {
-    if (!msg || msg->detections.empty())
+    if (!msg || msg->polygon.points.empty())
     {
       return;
     }
 
     std::vector<hailo::Tag2D> tags;
-    tags.reserve(msg->detections.size());
+    tags.reserve(msg->polygon.points.size());
 
-    const float w = 640.0f;
-    const float h = 640.0f;
-
-    for (const auto &det : msg->detections)
+    for (const auto &pt : msg->polygon.points)
     {
       hailo::Tag2D tag;
-      tag.id = det.id;
-      float cx = static_cast<float>(det.centre.x);
-      float cy = static_cast<float>(det.centre.y);
-      if (cx > 1.0f)
-      {
-        cx /= w;
-      }
-      if (cy > 1.0f)
-      {
-        cy /= h;
-      }
-      tag.center_norm = cv::Point2f(cx, cy);
+      tag.id = static_cast<int>(pt.z);
+      tag.center_norm = cv::Point2f(pt.x, pt.y);
       tags.push_back(tag);
     }
 
@@ -274,25 +253,6 @@ namespace lekiwi_perception
       return;
     }
 
-    size_t sub_count = 0;
-    if (fen_pub_)
-    {
-      sub_count += fen_pub_->get_subscription_count() + fen_pub_->get_intra_process_subscription_count();
-    }
-    if (detections_pub_)
-    {
-      sub_count += detections_pub_->get_subscription_count() + detections_pub_->get_intra_process_subscription_count();
-    }
-    if (debug_image_pub_)
-    {
-      sub_count += debug_image_pub_->get_subscription_count() + debug_image_pub_->get_intra_process_subscription_count();
-    }
-
-    if (sub_count == 0)
-    {
-      return;
-    }
-
     std::string error;
     if (!hailo_pipeline_->push_image(*msg, error))
     {
@@ -309,8 +269,11 @@ namespace lekiwi_perception
       return;
     }
 
+    (void)pipeline;
+    const auto proc_start = std::chrono::steady_clock::now();
+
     GstBuffer *buffer = gst_sample_get_buffer(sample);
-    if (buffer == nullptr)
+    if (!buffer)
     {
       return;
     }
@@ -318,6 +281,12 @@ namespace lekiwi_perception
     GstMapInfo map;
     if (!gst_buffer_map(buffer, &map, GST_MAP_READ))
     {
+      return;
+    }
+
+    if (map.data == nullptr || map.size == 0)
+    {
+      gst_buffer_unmap(buffer, &map);
       return;
     }
 
@@ -360,7 +329,7 @@ namespace lekiwi_perception
     if (valid_metadata)
     {
       // Process game rules, debounce, and generate full FEN
-      const hailo::GameStateResult game_res = game_tracker_.update(state.piece_placement);
+      const hailo::GameStateResult game_res = game_tracker_->update(state.piece_placement);
 
       if (!game_res.full_fen.empty() && fen_pub_->is_activated())
       {
@@ -400,25 +369,6 @@ namespace lekiwi_perception
           detections_msg->detections.push_back(std::move(detection));
         }
         detections_pub_->publish(std::move(detections_msg));
-      }
-
-      // Gate Filter Logic:
-      // If debug_image_ is true -> continuously publish all frames (debug mode)
-      // If debug_image_ is false -> gate filter: only publish when game_res.is_legal_move is true
-      bool should_publish_image = debug_image_ || game_res.is_legal_move;
-
-      if (should_publish_image && debug_image_pub_->is_activated() &&
-          (debug_image_pub_->get_subscription_count() + debug_image_pub_->get_intra_process_subscription_count() > 0U))
-      {
-        auto debug_msg = std::make_unique<sensor_msgs::msg::Image>();
-        debug_msg->header = header;
-        debug_msg->height = static_cast<uint32_t>(GST_VIDEO_INFO_HEIGHT(&video_info));
-        debug_msg->width = static_cast<uint32_t>(GST_VIDEO_INFO_WIDTH(&video_info));
-        debug_msg->encoding = "rgb8";
-        debug_msg->is_bigendian = false;
-        debug_msg->step = static_cast<uint32_t>(debug_msg->width * 3);
-        debug_msg->data.assign(map.data, map.data + (debug_msg->height * debug_msg->step));
-        debug_image_pub_->publish(std::move(debug_msg));
       }
     }
 

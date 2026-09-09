@@ -43,8 +43,11 @@ namespace lekiwi_perception
   ChessVisualizerComponent::ChessVisualizerComponent(const rclcpp::NodeOptions &options)
       : Node("chess_visualizer_component", options)
   {
-    gui_display_ = this->declare_parameter<bool>("gui_display", false);
-    window_name_ = "Hailo Chess Vision - Live Perception & 2D Board";
+    camera_topic_ = this->declare_parameter<std::string>("camera_topic", "/cameras/stereo_left/image_raw");
+    fen_topic_ = this->declare_parameter<std::string>("fen_topic", "/chess/fen");
+    detections_topic_ = this->declare_parameter<std::string>("detections_topic", "/chess/detections_2d");
+    jpeg_quality_ = this->declare_parameter<int>("jpeg_quality", 80);
+    board_panel_size_ = this->declare_parameter<int>("board_panel_size", 480);
 
     try
     {
@@ -56,48 +59,30 @@ namespace lekiwi_perception
       pieces_dir_ = "resources/pieces";
     }
 
-    RCLCPP_INFO(this->get_logger(), "Initializing Chess Visualizer Component (GUI Display: %s)",
-                gui_display_ ? "ON" : "OFF");
+    RCLCPP_INFO(this->get_logger(), "Initializing Headless Chess Visualizer (JPEG Quality: %d)", jpeg_quality_);
 
     current_fen_ = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
     last_valid_fen_ = current_fen_;
 
-    callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-    rclcpp::SubscriptionOptions sub_opts;
-    sub_opts.callback_group = callback_group_;
-
     fen_sub_ = this->create_subscription<std_msgs::msg::String>(
-        "/chess/fen", rclcpp::SensorDataQoS(),
-        std::bind(&ChessVisualizerComponent::fenCallback, this, std::placeholders::_1), sub_opts);
+        fen_topic_, rclcpp::SensorDataQoS(),
+        std::bind(&ChessVisualizerComponent::fenCallback, this, std::placeholders::_1));
 
     detections_sub_ = this->create_subscription<vision_msgs::msg::Detection2DArray>(
-        "/chess/detections_2d", rclcpp::SensorDataQoS(),
-        std::bind(&ChessVisualizerComponent::detectionsCallback, this, std::placeholders::_1), sub_opts);
+        detections_topic_, rclcpp::SensorDataQoS(),
+        std::bind(&ChessVisualizerComponent::detectionsCallback, this, std::placeholders::_1));
 
-    debug_image_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-        "/chess/debug_image", rclcpp::SensorDataQoS(),
-        std::bind(&ChessVisualizerComponent::debugImageCallback, this, std::placeholders::_1), sub_opts);
+    camera_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
+        camera_topic_, rclcpp::SensorDataQoS(),
+        std::bind(&ChessVisualizerComponent::cameraImageCallback, this, std::placeholders::_1));
 
-    visual_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-        "/chess/visualization_image", rclcpp::SensorDataQoS());
+    overlay_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+        "/chess/overlay_image/compressed", rclcpp::SensorDataQoS());
+
+    board_2d_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+        "/chess/board_2d/compressed", rclcpp::SensorDataQoS());
 
     last_fps_time_ = this->now().seconds();
-
-    if (gui_display_)
-    {
-      is_running_ = true;
-      gui_thread_ = std::thread(&ChessVisualizerComponent::guiThreadLoop, this);
-    }
-  }
-
-  ChessVisualizerComponent::~ChessVisualizerComponent()
-  {
-    is_running_ = false;
-    cv_var_.notify_all();
-    if (gui_thread_.joinable())
-    {
-      gui_thread_.join();
-    }
   }
 
   void ChessVisualizerComponent::fenCallback(const std_msgs::msg::String::ConstSharedPtr msg)
@@ -314,7 +299,7 @@ namespace lekiwi_perception
       cv::putText(panel, rank_char, cv::Point(rx, ry), cv::FONT_HERSHEY_SIMPLEX, label_scale, cv::Scalar(180, 180, 180), 1, cv::LINE_AA);
     }
 
-    std::string header_text = "CONVERTED 2D BOARD (" + std::to_string(occupancy_map.size()) + " pieces)";
+    std::string header_text = "2D BOARD (" + std::to_string(occupancy_map.size()) + " pieces)";
     cv::putText(panel, header_text, cv::Point(20, static_cast<int>(header_h * 0.65)),
                 cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(255, 220, 0), 1, cv::LINE_AA);
 
@@ -322,23 +307,21 @@ namespace lekiwi_perception
     {
       std::stringstream fps_ss;
       fps_ss << std::fixed << std::setprecision(1) << "FPS: " << fps;
-      cv::putText(panel, fps_ss.str(), cv::Point(panel_width - 140, static_cast<int>(header_h * 0.65)),
-                  cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(120, 255, 0), 1, cv::LINE_AA);
+      cv::putText(panel, fps_ss.str(), cv::Point(panel_width - 120, static_cast<int>(header_h * 0.65)),
+                  cv::FONT_HERSHEY_SIMPLEX, 0.50, cv::Scalar(120, 255, 0), 1, cv::LINE_AA);
     }
-
-    cv::line(panel, cv::Point(0, 0), cv::Point(0, panel_height), cv::Scalar(255, 200, 0), 2);
 
     std::string fen_display = fen_str.length() <= 52 ? fen_str : fen_str.substr(0, 49) + "...";
     cv::putText(panel, "FEN: " + fen_display, cv::Point(20, panel_height - static_cast<int>(footer_h * 0.35)),
                 cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
   }
 
-  void ChessVisualizerComponent::debugImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg)
+  void ChessVisualizerComponent::cameraImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg)
   {
-    cv_bridge::CvImagePtr cv_ptr;
+    cv_bridge::CvImageConstPtr cv_ptr;
     try
     {
-      cv_ptr = cv_bridge::toCvCopy(msg, "bgr8");
+      cv_ptr = cv_bridge::toCvShare(msg, "bgr8");
     }
     catch (const cv_bridge::Exception &e)
     {
@@ -351,123 +334,63 @@ namespace lekiwi_perception
       return;
     }
 
-    // Overlay detections onto camera image
+    // Update FPS calculation
+    frame_count_++;
+    double now_sec = this->now().seconds();
+    double elapsed = now_sec - last_fps_time_;
+    if (elapsed >= 1.0)
+    {
+      rolling_fps_ = static_cast<float>(frame_count_ / elapsed);
+      frame_count_ = 0;
+      last_fps_time_ = now_sec;
+    }
+
+    const std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
+
+    // 1. Overlay detections onto camera image & Publish /chess/overlay_image/compressed
+    cv::Mat overlay_img = cv_ptr->image.clone();
     std::vector<vision_msgs::msg::Detection2D> dets;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       dets = latest_detections_;
     }
-    drawPieceDetections(cv_ptr->image, dets);
+    drawPieceDetections(overlay_img, dets);
 
+    std::vector<uchar> overlay_buf;
+    if (cv::imencode(".jpg", overlay_img, overlay_buf, encode_params))
+    {
+      auto overlay_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+      overlay_msg->header = msg->header;
+      overlay_msg->format = "jpeg";
+      overlay_msg->data = std::move(overlay_buf);
+      overlay_pub_->publish(std::move(overlay_msg));
+    }
+
+    // 2. Render 2D top-down board panel & Publish /chess/board_2d/compressed
+    std::string fen;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      latest_image_ = cv_ptr->image;
-      latest_header_ = msg->header;
-      has_new_frame_ = true;
-    }
-    cv_var_.notify_one();
-
-    // Publish visualization topic if subscribed
-    size_t vis_subs = visual_image_pub_->get_subscription_count() + visual_image_pub_->get_intra_process_subscription_count();
-    if (vis_subs > 0)
-    {
-      std::string fen;
+      fen = current_fen_;
+      if (fen.empty() || fen.find("8/8/8/8/8/8/8/8") != std::string::npos)
       {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        fen = current_fen_;
-        if (fen.empty() || fen.find("8/8/8/8/8/8/8/8") != std::string::npos)
+        if (!last_valid_fen_.empty())
         {
-          if (!last_valid_fen_.empty())
-          {
-            fen = last_valid_fen_;
-          }
+          fen = last_valid_fen_;
         }
       }
-      auto occupancy_map = parseFenToOccupancy(fen);
-      int cam_h = cv_ptr->image.rows;
-      int board_w = cam_h;
-      cv::Mat board_panel;
-      render2DBoardPanel(board_panel, occupancy_map, fen, board_w, cam_h, rolling_fps_);
-
-      cv::Mat composite;
-      cv::hconcat(cv_ptr->image, board_panel, composite);
-
-      auto out_msg = std::make_unique<sensor_msgs::msg::Image>();
-      cv_bridge::CvImage cv_out(msg->header, "bgr8", composite);
-      cv_out.toImageMsg(*out_msg);
-      visual_image_pub_->publish(std::move(out_msg));
     }
-  }
+    auto occupancy_map = parseFenToOccupancy(fen);
+    cv::Mat board_panel;
+    render2DBoardPanel(board_panel, occupancy_map, fen, board_panel_size_, board_panel_size_, rolling_fps_);
 
-  void ChessVisualizerComponent::guiThreadLoop()
-  {
-    cv::namedWindow(window_name_, cv::WINDOW_NORMAL);
-    cv::resizeWindow(window_name_, 1360, 580);
-
-    while (rclcpp::ok() && is_running_)
+    std::vector<uchar> board_buf;
+    if (cv::imencode(".jpg", board_panel, board_buf, encode_params))
     {
-      cv::Mat cam_img;
-      std::string fen;
-      bool has_frame = false;
-
-      {
-        std::unique_lock<std::mutex> lock(state_mutex_);
-        cv_var_.wait_for(lock, std::chrono::milliseconds(30), [this]
-                         { return !is_running_ || has_new_frame_; });
-
-        if (!is_running_ || !rclcpp::ok())
-          break;
-
-        if (has_new_frame_ && !latest_image_.empty())
-        {
-          cam_img = latest_image_.clone();
-          has_new_frame_ = false;
-          has_frame = true;
-        }
-        fen = current_fen_;
-        if (fen.empty() || fen.find("8/8/8/8/8/8/8/8") != std::string::npos)
-        {
-          if (!last_valid_fen_.empty())
-          {
-            fen = last_valid_fen_;
-          }
-        }
-      }
-
-      if (has_frame && !cam_img.empty())
-      {
-        frame_count_++;
-        double now_sec = this->now().seconds();
-        double elapsed = now_sec - last_fps_time_;
-        if (elapsed >= 1.0)
-        {
-          rolling_fps_ = static_cast<float>(frame_count_ / elapsed);
-          frame_count_ = 0;
-          last_fps_time_ = now_sec;
-        }
-
-        auto occupancy_map = parseFenToOccupancy(fen);
-        int cam_h = cam_img.rows;
-        int board_w = cam_h;
-        cv::Mat board_panel;
-        render2DBoardPanel(board_panel, occupancy_map, fen, board_w, cam_h, rolling_fps_);
-
-        cv::Mat composite;
-        cv::hconcat(cam_img, board_panel, composite);
-
-        cv::imshow(window_name_, composite);
-      }
-
-      cv::waitKey(1);
-    }
-
-    try
-    {
-      cv::destroyWindow(window_name_);
-      cv::waitKey(1);
-    }
-    catch (...)
-    {
+      auto board_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+      board_msg->header = msg->header;
+      board_msg->format = "jpeg";
+      board_msg->data = std::move(board_buf);
+      board_2d_pub_->publish(std::move(board_msg));
     }
   }
 

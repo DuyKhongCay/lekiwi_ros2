@@ -15,10 +15,10 @@ def generate_launch_description():
     bringup_share = FindPackageShare("lekiwi_bringup")
 
     default_imu_params = PathJoinSubstitution(
-        [bringup_share, "config", "sensors", "imu_filter.yaml"]
+        [bringup_share, "config", "imu", "imu_filter.yaml"]
     )
     default_mag_calib = PathJoinSubstitution(
-        [bringup_share, "config", "sensors", "icm20948_magnetometer_calib.yaml"]
+        [bringup_share, "config", "imu", "icm20948_magnetometer_calib.yaml"]
     )
 
     use_sim_time_arg = DeclareLaunchArgument(

@@ -13,13 +13,13 @@
 #define LEKIWI_PERCEPTION__HAILO_CHESS_INFERENCE_COMPONENT_HPP_
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
+#include <geometry_msgs/msg/polygon_stamped.hpp>
 #include <gst/gst.h>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <vision_msgs/msg/detection2_d_array.hpp>
-#include <apriltag_msgs/msg/april_tag_detection_array.hpp>
 #include <lekiwi_interfaces/srv/set_cam_mode.hpp>
 #include <lekiwi_interfaces/msg/camera_mode.hpp>
 
@@ -76,7 +76,7 @@ namespace lekiwi_perception
   private:
     void handle_sample(GstSample *sample, GstElement *pipeline);
     void handle_image_input(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
-    void handle_tag_detections(const apriltag_msgs::msg::AprilTagDetectionArray::ConstSharedPtr &msg);
+    void handle_tag_centers(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr &msg);
     void handle_set_mode(
         const std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Request> request,
         std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Response> response);
@@ -84,24 +84,27 @@ namespace lekiwi_perception
     void reset_state();
     void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
 
-    /// Internal package paths to HEF models (resolved via ament_index_cpp, not ROS parameters)
+    /// Parameters
+    std::string camera_topic_{"/cameras/stereo_left/image_raw"};
+    std::string fen_topic_{"/chess/fen"};
+    std::string detections_topic_{"/chess/detections_2d"};
+    std::string tag_centers_topic_{"/chess/tag_centers"};
     std::string board_hef_path_;
     std::string pcs_hef_path_;
     std::string vdevice_group_id_{"lekiwi_chess"};
     std::string frame_id_{"stereo_left_optical"};
-    bool debug_image_{true};
+    double confidence_threshold_{0.35};
     std::chrono::milliseconds transition_timeout_{5000};
 
     std::unique_ptr<HailoGstPipeline> hailo_pipeline_;
-    hailo::ChessGameStateTracker game_tracker_{3};
+    std::unique_ptr<hailo::ChessGameStateTracker> game_tracker_;
 
     rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::String>::SharedPtr fen_pub_;
     rclcpp_lifecycle::LifecyclePublisher<vision_msgs::msg::Detection2DArray>::SharedPtr detections_pub_;
-    rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr debug_image_pub_;
 
     rclcpp::Service<lekiwi_interfaces::srv::SetCamMode>::SharedPtr mode_srv_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
-    rclcpp::Subscription<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_detections_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr tag_centers_sub_;
     std::mutex tags_mutex_;
     std::vector<hailo::Tag2D> latest_tags_;
     std::atomic<int> a1_corner_idx_{0};
