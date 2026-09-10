@@ -104,6 +104,7 @@ def generate_launch_description():
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
         }.items(),
+        condition=IfCondition(LaunchConfiguration("imu_broadcaster")),
     )
 
     cameras = IncludeLaunchDescription(

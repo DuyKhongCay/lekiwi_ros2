@@ -3,25 +3,28 @@
     tag_family: "16h5"
     tag_size: 0.029
     detection_rate_hz: 2.0
+    calib: false
 
     # Calibrated tag definitions in chessboard_frame (origin at A1):
     # +X: A1 -> H1 (File A -> H)
     # +Y: A1 -> A8 (Rank 1 -> 8)
     # +Z: Normal pointing up perpendicular to the board
     tags:
+      # Calibration Date & Time: 2026-09-10 23:52:04
       ids: [0, 1, 2, 3]
-      names: ["A1", "H1", "H8", "A8"]
-      positions_x: [0.0000, 0.3832, 0.3772, -0.0039]
-      positions_y: [0.0000, 0.0037, 0.3885, 0.3850]
+      names: ['A1', 'H1', 'H8', 'A8']
+      positions_x: [0.0000, 0.3901, 0.3894, 0.0006]
+      positions_y: [0.0000, -0.0015, 0.3900, 0.3910]
       positions_z: [0.0040, 0.0040, 0.0040, 0.0040]
-      yaws: [0.0000, 0.0202, 0.0082, 0.0084]
+      yaws: [0.0000, 0.0136, -0.0103, -0.0087]
+
 
     # Frame IDs
     map_frame: "map"
     odom_frame: "odom"
     chessboard_frame: "chessboard_frame"
     camera_frame: "stereo_left_optical"
-    base_frame: "base_link"
+    base_frame: "base_footprint"
 
     # Board nominal pose in map: [x, y, z, roll, pitch, yaw]
     chessboard_pose_in_map: [0.0, 0.0, 0.004, 0.0, 0.0, 0.0]

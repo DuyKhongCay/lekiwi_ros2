@@ -27,7 +27,7 @@ arm_trajectory_controller:
     state_interfaces: [position, velocity]
     interpolate_from_desired_state: true
     allow_nonzero_velocity_at_trajectory_end: true
-    allow_partial_joints_goal: false
+    allow_partial_joints_goal: true
     state_publish_rate: 50.0
     action_monitor_rate: 20.0
 

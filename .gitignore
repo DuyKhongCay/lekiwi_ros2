@@ -188,3 +188,9 @@ outputs/
 .cache/*
 
 so101_kinematics_msgs
+
+# Local build & logs
+colcon_log/
+my_build/
+my_colcon_log/
+my_install/
