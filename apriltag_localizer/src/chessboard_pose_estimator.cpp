@@ -19,125 +19,6 @@
 namespace apriltag_localizer
 {
 
-  std::vector<cv::Point3d> PoseSolver::compute_tag_corners(
-      const cv::Point3d &center, double size, double yaw_rad)
-  {
-    const double h = size / 2.0;
-    // ArUco corner ordering: top-left, top-right, bottom-right, bottom-left
-    const std::vector<std::pair<double, double>> local_pts = {
-        {-h, h},
-        {h, h},
-        {h, -h},
-        {-h, -h}};
-
-    const double cos_yaw = std::cos(yaw_rad);
-    const double sin_yaw = std::sin(yaw_rad);
-
-    std::vector<cv::Point3d> corners;
-    corners.reserve(4);
-    for (const auto &p : local_pts)
-    {
-      const double rx = p.first * cos_yaw - p.second * sin_yaw;
-      const double ry = p.first * sin_yaw + p.second * cos_yaw;
-      corners.emplace_back(center.x + rx, center.y + ry, center.z);
-    }
-    return corners;
-  }
-
-  void PoseSolver::compute_board_from_single_tag(
-      const cv::Mat &rvec_tag,
-      const cv::Mat &tvec_tag,
-      const cv::Point3d &tag_center_board,
-      double tag_yaw_board,
-      cv::Mat &rvec_board,
-      cv::Mat &tvec_board)
-  {
-    // T_cam^tag = [R_cam_tag | t_cam_tag]
-    cv::Mat R_cam_tag;
-    cv::Rodrigues(rvec_tag, R_cam_tag);
-
-    // T_board^tag = [R_board_tag | t_board_tag]
-    const double cos_yaw = std::cos(tag_yaw_board);
-    const double sin_yaw = std::sin(tag_yaw_board);
-    cv::Mat R_board_tag = (cv::Mat_<double>(3, 3) << cos_yaw, -sin_yaw, 0.0,
-                           sin_yaw, cos_yaw, 0.0,
-                           0.0, 0.0, 1.0);
-    cv::Mat t_board_tag = (cv::Mat_<double>(3, 1) << tag_center_board.x, tag_center_board.y, tag_center_board.z);
-
-    // T_cam^board = T_cam^tag * (T_board^tag)^-1
-    cv::Mat R_cam_board = R_cam_tag * R_board_tag.t();
-    cv::Mat t_cam_board = tvec_tag - R_cam_board * t_board_tag;
-
-    cv::Rodrigues(R_cam_board, rvec_board);
-    tvec_board = t_cam_board.clone();
-  }
-
-  bool PoseSolver::estimate_board_pose(
-      const std::vector<std::vector<cv::Point2f>> &marker_corners,
-      const std::vector<int> &marker_ids,
-      const std::map<int, TagConfig> &tag_configs,
-      const cv::Mat &camera_mat,
-      const cv::Mat &dist_coeffs,
-      cv::Mat &rvec,
-      cv::Mat &tvec,
-      int &used_tags_cnt)
-  {
-    used_tags_cnt = 0;
-    if (marker_corners.empty() || marker_ids.empty() || camera_mat.empty())
-    {
-      return false;
-    }
-
-    std::vector<cv::Point3d> object_points;
-    std::vector<cv::Point2d> image_points;
-
-    for (size_t i = 0; i < marker_ids.size(); ++i)
-    {
-      const int tag_id = marker_ids[i];
-      auto it = tag_configs.find(tag_id);
-      if (it != tag_configs.end() && it->second.corners_board.size() == 4U && marker_corners[i].size() == 4U)
-      {
-        const auto &cfg = it->second;
-        for (size_t k = 0; k < 4U; ++k)
-        {
-          object_points.push_back(cfg.corners_board[k]);
-          image_points.emplace_back(marker_corners[i][k].x, marker_corners[i][k].y);
-        }
-        used_tags_cnt++;
-      }
-    }
-
-    if (object_points.size() < 4U)
-    {
-      return false;
-    }
-
-    bool success = false;
-    try
-    {
-      success = cv::solvePnP(
-          object_points, image_points, camera_mat, dist_coeffs,
-          rvec, tvec, false, cv::SOLVEPNP_SQPNP);
-    }
-    catch (const cv::Exception &)
-    {
-      success = false;
-    }
-
-    if (!success)
-    {
-      success = cv::solvePnP(
-          object_points, image_points, camera_mat, dist_coeffs,
-          rvec, tvec, false, cv::SOLVEPNP_ITERATIVE);
-    }
-
-    if (success && tvec.rows == 3 && tvec.cols == 1)
-    {
-      return (tvec.at<double>(2) > 0.01);
-    }
-    return success;
-  }
-
   // ================= ChessboardPoseEstimator Node =================
 
   ChessboardPoseEstimator::ChessboardPoseEstimator(const rclcpp::NodeOptions &options)
@@ -165,7 +46,7 @@ namespace apriltag_localizer
       robot_pose_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
           "/chessboard/robot_pose", rclcpp::QoS(10));
       tag_centers_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
-          "/chess/tag_centers", rclcpp::SensorDataQoS());
+          "/chess/tag_centers", rclcpp::QoS(1).transient_local().reliable());
 
       // Services
       lock_anchor_srv_ = create_service<std_srvs::srv::Trigger>(
@@ -198,32 +79,17 @@ namespace apriltag_localizer
         std::bind(&ChessboardPoseEstimator::on_image, this, std::placeholders::_1));
 
     camera_mode_sub_ = create_subscription<lekiwi_interfaces::msg::CameraMode>(
-        "~/camera_mode",
-        rclcpp::QoS(1),
+        "/system/camera_mode",
+        rclcpp::QoS(1).transient_local().reliable(),
         std::bind(&ChessboardPoseEstimator::on_camera_mode, this, std::placeholders::_1));
 
-    // Diagnostics configuration
-    diagnostic_updater_.setHardwareID("apriltag_localizer");
-    diagnostic_updater_.add("Chessboard Pose Estimator Status", this, &ChessboardPoseEstimator::produce_diagnostics);
+    // Diagnostics updater
+    diagnostic_updater_.setHardwareID("ChessboardPoseEstimator");
+    diagnostic_updater_.add("Chessboard Tracker & Anchor Status", this, &ChessboardPoseEstimator::produce_diagnostics);
+
     last_fps_time_ = std::chrono::steady_clock::now();
 
-    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator initialized (Family: %s, Tag size: %.3fm, Rate: %.1fHz, Calib: %s)",
-                tag_family_.c_str(), tag_size_, detection_rate_hz_, calib_ ? "true" : "false");
-  }
-
-  void ChessboardPoseEstimator::init_detector()
-  {
-    const auto dict_id = (tag_family_.find("36h11") != std::string::npos)
-                             ? cv::aruco::DICT_APRILTAG_36h11
-                             : cv::aruco::DICT_APRILTAG_16h5;
-    aruco_dict_ = cv::aruco::getPredefinedDictionary(dict_id);
-    aruco_params_ = cv::aruco::DetectorParameters::create();
-    aruco_params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
-  }
-
-    aruco_dict_ = cv::aruco::getPredefinedDictionary(selected_dict);
-    aruco_params_ = cv::aruco::DetectorParameters::create();
-    aruco_params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
+    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator node initialized successfully.");
   }
 
   void ChessboardPoseEstimator::load_parameters()
@@ -237,101 +103,136 @@ namespace apriltag_localizer
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
     chessboard_frame_ = declare_parameter<std::string>("chessboard_frame", "chessboard_frame");
     camera_frame_ = declare_parameter<std::string>("camera_frame", "stereo_left_optical");
-    base_frame_ = declare_parameter<std::string>("base_frame", "base_footprint");
+    base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
 
     chessboard_pose_in_map_ = declare_parameter<std::vector<double>>(
-        "chessboard_pose_in_map", std::vector<double>{0.0, 0.0, 0.004, 0.0, 0.0, 0.0});
+        "chessboard_pose_in_map", {0.0, 0.0, 0.004, 0.0, 0.0, 0.0});
 
     publish_tf_ = declare_parameter<bool>("publish_tf", true);
     publish_map_to_chessboard_ = declare_parameter<bool>("publish_map_to_chessboard", true);
     publish_map_to_odom_ = declare_parameter<bool>("publish_map_to_odom", true);
+    min_depth_m_ = declare_parameter<double>("min_depth_m", 0.05);
 
-    // Load tag specifications
-    const std::vector<int64_t> ids = declare_parameter<std::vector<int64_t>>(
-        "tags.ids", std::vector<int64_t>{0, 1, 2, 3});
-    const std::vector<std::string> names = declare_parameter<std::vector<std::string>>(
-        "tags.names", std::vector<std::string>{"A1", "H1", "H8", "A8"});
-    const std::vector<double> px = declare_parameter<std::vector<double>>(
-        "tags.positions_x", std::vector<double>{0.0000, 0.3832, 0.3772, -0.0039});
-    const std::vector<double> py = declare_parameter<std::vector<double>>(
-        "tags.positions_y", std::vector<double>{0.0000, 0.0037, 0.3885, 0.3850});
-    const std::vector<double> pz = declare_parameter<std::vector<double>>(
-        "tags.positions_z", std::vector<double>{0.0040, 0.0040, 0.0040, 0.0040});
-    const std::vector<double> yaws = declare_parameter<std::vector<double>>(
-        "tags.yaws", std::vector<double>{0.0000, 0.0202, 0.0082, 0.0084});
+    // Tag layout parameters
+    const auto tag_ids = declare_parameter<std::vector<int64_t>>("tags.ids", {0, 1, 2, 3});
+    const auto tag_names = declare_parameter<std::vector<std::string>>("tags.names", {"A1", "H1", "H8", "A8"});
+    const auto positions_x = declare_parameter<std::vector<double>>("tags.positions_x", {0.0, 0.38, 0.38, 0.0});
+    const auto positions_y = declare_parameter<std::vector<double>>("tags.positions_y", {0.0, 0.0, 0.38, 0.38});
+    const auto positions_z = declare_parameter<std::vector<double>>("tags.positions_z", {0.004, 0.004, 0.004, 0.004});
+    const auto yaws = declare_parameter<std::vector<double>>("tags.yaws", {0.0, 0.0, 0.0, 0.0});
 
-    tag_configs_.clear();
-    for (size_t i = 0; i < ids.size(); ++i)
+    const size_t n = tag_ids.size();
+    if (tag_names.size() != n || positions_x.size() != n ||
+        positions_y.size() != n || positions_z.size() != n || yaws.size() != n)
+    {
+      RCLCPP_FATAL(get_logger(), "Mismatch in tags configuration array sizes!");
+      throw std::runtime_error("Tags configuration array sizes mismatch");
+    }
+
+    for (size_t i = 0; i < n; ++i)
     {
       TagConfig cfg;
-      cfg.id = static_cast<int>(ids[i]);
-      cfg.name = (i < names.size()) ? names[i] : ("Tag_" + std::to_string(cfg.id));
-      const double x = (i < px.size()) ? px[i] : 0.0;
-      const double y = (i < py.size()) ? py[i] : 0.0;
-      const double z = (i < pz.size()) ? pz[i] : 0.0;
-      cfg.center = cv::Point3d(x, y, z);
-      cfg.yaw = (i < yaws.size()) ? yaws[i] : 0.0;
+      cfg.id = static_cast<int>(tag_ids[i]);
+      cfg.name = tag_names[i];
+      cfg.center = cv::Point3d(positions_x[i], positions_y[i], positions_z[i]);
+      cfg.yaw = yaws[i];
       cfg.corners_board = PoseSolver::compute_tag_corners(cfg.center, tag_size_, cfg.yaw);
-      tag_configs_[cfg.id] = std::move(cfg);
+      tag_configs_[cfg.id] = cfg;
+
+      RCLCPP_INFO(
+          get_logger(),
+          "Configured tag ID %d ('%s') at center=[%.4f, %.4f, %.4f], yaw=%.4f rad",
+          cfg.id, cfg.name.c_str(), cfg.center.x, cfg.center.y, cfg.center.z, cfg.yaw);
     }
+  }
+
+  void ChessboardPoseEstimator::init_detector()
+  {
+    if (tag_family_ == "16h5")
+    {
+      aruco_dict_ = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_APRILTAG_16h5);
+    }
+    else if (tag_family_ == "36h11")
+    {
+      aruco_dict_ = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_APRILTAG_36h11);
+    }
+    else
+    {
+      RCLCPP_WARN(get_logger(), "Unknown tag family '%s', defaulting to 16h5", tag_family_.c_str());
+      aruco_dict_ = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_APRILTAG_16h5);
+    }
+
+    aruco_params_ = cv::aruco::DetectorParameters::create();
+    aruco_params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
+    aruco_params_->cornerRefinementWinSize = 5;
+    aruco_params_->cornerRefinementMaxIterations = 30;
+    aruco_params_->cornerRefinementMinAccuracy = 0.05;
   }
 
   void ChessboardPoseEstimator::on_camera_info(
       const sensor_msgs::msg::CameraInfo::ConstSharedPtr &msg)
   {
-    if (!has_camera_info_)
+    if (has_camera_info_)
     {
-      camera_matrix_ = (cv::Mat_<double>(3, 3) << msg->k[0], msg->k[1], msg->k[2],
-                        msg->k[3], msg->k[4], msg->k[5],
-                        msg->k[6], msg->k[7], msg->k[8]);
-      dist_coeffs_ = cv::Mat(msg->d).clone();
-      has_camera_info_ = true;
-      RCLCPP_INFO(get_logger(), "Received camera_info matrix: fx=%.1f, fy=%.1f, cx=%.1f, cy=%.1f",
-                  msg->k[0], msg->k[4], msg->k[2], msg->k[5]);
+      return;
     }
+
+    camera_matrix_ = cv::Mat(3, 3, CV_64F);
+    for (int i = 0; i < 9; ++i)
+    {
+      camera_matrix_.at<double>(i / 3, i % 3) = msg->k[i];
+    }
+
+    dist_coeffs_ = cv::Mat(msg->d.size(), 1, CV_64F);
+    for (size_t i = 0; i < msg->d.size(); ++i)
+    {
+      dist_coeffs_.at<double>(i, 0) = msg->d[i];
+    }
+
+    has_camera_info_ = true;
+    RCLCPP_INFO(get_logger(), "CameraInfo received and intrinsics configured (fx=%.2f, fy=%.2f, cx=%.2f, cy=%.2f)",
+                camera_matrix_.at<double>(0, 0), camera_matrix_.at<double>(1, 1),
+                camera_matrix_.at<double>(0, 2), camera_matrix_.at<double>(1, 2));
   }
 
   void ChessboardPoseEstimator::on_camera_mode(
       const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg)
   {
-    current_camera_mode_ = msg->value;
+    if (current_camera_mode_ != msg->value)
+    {
+      current_camera_mode_ = msg->value;
+      RCLCPP_INFO(get_logger(), "Camera mode updated to: %u", current_camera_mode_);
+    }
   }
 
-  void ChessboardPoseEstimator::on_image(
+  bool ChessboardPoseEstimator::should_process_image(
       const sensor_msgs::msg::Image::ConstSharedPtr &msg)
   {
-    // Gating check: Process image only when camera is in CHESS_THINKING mode and not yet anchored (bypassed in calib mode)
-    if (!calib_ && (current_camera_mode_ != lekiwi_interfaces::msg::CameraMode::CHESS_THINKING || is_anchored_))
+    const bool allow_detection = calib_ ||
+                                 (current_camera_mode_ == lekiwi_interfaces::msg::CameraMode::CHESS_THINKING) ||
+                                 (current_camera_mode_ == lekiwi_interfaces::msg::CameraMode::STANDBY);
+    if (!allow_detection || !has_camera_info_)
     {
-      return;
-    }
-
-    if (!has_camera_info_)
-    {
-      return;
+      return false;
     }
 
     // Rate limiting: enforce configured detection_rate_hz_
     const auto current_stamp = rclcpp::Time(msg->header.stamp);
-    if (detection_rate_hz_ > 0.0 && last_detection_time_.nanoseconds() > 0)
+    if (detection_rate_hz_ > 0.0 && last_detection_stamp_.nanoseconds() > 0)
     {
-      const double elapsed_sec = (current_stamp - last_detection_time_).seconds();
+      const double elapsed_sec = (current_stamp - last_detection_stamp_).seconds();
       if (elapsed_sec < (1.0 / detection_rate_hz_))
       {
-        return;
+        return false;
       }
     }
-    last_detection_time_ = current_stamp;
+    last_detection_stamp_ = current_stamp;
+    return true;
+  }
 
-    const auto proc_start = std::chrono::steady_clock::now();
-
-    // Calculate End-to-End Latency (ms) from image header timestamp
-    const auto now_time = now();
-    const double e2e_lat_sec = (now_time - current_stamp).seconds();
-    const double e2e_lat_ms = (e2e_lat_sec > 0.0) ? (e2e_lat_sec * 1000.0) : 0.0;
-    last_e2e_latency_ms_.store(e2e_lat_ms);
-
-    // Convert ROS Image to OpenCV grayscale cv::Mat
+  cv_bridge::CvImageConstPtr ChessboardPoseEstimator::convert_to_grayscale(
+      const sensor_msgs::msg::Image::ConstSharedPtr &msg)
+  {
     cv_bridge::CvImageConstPtr cv_ptr;
     try
     {
@@ -352,14 +253,17 @@ namespace apriltag_localizer
     catch (const cv_bridge::Exception &e)
     {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "cv_bridge exception: %s", e.what());
-      return;
+      return nullptr;
     }
+    return cv_ptr;
+  }
 
-    std::vector<std::vector<cv::Point2f>> marker_corners;
-    std::vector<int> marker_ids;
-    cv::aruco::detectMarkers(cv_ptr->image, aruco_dict_, marker_corners, marker_ids, aruco_params_);
-
-    last_detected_tags_count_.store(static_cast<int>(marker_ids.size()));
+  void ChessboardPoseEstimator::detect_tags(
+      const cv::Mat &gray_img,
+      std::vector<std::vector<cv::Point2f>> &marker_corners,
+      std::vector<int> &marker_ids)
+  {
+    cv::aruco::detectMarkers(gray_img, aruco_dict_, marker_corners, marker_ids, aruco_params_);
 
     std::ostringstream tag_ids_ss;
     for (size_t i = 0; i < marker_ids.size(); ++i)
@@ -374,82 +278,96 @@ namespace apriltag_localizer
       std::lock_guard<std::mutex> lock(diag_mutex_);
       last_detected_tag_ids_str_ = tag_ids_ss.str().empty() ? "None" : tag_ids_ss.str();
     }
+  }
 
-    // If running in calibration mode: ONLY publish detected markers to /tag_detections and return
-    if (calib_)
+  void ChessboardPoseEstimator::publish_tag_detections_for_calib(
+      const std_msgs::msg::Header &header,
+      const std::vector<std::vector<cv::Point2f>> &marker_corners,
+      const std::vector<int> &marker_ids)
+  {
+    if (!tag_detections_pub_)
     {
-      if (tag_detections_pub_)
-      {
-        apriltag_msgs::msg::AprilTagDetectionArray det_array_msg;
-        det_array_msg.header = msg->header;
-        det_array_msg.detections.reserve(marker_ids.size());
-
-        for (size_t i = 0; i < marker_ids.size(); ++i)
-        {
-          apriltag_msgs::msg::AprilTagDetection det;
-          det.id = marker_ids[i];
-          det.family = tag_family_;
-
-          double cx = 0.0;
-          double cy = 0.0;
-          for (size_t k = 0; k < 4 && k < marker_corners[i].size(); ++k)
-          {
-            det.corners[k].x = static_cast<double>(marker_corners[i][k].x);
-            det.corners[k].y = static_cast<double>(marker_corners[i][k].y);
-            cx += det.corners[k].x;
-            cy += det.corners[k].y;
-          }
-          det.centre.x = cx / 4.0;
-          det.centre.y = cy / 4.0;
-
-          det_array_msg.detections.push_back(det);
-        }
-        tag_detections_pub_->publish(det_array_msg);
-      }
-
-      const auto proc_end = std::chrono::steady_clock::now();
-      last_process_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
-      frame_counter_.fetch_add(1, std::memory_order_relaxed);
       return;
     }
 
-    if (marker_ids.empty())
+    apriltag_msgs::msg::AprilTagDetectionArray det_array_msg;
+    det_array_msg.header = header;
+    det_array_msg.detections.reserve(marker_ids.size());
+
+    for (size_t i = 0; i < marker_ids.size(); ++i)
     {
-      last_used_tags_count_.store(0);
-      const auto proc_end = std::chrono::steady_clock::now();
-      last_process_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
-      frame_counter_.fetch_add(1, std::memory_order_relaxed);
+      apriltag_msgs::msg::AprilTagDetection det;
+      det.id = marker_ids[i];
+      det.family = tag_family_;
+
+      double cx = 0.0;
+      double cy = 0.0;
+      for (size_t k = 0; k < 4 && k < marker_corners[i].size(); ++k)
+      {
+        det.corners[k].x = static_cast<double>(marker_corners[i][k].x);
+        det.corners[k].y = static_cast<double>(marker_corners[i][k].y);
+        cx += det.corners[k].x;
+        cy += det.corners[k].y;
+      }
+      det.centre.x = cx / 4.0;
+      det.centre.y = cy / 4.0;
+
+      det_array_msg.detections.push_back(det);
+    }
+    tag_detections_pub_->publish(det_array_msg);
+  }
+
+  void ChessboardPoseEstimator::publish_tag_centers(
+      const std_msgs::msg::Header &header,
+      const cv::Size &img_size,
+      const std::vector<std::vector<cv::Point2f>> &marker_corners,
+      const std::vector<int> &marker_ids)
+  {
+    if (!tag_centers_pub_ || img_size.width <= 0 || img_size.height <= 0)
+    {
       return;
     }
 
-    // Publish lightweight normalized tag centers for HailoChessInferenceComponent
-    if (tag_centers_pub_ && cv_ptr->image.cols > 0 && cv_ptr->image.rows > 0)
+    geometry_msgs::msg::PolygonStamped poly_msg;
+    poly_msg.header = header;
+    poly_msg.polygon.points.reserve(marker_ids.size());
+
+    const double img_w = static_cast<double>(img_size.width);
+    const double img_h = static_cast<double>(img_size.height);
+
+    for (size_t i = 0; i < marker_ids.size(); ++i)
     {
-      geometry_msgs::msg::PolygonStamped poly_msg;
-      poly_msg.header = msg->header;
-      poly_msg.polygon.points.reserve(marker_ids.size());
-
-      const double img_w = static_cast<double>(cv_ptr->image.cols);
-      const double img_h = static_cast<double>(cv_ptr->image.rows);
-
-      for (size_t i = 0; i < marker_ids.size(); ++i)
+      if (marker_corners[i].size() == 4U)
       {
-        if (marker_corners[i].size() == 4U)
-        {
-          const double cx = (marker_corners[i][0].x + marker_corners[i][1].x +
-                             marker_corners[i][2].x + marker_corners[i][3].x) / 4.0;
-          const double cy = (marker_corners[i][0].y + marker_corners[i][1].y +
-                             marker_corners[i][2].y + marker_corners[i][3].y) / 4.0;
+        const double cx = (marker_corners[i][0].x + marker_corners[i][1].x +
+                           marker_corners[i][2].x + marker_corners[i][3].x) /
+                          4.0;
+        const double cy = (marker_corners[i][0].y + marker_corners[i][1].y +
+                           marker_corners[i][2].y + marker_corners[i][3].y) /
+                          4.0;
 
-          geometry_msgs::msg::Point32 pt;
-          pt.x = static_cast<float>(cx / img_w);
-          pt.y = static_cast<float>(cy / img_h);
-          pt.z = static_cast<float>(marker_ids[i]);
-          poly_msg.polygon.points.push_back(pt);
-        }
+        geometry_msgs::msg::Point32 pt;
+        pt.x = static_cast<float>(cx / img_w);
+        pt.y = static_cast<float>(cy / img_h);
+        pt.z = static_cast<float>(marker_ids[i]);
+        poly_msg.polygon.points.push_back(pt);
       }
+    }
 
-      tag_centers_pub_->publish(poly_msg);
+    tag_centers_pub_->publish(poly_msg);
+  }
+
+  void ChessboardPoseEstimator::estimate_and_publish_robot_pose(
+      const std_msgs::msg::Header &header,
+      const std::vector<std::vector<cv::Point2f>> &marker_corners,
+      const std::vector<int> &marker_ids)
+  {
+    // Hard fail-safe: pose estimation requires at least 2 tags
+    if (marker_ids.size() < 2)
+    {
+      has_valid_pose_ = false;
+      last_used_tags_.store(0);
+      return;
     }
 
     cv::Mat rvec, tvec;
@@ -458,19 +376,18 @@ namespace apriltag_localizer
         marker_corners, marker_ids, tag_configs_, camera_matrix_, dist_coeffs_,
         rvec, tvec, used_tags);
 
-    last_used_tags_count_.store(used_tags);
+    last_used_tags_.store(used_tags);
 
     if (!ok)
     {
-      const auto proc_end = std::chrono::steady_clock::now();
-      last_process_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
-      frame_counter_.fetch_add(1, std::memory_order_relaxed);
+      has_valid_pose_ = false;
       return;
     }
 
     // Convert OpenCV Rodrigues rvec -> tf2::Quaternion
     cv::Mat R_cam_board;
     cv::Rodrigues(rvec, R_cam_board);
+
     tf2::Matrix3x3 tf_rot(
         R_cam_board.at<double>(0, 0), R_cam_board.at<double>(0, 1), R_cam_board.at<double>(0, 2),
         R_cam_board.at<double>(1, 0), R_cam_board.at<double>(1, 1), R_cam_board.at<double>(1, 2),
@@ -484,7 +401,7 @@ namespace apriltag_localizer
         tvec.at<double>(2));
 
     const tf2::Transform T_cam_board(q_cam_board, t_cam_board);
-    const std::string cam_frame = msg->header.frame_id.empty() ? camera_frame_ : msg->header.frame_id;
+    const std::string cam_frame = header.frame_id.empty() ? camera_frame_ : header.frame_id;
 
     // Robot localization pose estimation: T_map^base = T_map^board * T_board^cam * T_cam^base
     try
@@ -512,21 +429,17 @@ namespace apriltag_localizer
           chessboard_pose_in_map_.size() >= 3 ? chessboard_pose_in_map_[2] : 0.0);
       const tf2::Transform T_map_board(q_map_board, t_map_board);
 
-      const tf2::Transform T_map_base = T_map_board * T_board_base;
+      latest_T_map_base_ = T_map_board * T_board_base;
+      has_valid_pose_ = true;
 
-      // Cache latest detection for anchor locking
-      latest_T_map_base_ = T_map_base;
-      latest_detection_stamp_ = msg->header.stamp;
-      has_latest_tag_detection_ = true;
-
-      // Publish /chessboard/robot_pose
+      // Publish /chessboard/robot_pose with high-confidence fixed covariance (N >= 2)
       auto robot_pose_msg = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
-      robot_pose_msg->header.stamp = msg->header.stamp;
+      robot_pose_msg->header.stamp = header.stamp;
       robot_pose_msg->header.frame_id = map_frame_;
-      tf2::toMsg(T_map_base, robot_pose_msg->pose.pose);
+      tf2::toMsg(latest_T_map_base_, robot_pose_msg->pose.pose);
 
-      const double pos_var = (used_tags >= 2) ? 0.0001 : 0.0009;
-      const double rot_var = (used_tags >= 2) ? 0.0004 : 0.0025;
+      constexpr double pos_var = 0.0001;
+      constexpr double rot_var = 0.0004;
       robot_pose_msg->pose.covariance.fill(0.0);
       robot_pose_msg->pose.covariance[0] = pos_var;
       robot_pose_msg->pose.covariance[7] = pos_var;
@@ -540,9 +453,49 @@ namespace apriltag_localizer
     {
       RCLCPP_DEBUG(get_logger(), "TF lookup transform failed: %s", ex.what());
     }
+  }
+
+  void ChessboardPoseEstimator::on_image(
+      const sensor_msgs::msg::Image::ConstSharedPtr &msg)
+  {
+    // Step 1: Mode gating & rate limiting
+    if (!should_process_image(msg))
+    {
+      return;
+    }
+
+    const auto proc_start = std::chrono::steady_clock::now();
+
+    // Step 2: Grayscale conversion
+    cv_bridge::CvImageConstPtr cv_ptr = convert_to_grayscale(msg);
+    if (!cv_ptr)
+    {
+      return;
+    }
+
+    // Step 3: Tag detection
+    std::vector<std::vector<cv::Point2f>> marker_corners;
+    std::vector<int> marker_ids;
+    detect_tags(cv_ptr->image, marker_corners, marker_ids);
+
+    // Step 4: Branch on calibration mode
+    if (calib_)
+    {
+      publish_tag_detections_for_calib(msg->header, marker_corners, marker_ids);
+      const auto proc_end = std::chrono::steady_clock::now();
+      last_proc_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
+      frame_counter_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+
+    // Step 5: Publish tag centers for AI inference / visualizer
+    publish_tag_centers(msg->header, cv_ptr->image.size(), marker_corners, marker_ids);
+
+    // Step 6: Multi-Tag PnP and Robot Pose Estimation
+    estimate_and_publish_robot_pose(msg->header, marker_corners, marker_ids);
 
     const auto proc_end = std::chrono::steady_clock::now();
-    last_process_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
+    last_proc_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
     frame_counter_.fetch_add(1, std::memory_order_relaxed);
   }
 
@@ -550,10 +503,10 @@ namespace apriltag_localizer
       const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response)
   {
-    if (!has_latest_tag_detection_)
+    if (!has_valid_pose_)
     {
       response->success = false;
-      response->message = "Cannot lock anchor: No AprilTags detected yet. Please teleop robot to face chessboard.";
+      response->message = "Cannot lock anchor: need >= 2 tags detected. Please teleop robot to face chessboard.";
       RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
       return;
     }
@@ -598,6 +551,8 @@ namespace apriltag_localizer
       std::shared_ptr<std_srvs::srv::Trigger::Response> response)
   {
     is_anchored_ = false;
+    has_valid_pose_ = false;
+    last_used_tags_.store(0);
     response->success = true;
     response->message = "Anchor reset. Map -> Odom TF broadcast disabled until re-locked.";
     RCLCPP_INFO(get_logger(), "Chessboard anchor reset.");
@@ -659,10 +614,8 @@ namespace apriltag_localizer
     }
 
     const float fps = current_fps_.load();
-    const double e2e_latency_ms = last_e2e_latency_ms_.load();
-    const double proc_time_ms = last_process_time_ms_.load();
-    const int detected_tags = last_detected_tags_count_.load();
-    const int used_tags = last_used_tags_count_.load();
+    const double proc_time_ms = last_proc_time_ms_.load();
+    const int used_tags = last_used_tags_.load();
     std::string tag_ids_str;
     {
       std::lock_guard<std::mutex> lock(diag_mutex_);
@@ -676,19 +629,9 @@ namespace apriltag_localizer
     }
     else if (calib_)
     {
-      if (detected_tags > 0)
-      {
-        stat.summaryf(
-            diagnostic_msgs::msg::DiagnosticStatus::OK,
-            "Calibration Mode (%d tags detected, streaming to /tag_detections)",
-            detected_tags);
-      }
-      else
-      {
-        stat.summary(
-            diagnostic_msgs::msg::DiagnosticStatus::WARN,
-            "Calibration Mode (No tags detected in view)");
-      }
+      stat.summary(
+          diagnostic_msgs::msg::DiagnosticStatus::OK,
+          "Calibration Mode (streaming to /tag_detections)");
     }
     else if (is_anchored_)
     {
@@ -702,27 +645,25 @@ namespace apriltag_localizer
           diagnostic_msgs::msg::DiagnosticStatus::OK,
           "Standby (Camera mode inactive for localization)");
     }
-    else if (used_tags > 0)
+    else if (used_tags >= 2)
     {
       stat.summaryf(
           diagnostic_msgs::msg::DiagnosticStatus::OK,
-          "Tracking Chessboard (%d tags used, %.1f FPS, %.1f ms E2E)",
-          used_tags, fps, e2e_latency_ms);
+          "Tracking Chessboard (%d tags used, %.1f FPS, %.1f ms proc)",
+          used_tags, fps, proc_time_ms);
     }
     else
     {
       stat.summary(
           diagnostic_msgs::msg::DiagnosticStatus::WARN,
-          "No chessboard tags detected in view");
+          "Insufficient chessboard tags in view (< 2 tags)");
     }
 
     // 2. Telemetry & Metrics
     stat.add("Calibration Mode", calib_ ? "true" : "false");
     stat.addf("Processing FPS", "%.1f", fps);
     stat.addf("Target Detection Rate (Hz)", "%.1f", detection_rate_hz_);
-    stat.addf("End-to-End Latency (ms)", "%.2f", e2e_latency_ms);
     stat.addf("Algorithm Processing Time (ms)", "%.2f", proc_time_ms);
-    stat.add("Detected Tags Count", detected_tags);
     stat.add("Used Board Tags Count", used_tags);
     stat.add("Detected Tag IDs", tag_ids_str);
     stat.add("Anchor Locked", is_anchored_ ? "true" : "false");

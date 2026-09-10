@@ -21,6 +21,10 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/opencv.hpp>
 
+#include <Eigen/Core>
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
+
 #include "cv_bridge/cv_bridge.hpp"
 #include "apriltag_msgs/msg/april_tag_detection_array.hpp"
 #include "diagnostic_updater/diagnostic_updater.hpp"
@@ -39,76 +43,10 @@
 #include "tf2_ros/transform_broadcaster.h"
 #include "tf2_ros/transform_listener.h"
 
+#include "apriltag_localizer/pose_solver.hpp"
+
 namespace apriltag_localizer
 {
-
-  /**
-   * @brief Configuration for a single AprilTag mounted on the chessboard.
-   */
-  struct TagConfig
-  {
-    int id{0};
-    std::string name;
-    cv::Point3d center{0.0, 0.0, 0.0};
-    double yaw{0.0};
-    std::vector<cv::Point3d> corners_board;
-  };
-
-  /**
-   * @brief Pure algorithmic helper functions for pose estimation and geometric calculations.
-   */
-  class PoseSolver
-  {
-  public:
-    /**
-     * @brief Computes 4 3D corner coordinates of a square tag in chessboard coordinates.
-     * @param[in] center 3D center in chessboard_frame.
-     * @param[in] size Edge length in meters (e.g. 0.02).
-     * @param[in] yaw_rad In-plane rotation around Z axis in radians. Default is 0.0.
-     * @return 4 3D points ordered CCW matching ArUco: top-left, top-right, bottom-right, bottom-left.
-     */
-    static std::vector<cv::Point3d> compute_tag_corners(
-        const cv::Point3d &center, double size, double yaw_rad = 0.0);
-
-    /**
-     * @brief Estimates chessboard pose T_cam^board from detected tag corners and IDs.
-     * @param[in] marker_corners Detected 2D marker corners from ArucoDetector.
-     * @param[in] marker_ids Detected marker IDs.
-     * @param[in] tag_configs Map of configured tags with their fixed 3D layout on the board.
-     * @param[in] camera_mat 3x3 intrinsic camera matrix.
-     * @param[in] dist_coeffs Camera distortion coefficients vector.
-     * @param[out] rvec 3x1 Rodrigues rotation vector of the board in camera optical frame.
-     * @param[out] tvec 3x1 translation vector of the board in camera optical frame.
-     * @param[out] used_tags_cnt Number of valid board tags used in PnP estimation.
-     * @return True if pose estimation succeeds and satisfies validity constraints, false otherwise.
-     */
-    static bool estimate_board_pose(
-        const std::vector<std::vector<cv::Point2f>> &marker_corners,
-        const std::vector<int> &marker_ids,
-        const std::map<int, TagConfig> &tag_configs,
-        const cv::Mat &camera_mat,
-        const cv::Mat &dist_coeffs,
-        cv::Mat &rvec,
-        cv::Mat &tvec,
-        int &used_tags_cnt);
-
-    /**
-     * @brief Computes T_cam^board from a single tag's T_cam^tag using T_cam^board = T_cam^tag * (T_board^tag)^-1.
-     * @param[in] rvec_tag Rodrigues rotation vector of the single tag in camera frame.
-     * @param[in] tvec_tag Translation vector of the single tag in camera frame.
-     * @param[in] tag_center_board 3D center position of the tag in chessboard_frame.
-     * @param[in] tag_yaw_board Yaw rotation angle (radians) of the tag in chessboard_frame.
-     * @param[out] rvec_board Resulting Rodrigues rotation vector of chessboard in camera frame.
-     * @param[out] tvec_board Resulting translation vector of chessboard in camera frame.
-     */
-    static void compute_board_from_single_tag(
-        const cv::Mat &rvec_tag,
-        const cv::Mat &tvec_tag,
-        const cv::Point3d &tag_center_board,
-        double tag_yaw_board,
-        cv::Mat &rvec_board,
-        cv::Mat &tvec_board);
-  };
 
   /**
    * @brief ROS 2 Node that detects AprilTags in images, publishes robot poses, TFs, and diagnostics.
@@ -156,6 +94,50 @@ namespace apriltag_localizer
      */
     void on_image(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
 
+    // --- Sub-pipeline helper methods for on_image ---
+    /**
+     * @brief Checks mode gating and rate-limiting to decide if this image should be processed.
+     */
+    bool should_process_image(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
+
+    /**
+     * @brief Converts ROS Image message to OpenCV MONO8 format with error handling.
+     */
+    cv_bridge::CvImageConstPtr convert_to_grayscale(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
+
+    /**
+     * @brief Detects ArUco tags in grayscale image and updates telemetry strings.
+     */
+    void detect_tags(
+        const cv::Mat &gray_img,
+        std::vector<std::vector<cv::Point2f>> &marker_corners,
+        std::vector<int> &marker_ids);
+
+    /**
+     * @brief Publishes tag detections on /tag_detections topic for calibration mode.
+     */
+    void publish_tag_detections_for_calib(
+        const std_msgs::msg::Header &header,
+        const std::vector<std::vector<cv::Point2f>> &marker_corners,
+        const std::vector<int> &marker_ids);
+
+    /**
+     * @brief Publishes lightweight normalized tag centers for Hailo chess inference component.
+     */
+    void publish_tag_centers(
+        const std_msgs::msg::Header &header,
+        const cv::Size &img_size,
+        const std::vector<std::vector<cv::Point2f>> &marker_corners,
+        const std::vector<int> &marker_ids);
+
+    /**
+     * @brief Computes Multi-Tag PnP pose and publishes robot pose in map frame.
+     */
+    void estimate_and_publish_robot_pose(
+        const std_msgs::msg::Header &header,
+        const std::vector<std::vector<cv::Point2f>> &marker_corners,
+        const std::vector<int> &marker_ids);
+
     /**
      * @brief Service callback to lock the map->odom anchor transform from the latest tag detection.
      */
@@ -195,6 +177,7 @@ namespace apriltag_localizer
     bool publish_tf_{true};
     bool publish_map_to_chessboard_{true};
     bool publish_map_to_odom_{true};
+    double min_depth_m_{0.05};
 
     // Calibration & Config
     std::map<int, TagConfig> tag_configs_;
@@ -227,33 +210,26 @@ namespace apriltag_localizer
 
     // State gating & execution control
     uint8_t current_camera_mode_{lekiwi_interfaces::msg::CameraMode::STANDBY};
-    rclcpp::Time last_detection_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time last_detection_stamp_{0, 0, RCL_ROS_TIME};
 
     // Anchor lock state
     bool is_anchored_{false};
     geometry_msgs::msg::TransformStamped T_map_odom_locked_;
-    bool has_latest_tag_detection_{false};
-    tf2::Transform latest_T_map_base_;
-    rclcpp::Time latest_detection_stamp_;
 
-    // Last known poses
-    cv::Mat last_rvec_;
-    cv::Mat last_tvec_;
-    bool has_last_pose_{false};
+    // Latest valid pose (only valid when >= 2 tags detected)
+    bool has_valid_pose_{false};
+    tf2::Transform latest_T_map_base_;
 
     // Diagnostics & Telemetry
     diagnostic_updater::Updater diagnostic_updater_{this};
-    std::atomic<double> last_e2e_latency_ms_{0.0};
-    std::atomic<double> last_process_time_ms_{0.0};
+    std::atomic<double> last_proc_time_ms_{0.0};
     std::atomic<float> current_fps_{0.0F};
     std::atomic<uint64_t> frame_counter_{0};
     std::chrono::steady_clock::time_point last_fps_time_;
     uint64_t last_fps_frame_count_{0};
-    std::atomic<int> last_detected_tags_count_{0};
-    std::atomic<int> last_used_tags_count_{0};
+    std::atomic<int> last_used_tags_{0};
     std::mutex diag_mutex_;
     std::string last_detected_tag_ids_str_{"None"};
-    std::string last_diag_error_;
   };
 
 } // namespace apriltag_localizer

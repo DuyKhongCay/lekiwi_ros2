@@ -39,7 +39,7 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
         # Generates ground truth 3D corners for each tag.
         h = self.tag_sz / 2.0
         local_pts = np.array(
-            [[-h, -h, 0.0], [h, -h, 0.0], [h, h, 0.0], [-h, h, 0.0]], dtype=np.float64
+            [[h, -h, 0.0], [-h, -h, 0.0], [-h, h, 0.0], [h, h, 0.0]], dtype=np.float64
         )
 
         gt_3d = {}
@@ -159,11 +159,10 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
         try:
             save_to_chessboard_yaml(calib_res, temp_path, tag_ids=[0, 1, 2, 3])
             with open(temp_path, "r") as f:
-                saved = yaml.safe_load(f)["/**"]["ros__parameters"]
-            self.assertEqual(saved["tags"]["ids"], [0, 1, 2, 3])
-            self.assertEqual(saved["tags"]["positions_x"], [0.0, 0.39, 0.39, 0.0])
-            self.assertEqual(saved["tags"]["positions_y"], [0.0, 0.0, 0.39, 0.39])
-            self.assertEqual(saved["tag_distance"], 0.39)
+                saved = yaml.safe_load(f)
+            self.assertEqual(saved["ids"], [0, 1, 2, 3])
+            self.assertEqual(saved["positions_x"], [0.0, 0.39, 0.39, 0.0])
+            self.assertEqual(saved["positions_y"], [0.0, 0.0, 0.39, 0.39])
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)

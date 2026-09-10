@@ -26,17 +26,21 @@ find_package(cv_bridge REQUIRED)
 find_package(image_geometry REQUIRED)
 find_package(apriltag_msgs REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc aruco)
+find_package(Eigen3 REQUIRED)
 
 add_library(apriltag_localizer SHARED
+  src/pose_solver.cpp
   src/chessboard_pose_estimator.cpp
 )
 target_include_directories(apriltag_localizer PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${OpenCV_INCLUDE_DIRS}
+  ${EIGEN3_INCLUDE_DIRS}
 )
 target_link_libraries(apriltag_localizer
   ${OpenCV_LIBRARIES}
+  Eigen3::Eigen
 )
 ament_target_dependencies(apriltag_localizer
   rclcpp
@@ -89,7 +93,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_pose_solver test/test_pose_solver.cpp)
   if(TARGET test_pose_solver)
-    target_link_libraries(test_pose_solver apriltag_localizer ${OpenCV_LIBRARIES})
+    target_link_libraries(test_pose_solver apriltag_localizer ${OpenCV_LIBRARIES} Eigen3::Eigen)
     ament_target_dependencies(test_pose_solver
       rclcpp
       diagnostic_updater
@@ -120,6 +124,7 @@ ament_export_dependencies(
   tf2_geometry_msgs
   cv_bridge
   apriltag_msgs
+  Eigen3
 )
 ament_package()
 
