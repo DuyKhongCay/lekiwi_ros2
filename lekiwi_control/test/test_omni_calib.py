@@ -25,7 +25,8 @@ def test_compute_robot_radius_calib():
     curr_R = 0.1268
     target_rot = 10.0 * math.pi
     actual_rot = 10.2 * math.pi
-    expected = curr_R * (10.2 / 10.0)
+    # Robot turned more than target (actual > target) -> robot is physically smaller -> smaller R
+    expected = curr_R * (10.0 / 10.2)
     assert math.isclose(
         compute_robot_radius_calib(curr_R, target_rot, actual_rot), expected
     )

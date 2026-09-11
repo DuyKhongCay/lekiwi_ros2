@@ -66,8 +66,9 @@ def generate_launch_description():
                 "current_wheel_radius": LaunchConfiguration("current_wheel_radius"),
                 "current_robot_radius": LaunchConfiguration("current_robot_radius"),
                 "actual_measured_dist": LaunchConfiguration("actual_measured_dist"),
-                "imu_topic": "/imu/data",
+                "imu_topic": "/imu/data_transformed",
                 "odom_topic": "/omni_base_controller/odom",
+                "tag_pose_topic": "/chessboard/robot_pose",
                 "cmd_vel_topic": "/cmd_vel_calib",
             }
         ],

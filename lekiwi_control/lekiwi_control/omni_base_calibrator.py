@@ -5,7 +5,7 @@ import math
 import time
 from typing import Dict, Tuple
 
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
@@ -22,14 +22,14 @@ def compute_wheel_radius_calib(
     return curr_wheel_radius * (measured_dist / target_dist)
 
 
-# Computes updated robot radius based on target rotation versus ground truth angular displacement.
 def compute_robot_radius_calib(
     curr_robot_radius: float, target_rot_rad: float, measured_rot_rad: float
 ) -> float:
-    # Scales robot radius proportionally with ground truth angular rotation.
-    if abs(target_rot_rad) <= 1e-6:
+    # Scales robot radius inversely with ground truth angular rotation.
+    # When robot turns physically less than target (measured < target), effective radius is larger.
+    if abs(measured_rot_rad) <= 1e-6 or abs(target_rot_rad) <= 1e-6:
         return curr_robot_radius
-    return curr_robot_radius * (measured_rot_rad / target_rot_rad)
+    return curr_robot_radius * (target_rot_rad / measured_rot_rad)
 
 
 # Evaluates UMBmark benchmark metrics for bidirectional square test runs.
@@ -66,8 +66,9 @@ class OmniBaseCalibratorNode(Node):
         self.declare_parameter("angular_vel", 0.5)
         self.declare_parameter("current_wheel_radius", 0.065)
         self.declare_parameter("current_robot_radius", 0.1268)
-        self.declare_parameter("imu_topic", "/imu/data")
+        self.declare_parameter("imu_topic", "/imu/data_transformed")
         self.declare_parameter("odom_topic", "/omni_base_controller/odom")
+        self.declare_parameter("tag_pose_topic", "/chessboard/robot_pose")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel_calib")
         self.declare_parameter("actual_measured_dist", 0.0)
 
@@ -88,6 +89,7 @@ class OmniBaseCalibratorNode(Node):
 
         imu_topic = str(self.get_parameter("imu_topic").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
+        tag_pose_topic = str(self.get_parameter("tag_pose_topic").value)
         cmd_vel_topic = str(self.get_parameter("cmd_vel_topic").value)
 
         self._pub_cmd_vel = self.create_publisher(TwistStamped, cmd_vel_topic, 10)
@@ -95,14 +97,22 @@ class OmniBaseCalibratorNode(Node):
             Odometry, odom_topic, self._odom_cb, 10
         )
         self._sub_imu = self.create_subscription(Imu, imu_topic, self._imu_cb, 10)
+        self._sub_tag_pose = self.create_subscription(
+            PoseWithCovarianceStamped, tag_pose_topic, self._tag_pose_cb, 10
+        )
 
         self._odom_init = False
         self._imu_init = False
+        self._tag_pose_init = False
         self._curr_x = 0.0
         self._curr_y = 0.0
         self._curr_odom_yaw = 0.0
 
-        # IMU unrolled heading tracking from /imu/data
+        # Optional visual ground truth from AprilTag /chessboard/robot_pose
+        self._tag_curr_x = None
+        self._tag_curr_y = None
+
+        # IMU unrolled heading tracking from transformed IMU (/imu/data_transformed)
         self._imu_total_yaw = 0.0
         self._last_imu_yaw = None
 
@@ -110,6 +120,12 @@ class OmniBaseCalibratorNode(Node):
             f"OmniBaseCalibrator initialized in mode '{self._calib_mode}' "
             f"subscribing to odom: {odom_topic}, imu: {imu_topic}, publishing cmd_vel: {cmd_vel_topic}"
         )
+
+    # Tracks absolute robot pose from AprilTag chessboard pose estimator
+    def _tag_pose_cb(self, msg: PoseWithCovarianceStamped):
+        self._tag_curr_x = msg.pose.pose.position.x
+        self._tag_curr_y = msg.pose.pose.position.y
+        self._tag_pose_init = True
 
     # Publishes timestamped velocity commands with header metadata for twist_mux.
     def _publish_cmd_vel(self, vx: float = 0.0, vy: float = 0.0, wz: float = 0.0):
@@ -156,10 +172,12 @@ class OmniBaseCalibratorNode(Node):
         self._last_imu_yaw = curr_yaw
         self._imu_init = True
 
-    # Halts robot motion immediately by publishing zero twist commands.
+    # Halts robot motion immediately by publishing zero twist commands repeatedly for safety.
     def stop_robot(self):
-        # Sends null velocity command to ensure safe termination of motions.
-        self._publish_cmd_vel(0.0, 0.0, 0.0)
+        # Sends bursts of null velocity commands to ensure safe termination over lossy middleware.
+        for _ in range(5):
+            self._publish_cmd_vel(0.0, 0.0, 0.0)
+            time.sleep(0.01)
 
     # Drives robot straight forward until target distance is accumulated by odometry.
     def drive_distance(self, target_dist: float, speed: float = 0.15) -> float:
@@ -181,7 +199,7 @@ class OmniBaseCalibratorNode(Node):
                     f"Driving progress: {traveled:.2f} / {target_dist:.2f} m"
                 )
                 last_log_time = time.time()
-            time.sleep(0.05)
+            time.sleep(0.02)
 
         self.stop_robot()
         return math.hypot(self._curr_x - start_x, self._curr_y - start_y)
@@ -214,7 +232,7 @@ class OmniBaseCalibratorNode(Node):
                     f"Spin progress: {abs(total_rot):.2f} / {abs(target_angle_rad):.2f} rad (IMU total: {self._imu_total_yaw:.2f} rad)"
                 )
                 last_log_time = time.time()
-            time.sleep(0.05)
+            time.sleep(0.02)
 
         self.stop_robot()
 
@@ -244,7 +262,7 @@ class OmniBaseCalibratorNode(Node):
             f"Ground Truth IMU Rotation: {actual_imu_rot_rad:.4f} rad\n"
             f"Current robot_radius: {self._curr_robot_radius:.6f} m\n"
             f"Calibrated new robot_radius: {new_robot_radius:.6f} m\n"
-            f"Recommended multiplier: {actual_imu_rot_rad / target_rot_rad:.6f}\n"
+            f"Recommended multiplier: {target_rot_rad / actual_imu_rot_rad:.6f}\n"
             f"================================="
         )
         return new_robot_radius
@@ -255,19 +273,46 @@ class OmniBaseCalibratorNode(Node):
         self.get_logger().info(
             f"Starting Rollout Test for distance: {self._test_dist:.2f} m..."
         )
-        odom_dist = self.drive_distance(self._test_dist, speed=self._linear_vel)
+        # Check initial AprilTag visual pose if available
+        start_tag_x, start_tag_y = self._tag_curr_x, self._tag_curr_y
 
-        measured_dist = (
-            self._actual_measured_dist
-            if self._actual_measured_dist > 0.0
-            else self._test_dist
-        )
+        odom_dist = self.drive_distance(self._test_dist, speed=self._linear_vel)
+        time.sleep(0.5)
+
+        for _ in range(10):
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+        tag_measured_dist = 0.0
+        if (
+            start_tag_x is not None
+            and start_tag_y is not None
+            and self._tag_curr_x is not None
+            and self._tag_curr_y is not None
+        ):
+            tag_measured_dist = math.hypot(
+                self._tag_curr_x - start_tag_x, self._tag_curr_y - start_tag_y
+            )
+            self.get_logger().info(
+                f"AprilTag visual ground truth measured travel: {tag_measured_dist:.4f} m"
+            )
+
+        if self._actual_measured_dist > 0.0:
+            measured_dist = self._actual_measured_dist
+            gt_source = "User Tape Measurement"
+        elif tag_measured_dist > 0.05:
+            measured_dist = tag_measured_dist
+            gt_source = "AprilTag Visual Ground Truth (/chessboard/robot_pose)"
+        else:
+            measured_dist = self._test_dist
+            gt_source = "Target Distance (Nominal)"
+
         new_wheel_radius = compute_wheel_radius_calib(
             self._curr_wheel_radius, odom_dist, measured_dist
         )
 
         self.get_logger().info(
             f"\n=== ROLLOUT TEST CALIB RESULTS ===\n"
+            f"Ground Truth Source: {gt_source}\n"
             f"Commanded Distance: {self._test_dist:.4f} m\n"
             f"Odom Traversed Distance: {odom_dist:.4f} m\n"
             f"Ground Truth Measured Distance: {measured_dist:.4f} m\n"
