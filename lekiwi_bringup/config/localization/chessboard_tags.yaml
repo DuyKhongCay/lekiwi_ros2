@@ -2,8 +2,9 @@
   ros__parameters:
     tag_family: "16h5"
     tag_size: 0.029
-    detection_rate_hz: 2.0
+    detection_rate_hz: 5.0
     calib: false
+    min_tags_cnt: 2
 
     # Calibrated tag definitions in chessboard_frame (origin at A1):
     # +X: A1 -> H1 (File A -> H)
@@ -29,7 +30,5 @@
     # Board nominal pose in map: [x, y, z, roll, pitch, yaw]
     chessboard_pose_in_map: [0.0, 0.0, 0.004, 0.0, 0.0, 0.0]
 
-    # TF Broadcasting
+    # Static TF Broadcasting (map -> chessboard_frame)
     publish_tf: true
-    publish_map_to_chessboard: true
-    publish_map_to_odom: true

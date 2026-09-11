@@ -67,9 +67,9 @@ joy_teleop:
         data:
           value: true
 
-    # 4. Button Y (Index 3): Lock Chessboard Anchor (Call /chessboard/lock_anchor service)
-    lekiwi_lock_anchor_button:
+    # 4. Button Y (Index 3): Enable Global EKF (Call /ekf_filter_node_map/enable service)
+    lekiwi_enable_ekf_button:
       type: service
-      interface_type: std_srvs/srv/Trigger
-      service_name: /chessboard/lock_anchor
+      interface_type: std_srvs/srv/Empty
+      service_name: /ekf_filter_node_map/enable
       buttons: [3]

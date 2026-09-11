@@ -1,22 +1,26 @@
-# robot_localization EKF configuration for LeKiwi Mobile Base (3-wheel Omnidirectional)
-# Fuses Wheel Odometry (linear vx, vy) and ICM-20948 Transformed IMU (yaw, wz)
+# robot_localization EKF Global Configuration for LeKiwi Mobile Base
+# Distro: ROS 2 Jazzy
+# Fuses Wheel Odometry (vx, vy), IMU angular velocity (wz), and AprilTag absolute pose (x, y, yaw)
 # Author: DuyKhongCay
 # License: Apache-2.0
 
-ekf_filter_node:
+ekf_filter_node_map:
   ros__parameters:
-    frequency: 50.0
+    frequency: 20.0
     sensor_timeout: 0.1
     two_d_mode: true
     transform_time_offset: 0.0
     transform_tolerance: 0.05
-    print_diagnostics: false
+    print_diagnostics: true
     debug: false
 
     map_frame: map
     odom_frame: odom
     base_link_frame: base_footprint
-    world_frame: odom
+    world_frame: map
+
+    # Standby at startup: Do not predict or publish map->odom TF until calibrated by lock_anchor
+    disabled_at_startup: true
 
     publish_tf: true
     publish_acceleration: false
@@ -34,19 +38,33 @@ ekf_filter_node:
     odom0_differential: false
     odom0_relative: false
 
-    # 2. Transformed IMU input from imu_pipeline (Madgwick AHRS)
+    # 2. Transformed IMU input from imu_pipeline
+    # In Global EKF, only fuse vyaw (wz) to avoid yaw reference conflict with AprilTag
     # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
     imu0: /imu/data_transformed
     imu0_config: [false, false, false,
-                  false, false, true,
-                  false, false, false,
-                  false, false, true,
-                  false, false, false]
+                   false, false, false,
+                   false, false, false,
+                   false, false, true,
+                   false, false, false]
     imu0_queue_size: 10
     imu0_nodelay: true
     imu0_differential: false
     imu0_relative: false
     imu0_remove_gravitational_acceleration: true
+
+    # 3. Chessboard Visual Absolute Pose input from ChessboardPoseEstimator
+    # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
+    pose0: /chessboard/robot_pose
+    pose0_config: [true,  true,  false,
+                   false, false, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    pose0_queue_size: 5
+    pose0_nodelay: false
+    pose0_differential: false
+    pose0_relative: false
 
     use_control: false
 
@@ -67,3 +85,4 @@ ekf_filter_node:
       0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    1.0e-2, 0.0,
       0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    1.0e-2
     ]
+
