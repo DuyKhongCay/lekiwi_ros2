@@ -125,22 +125,41 @@ protected:
   std::vector<int> all_marker_ids_;
 };
 
-TEST_F(MultiTagPnPFixture, SingleTagStrictlyRejected)
+TEST_F(MultiTagPnPFixture, SingleTagStrictlyRejectedWhenMinTwo)
 {
-  // Any single tag MUST be rejected (returns false) because Global Multi-Tag PnP requires >= 2 tags
+  // Any single tag MUST be rejected when used_tags_cnt is requested >= 2
   for (size_t i = 0; i < all_marker_ids_.size(); ++i)
   {
     std::vector<std::vector<cv::Point2f>> single_corner = {all_marker_corners_[i]};
     std::vector<int> single_id = {all_marker_ids_[i]};
 
     cv::Mat rvec_est, tvec_est;
-    int used_tags = 0;
+    int used_tags = 2;
     const bool ok = PoseSolver::estimate_board_pose(
         single_corner, single_id, tag_configs_, camera_matrix_, dist_coeffs_,
         rvec_est, tvec_est, used_tags);
 
     EXPECT_FALSE(ok);
     EXPECT_LT(used_tags, 2);
+  }
+}
+
+TEST_F(MultiTagPnPFixture, SingleTagAllowedWhenConfigured)
+{
+  // When used_tags_cnt is requested >= 1, single tag is solved
+  for (size_t i = 0; i < all_marker_ids_.size(); ++i)
+  {
+    std::vector<std::vector<cv::Point2f>> single_corner = {all_marker_corners_[i]};
+    std::vector<int> single_id = {all_marker_ids_[i]};
+
+    cv::Mat rvec_est, tvec_est;
+    int used_tags = 1;
+    const bool ok = PoseSolver::estimate_board_pose(
+        single_corner, single_id, tag_configs_, camera_matrix_, dist_coeffs_,
+        rvec_est, tvec_est, used_tags);
+
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(used_tags, 1);
   }
 }
 

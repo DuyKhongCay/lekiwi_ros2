@@ -50,7 +50,9 @@ namespace apriltag_localizer
       cv::Mat &tvec,
       int &used_tags_cnt)
   {
+    const int min_required_tags = std::max(1, used_tags_cnt);
     used_tags_cnt = 0;
+
     if (marker_corners.empty() || marker_ids.empty() || camera_mat.empty())
     {
       return false;
@@ -75,8 +77,9 @@ namespace apriltag_localizer
       }
     }
 
-    // Hard constraint: Global Multi-Tag PnP requires >= 2 valid board tags (>= 8 points)
-    if (used_tags_cnt < 2 || object_points.size() < 8U)
+    // Constraint: PnP requires >= min_required_tags and >= 4 points
+    const size_t min_pts = static_cast<size_t>(min_required_tags) * 4U;
+    if (used_tags_cnt < min_required_tags || object_points.size() < min_pts)
     {
       return false;
     }

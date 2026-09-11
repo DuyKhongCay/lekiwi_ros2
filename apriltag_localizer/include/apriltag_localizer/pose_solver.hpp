@@ -63,8 +63,8 @@ namespace apriltag_localizer
      * @param[in] dist_coeffs Camera distortion coefficients vector.
      * @param[out] rvec 3x1 Rodrigues rotation vector of the board in camera optical frame.
      * @param[out] tvec 3x1 translation vector of the board in camera optical frame.
-     * @param[out] used_tags_cnt Number of valid board tags used (must be >= 2).
-     * @return True if estimation succeeds with >= 2 tags, false otherwise.
+     * @param[in,out] used_tags_cnt In: minimum tags required (>= 1). Out: actual number of valid board tags used.
+     * @return True if estimation succeeds with >= minimum required tags, false otherwise.
      */
     static bool estimate_board_pose(
         const std::vector<std::vector<cv::Point2f>> &marker_corners,

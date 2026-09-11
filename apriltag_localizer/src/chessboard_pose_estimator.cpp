@@ -1,6 +1,8 @@
 /**
  * @file chessboard_pose_estimator.cpp
- * @brief Implementation of AprilTag chessboard pose estimation, TF broadcasting, and map anchor locking.
+ * @brief Implementation of AprilTag chessboard pose estimation and robot pose publisher.
+ *
+ * Clean Code refactor: Pure vision component with no EKF coupling or intermediate anchor services.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -19,8 +21,6 @@
 namespace apriltag_localizer
 {
 
-  // ================= ChessboardPoseEstimator Node =================
-
   ChessboardPoseEstimator::ChessboardPoseEstimator(const rclcpp::NodeOptions &options)
       : rclcpp::Node("chessboard_pose_estimator", options)
   {
@@ -35,36 +35,20 @@ namespace apriltag_localizer
       // Calibration mode: ONLY publish detected tags to /tag_detections
       tag_detections_pub_ = create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>(
           "/tag_detections", rclcpp::SensorDataQoS());
-      RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator running in CALIBRATION MODE (only /tag_detections is active)");
+      RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator running in CALIBRATION MODE (only /tag_detections active)");
     }
     else
     {
-      tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
       static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
 
-      // Publishers
+      // Vision Output Publishers
       robot_pose_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
           "/chessboard/robot_pose", rclcpp::QoS(10));
       tag_centers_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
           "/chess/tag_centers", rclcpp::QoS(1).transient_local().reliable());
 
-      // Services
-      lock_anchor_srv_ = create_service<std_srvs::srv::Trigger>(
-          "/chessboard/lock_anchor",
-          std::bind(&ChessboardPoseEstimator::on_lock_anchor, this, std::placeholders::_1, std::placeholders::_2));
-      reset_anchor_srv_ = create_service<std_srvs::srv::Trigger>(
-          "/chessboard/reset_anchor",
-          std::bind(&ChessboardPoseEstimator::on_reset_anchor, this, std::placeholders::_1, std::placeholders::_2));
-
-      // Periodic timer for Static TF and map->odom anchor broadcaster (5 Hz)
-      tf_timer_ = create_wall_timer(
-          std::chrono::milliseconds(200),
-          std::bind(&ChessboardPoseEstimator::publish_static_and_anchor_tf, this));
-
-      // Publish initial static transform immediately
-      publish_static_and_anchor_tf();
-
-      RCLCPP_INFO(get_logger(), "Services ready: /chessboard/lock_anchor and /chessboard/reset_anchor");
+      // Broadcast static transform map -> chessboard_frame once at startup
+      publish_static_transforms();
     }
 
     // Subscriptions
@@ -85,33 +69,31 @@ namespace apriltag_localizer
 
     // Diagnostics updater
     diagnostic_updater_.setHardwareID("ChessboardPoseEstimator");
-    diagnostic_updater_.add("Chessboard Tracker & Anchor Status", this, &ChessboardPoseEstimator::produce_diagnostics);
+    diagnostic_updater_.add("Chessboard Tracker Status", this, &ChessboardPoseEstimator::produce_diagnostics);
 
     last_fps_time_ = std::chrono::steady_clock::now();
 
-    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator node initialized successfully.");
+    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator pure vision node initialized successfully.");
   }
 
   void ChessboardPoseEstimator::load_parameters()
   {
     calib_ = declare_parameter<bool>("calib", false);
     tag_family_ = declare_parameter<std::string>("tag_family", "16h5");
-    tag_size_ = declare_parameter<double>("tag_size", 0.02);
-    detection_rate_hz_ = declare_parameter<double>("detection_rate_hz", 2.0);
+    tag_size_ = declare_parameter<double>("tag_size", 0.029);
+    detection_rate_hz_ = declare_parameter<double>("detection_rate_hz", 5.0);
+    min_tags_cnt_ = declare_parameter<int>("min_tags_cnt", 2);
 
     map_frame_ = declare_parameter<std::string>("map_frame", "map");
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
     chessboard_frame_ = declare_parameter<std::string>("chessboard_frame", "chessboard_frame");
     camera_frame_ = declare_parameter<std::string>("camera_frame", "stereo_left_optical");
-    base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
+    base_frame_ = declare_parameter<std::string>("base_frame", "base_footprint");
 
     chessboard_pose_in_map_ = declare_parameter<std::vector<double>>(
         "chessboard_pose_in_map", {0.0, 0.0, 0.004, 0.0, 0.0, 0.0});
 
-    publish_tf_ = declare_parameter<bool>("publish_tf", true);
-    publish_map_to_chessboard_ = declare_parameter<bool>("publish_map_to_chessboard", true);
-    publish_map_to_odom_ = declare_parameter<bool>("publish_map_to_odom", true);
-    min_depth_m_ = declare_parameter<double>("min_depth_m", 0.05);
+    publish_static_tf_ = declare_parameter<bool>("publish_tf", true);
 
     // Tag layout parameters
     const auto tag_ids = declare_parameter<std::vector<int64_t>>("tags.ids", {0, 1, 2, 3});
@@ -167,6 +149,38 @@ namespace apriltag_localizer
     aruco_params_->cornerRefinementWinSize = 5;
     aruco_params_->cornerRefinementMaxIterations = 30;
     aruco_params_->cornerRefinementMinAccuracy = 0.05;
+  }
+
+  void ChessboardPoseEstimator::publish_static_transforms()
+  {
+    if (!publish_static_tf_ || !static_tf_broadcaster_)
+    {
+      return;
+    }
+
+    geometry_msgs::msg::TransformStamped static_tf;
+    static_tf.header.stamp = now();
+    static_tf.header.frame_id = map_frame_;
+    static_tf.child_frame_id = chessboard_frame_;
+
+    if (chessboard_pose_in_map_.size() >= 6)
+    {
+      static_tf.transform.translation.x = chessboard_pose_in_map_[0];
+      static_tf.transform.translation.y = chessboard_pose_in_map_[1];
+      static_tf.transform.translation.z = chessboard_pose_in_map_[2];
+
+      tf2::Quaternion q;
+      q.setRPY(chessboard_pose_in_map_[3], chessboard_pose_in_map_[4], chessboard_pose_in_map_[5]);
+      static_tf.transform.rotation = tf2::toMsg(q);
+    }
+    else
+    {
+      static_tf.transform.rotation.w = 1.0;
+    }
+
+    static_tf_broadcaster_->sendTransform(static_tf);
+    RCLCPP_INFO(get_logger(), "Broadcasted static transform: '%s' -> '%s'",
+                map_frame_.c_str(), chessboard_frame_.c_str());
   }
 
   void ChessboardPoseEstimator::on_camera_info(
@@ -362,16 +376,14 @@ namespace apriltag_localizer
       const std::vector<std::vector<cv::Point2f>> &marker_corners,
       const std::vector<int> &marker_ids)
   {
-    // Hard fail-safe: pose estimation requires at least 2 tags
-    if (marker_ids.size() < 2)
+    if (static_cast<int>(marker_ids.size()) < min_tags_cnt_)
     {
-      has_valid_pose_ = false;
       last_used_tags_.store(0);
       return;
     }
 
     cv::Mat rvec, tvec;
-    int used_tags = 0;
+    int used_tags = min_tags_cnt_;
     const bool ok = PoseSolver::estimate_board_pose(
         marker_corners, marker_ids, tag_configs_, camera_matrix_, dist_coeffs_,
         rvec, tvec, used_tags);
@@ -380,7 +392,6 @@ namespace apriltag_localizer
 
     if (!ok)
     {
-      has_valid_pose_ = false;
       return;
     }
 
@@ -403,7 +414,7 @@ namespace apriltag_localizer
     const tf2::Transform T_cam_board(q_cam_board, t_cam_board);
     const std::string cam_frame = header.frame_id.empty() ? camera_frame_ : header.frame_id;
 
-    // Robot localization pose estimation: T_map^base = T_map^board * T_board^cam * T_cam^base
+    // Robot pose estimation: T_map^base = T_map^board * T_board^cam * T_cam^base
     try
     {
       const auto transform_cam_base = tf_buffer_->lookupTransform(
@@ -429,14 +440,13 @@ namespace apriltag_localizer
           chessboard_pose_in_map_.size() >= 3 ? chessboard_pose_in_map_[2] : 0.0);
       const tf2::Transform T_map_board(q_map_board, t_map_board);
 
-      latest_T_map_base_ = T_map_board * T_board_base;
-      has_valid_pose_ = true;
+      const tf2::Transform T_map_base = T_map_board * T_board_base;
 
       // Publish /chessboard/robot_pose with high-confidence fixed covariance (N >= 2)
       auto robot_pose_msg = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
       robot_pose_msg->header.stamp = header.stamp;
       robot_pose_msg->header.frame_id = map_frame_;
-      tf2::toMsg(latest_T_map_base_, robot_pose_msg->pose.pose);
+      tf2::toMsg(T_map_base, robot_pose_msg->pose.pose);
 
       constexpr double pos_var = 0.0001;
       constexpr double rot_var = 0.0004;
@@ -458,7 +468,6 @@ namespace apriltag_localizer
   void ChessboardPoseEstimator::on_image(
       const sensor_msgs::msg::Image::ConstSharedPtr &msg)
   {
-    // Step 1: Mode gating & rate limiting
     if (!should_process_image(msg))
     {
       return;
@@ -466,19 +475,16 @@ namespace apriltag_localizer
 
     const auto proc_start = std::chrono::steady_clock::now();
 
-    // Step 2: Grayscale conversion
     cv_bridge::CvImageConstPtr cv_ptr = convert_to_grayscale(msg);
     if (!cv_ptr)
     {
       return;
     }
 
-    // Step 3: Tag detection
     std::vector<std::vector<cv::Point2f>> marker_corners;
     std::vector<int> marker_ids;
     detect_tags(cv_ptr->image, marker_corners, marker_ids);
 
-    // Step 4: Branch on calibration mode
     if (calib_)
     {
       publish_tag_detections_for_calib(msg->header, marker_corners, marker_ids);
@@ -488,114 +494,12 @@ namespace apriltag_localizer
       return;
     }
 
-    // Step 5: Publish tag centers for AI inference / visualizer
     publish_tag_centers(msg->header, cv_ptr->image.size(), marker_corners, marker_ids);
-
-    // Step 6: Multi-Tag PnP and Robot Pose Estimation
     estimate_and_publish_robot_pose(msg->header, marker_corners, marker_ids);
 
     const auto proc_end = std::chrono::steady_clock::now();
     last_proc_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
     frame_counter_.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  void ChessboardPoseEstimator::on_lock_anchor(
-      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
-      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-  {
-    if (!has_valid_pose_)
-    {
-      response->success = false;
-      response->message = "Cannot lock anchor: need >= 2 tags detected. Please teleop robot to face chessboard.";
-      RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
-      return;
-    }
-
-    try
-    {
-      const auto transform_odom_base = tf_buffer_->lookupTransform(
-          odom_frame_, base_frame_, tf2::TimePointZero);
-      tf2::Transform T_odom_base;
-      tf2::fromMsg(transform_odom_base.transform, T_odom_base);
-
-      // T_map^odom = T_map^base * (T_odom^base)^-1
-      const tf2::Transform T_map_odom = latest_T_map_base_ * T_odom_base.inverse();
-
-      T_map_odom_locked_.header.stamp = now();
-      T_map_odom_locked_.header.frame_id = map_frame_;
-      T_map_odom_locked_.child_frame_id = odom_frame_;
-      T_map_odom_locked_.transform = tf2::toMsg(T_map_odom);
-
-      is_anchored_ = true;
-
-      // Broadcast immediately
-      if (publish_tf_ && publish_map_to_odom_)
-      {
-        tf_broadcaster_->sendTransform(T_map_odom_locked_);
-      }
-
-      response->success = true;
-      response->message = "Anchor locked successfully! Map -> Odom TF is now active.";
-      RCLCPP_INFO(get_logger(), ">>> CHESSBOARD ANCHOR LOCKED! Map->Odom TF broadcasting active.");
-    }
-    catch (const tf2::TransformException &ex)
-    {
-      response->success = false;
-      response->message = std::string("Cannot lock anchor: TF lookup failed: ") + ex.what();
-      RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
-    }
-  }
-
-  void ChessboardPoseEstimator::on_reset_anchor(
-      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
-      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-  {
-    is_anchored_ = false;
-    has_valid_pose_ = false;
-    last_used_tags_.store(0);
-    response->success = true;
-    response->message = "Anchor reset. Map -> Odom TF broadcast disabled until re-locked.";
-    RCLCPP_INFO(get_logger(), "Chessboard anchor reset.");
-  }
-
-  void ChessboardPoseEstimator::publish_static_and_anchor_tf()
-  {
-    if (calib_)
-    {
-      return;
-    }
-
-    // 1. Publish static TF: map -> chessboard_frame
-    if (publish_tf_ && publish_map_to_chessboard_ && static_tf_broadcaster_)
-    {
-      geometry_msgs::msg::TransformStamped static_tf;
-      static_tf.header.stamp = now();
-      static_tf.header.frame_id = map_frame_;
-      static_tf.child_frame_id = chessboard_frame_;
-
-      if (chessboard_pose_in_map_.size() >= 6)
-      {
-        static_tf.transform.translation.x = chessboard_pose_in_map_[0];
-        static_tf.transform.translation.y = chessboard_pose_in_map_[1];
-        static_tf.transform.translation.z = chessboard_pose_in_map_[2];
-
-        tf2::Quaternion q;
-        q.setRPY(chessboard_pose_in_map_[3], chessboard_pose_in_map_[4], chessboard_pose_in_map_[5]);
-        static_tf.transform.rotation = tf2::toMsg(q);
-      }
-      else
-      {
-        static_tf.transform.rotation.w = 1.0;
-      }
-      static_tf_broadcaster_->sendTransform(static_tf);
-    }
-
-    // 2. If anchored, keep publishing TF map -> odom
-    if (is_anchored_ && publish_tf_ && publish_map_to_odom_ && tf_broadcaster_)
-    {
-      T_map_odom_locked_.header.stamp = now();
-      tf_broadcaster_->sendTransform(T_map_odom_locked_);
-    }
   }
 
   void ChessboardPoseEstimator::produce_diagnostics(
@@ -622,7 +526,7 @@ namespace apriltag_localizer
       tag_ids_str = last_detected_tag_ids_str_;
     }
 
-    // 1. Overall Status Summary
+    // Status Summary
     if (!has_camera_info_)
     {
       stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Waiting for CameraInfo");
@@ -633,19 +537,14 @@ namespace apriltag_localizer
           diagnostic_msgs::msg::DiagnosticStatus::OK,
           "Calibration Mode (streaming to /tag_detections)");
     }
-    else if (is_anchored_)
-    {
-      stat.summary(
-          diagnostic_msgs::msg::DiagnosticStatus::OK,
-          "Anchor Locked (Map->Odom active)");
-    }
-    else if (current_camera_mode_ != lekiwi_interfaces::msg::CameraMode::CHESS_THINKING)
+    else if (current_camera_mode_ != lekiwi_interfaces::msg::CameraMode::CHESS_THINKING &&
+             current_camera_mode_ != lekiwi_interfaces::msg::CameraMode::STANDBY)
     {
       stat.summary(
           diagnostic_msgs::msg::DiagnosticStatus::OK,
           "Standby (Camera mode inactive for localization)");
     }
-    else if (used_tags >= 2)
+    else if (used_tags >= min_tags_cnt_)
     {
       stat.summaryf(
           diagnostic_msgs::msg::DiagnosticStatus::OK,
@@ -654,19 +553,18 @@ namespace apriltag_localizer
     }
     else
     {
-      stat.summary(
+      stat.summaryf(
           diagnostic_msgs::msg::DiagnosticStatus::WARN,
-          "Insufficient chessboard tags in view (< 2 tags)");
+          "Insufficient chessboard tags in view (< %d tags)", min_tags_cnt_);
     }
 
-    // 2. Telemetry & Metrics
+    // Telemetry & Metrics
     stat.add("Calibration Mode", calib_ ? "true" : "false");
     stat.addf("Processing FPS", "%.1f", fps);
     stat.addf("Target Detection Rate (Hz)", "%.1f", detection_rate_hz_);
     stat.addf("Algorithm Processing Time (ms)", "%.2f", proc_time_ms);
     stat.add("Used Board Tags Count", used_tags);
     stat.add("Detected Tag IDs", tag_ids_str);
-    stat.add("Anchor Locked", is_anchored_ ? "true" : "false");
     stat.add("Camera Info Received", has_camera_info_ ? "true" : "false");
     stat.add("Total Frames Processed", current_count);
   }
