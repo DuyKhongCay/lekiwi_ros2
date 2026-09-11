@@ -90,6 +90,7 @@ def generate_launch_description():
             "arm_controller": LaunchConfiguration("arm_controller"),
             "base_controller": LaunchConfiguration("base_controller"),
             "imu_broadcaster": LaunchConfiguration("imu_broadcaster"),
+            "use_mag": "false",
         }.items(),
     )
 
@@ -99,6 +100,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "use_mag": "false",
         }.items(),
         condition=IfCondition(LaunchConfiguration("imu_broadcaster")),
     )

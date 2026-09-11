@@ -3,8 +3,9 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -24,10 +25,16 @@ def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time", default_value="false", description="Use simulation clock"
     )
+    use_mag_arg = DeclareLaunchArgument(
+        "use_mag",
+        default_value="false",
+        description="Enable magnetometer pipeline and fusion",
+    )
 
     use_sim_time_param = ParameterValue(
         LaunchConfiguration("use_sim_time"), value_type=bool
     )
+    use_mag_param = ParameterValue(LaunchConfiguration("use_mag"), value_type=bool)
 
     # 1. Magnetometer Bias Observer (Python node: calibrate via /calibrate_magnetometer service & load/save YAML)
     mag_bias_observer_node = Node(
@@ -50,6 +57,7 @@ def generate_launch_description():
             ("imu/mag", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
             ("imu/mag_bias", "/imu/mag_bias"),
         ],
+        condition=IfCondition(LaunchConfiguration("use_mag")),
     )
 
     # 2. Composable Components for C++ High-frequency IMU pipeline
@@ -58,7 +66,9 @@ def generate_launch_description():
         plugin="magnetometer_pipeline::MagnetometerBiasRemoverNodelet",
         name="magnetometer_bias_remover",
         parameters=[
-            {"use_sim_time": use_sim_time_param},
+            {
+                "use_sim_time": use_sim_time_param,
+            },
         ],
         remappings=[
             ("imu/mag", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
@@ -74,7 +84,10 @@ def generate_launch_description():
         name="imu_filter",
         parameters=[
             default_imu_params,
-            {"use_sim_time": use_sim_time_param},
+            {
+                "use_sim_time": use_sim_time_param,
+                "use_mag": use_mag_param,
+            },
         ],
         remappings=[
             ("imu/data_raw", "/lekiwi_imu_broadcaster/imu"),
@@ -105,17 +118,24 @@ def generate_launch_description():
         package="rclcpp_components",
         executable="component_container_mt",
         composable_node_descriptions=[
-            mag_bias_remover_component,
             imu_filter_component,
             imu_transformer_component,
         ],
         output="screen",
     )
 
+    load_mag_bias_remover = LoadComposableNodes(
+        target_container=imu_container,
+        composable_node_descriptions=[mag_bias_remover_component],
+        condition=IfCondition(LaunchConfiguration("use_mag")),
+    )
+
     return LaunchDescription(
         [
             use_sim_time_arg,
-            mag_bias_observer_node,
+            use_mag_arg,
             imu_container,
+            load_mag_bias_remover,
+            mag_bias_observer_node,
         ]
     )

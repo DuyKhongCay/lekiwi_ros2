@@ -5,7 +5,7 @@ imu_filter:
   ros__parameters:
     use_sim_time: false
     stateless: false
-    use_mag: true               # Fuse AK09916 magnetometer for absolute yaw heading
+    use_mag: false              # Temporarily disabled: Gyro+Accel 6-DoF mode (absolute yaw handled by AprilTag)
     publish_tf: false          # Do not publish TF directly from filter; handled by robot_state_publisher & EKF
     reverse_tf: false
     fixed_frame: "odom"

@@ -59,6 +59,11 @@ def generate_launch_description():
             default_value="true",
             description="Spawn and activate IMU and Magnetometer broadcasters",
         ),
+        DeclareLaunchArgument(
+            "use_mag",
+            default_value="false",
+            description="Spawn and activate magnetometer broadcaster",
+        ),
     ]
 
     robot_description = {
@@ -150,7 +155,7 @@ def generate_launch_description():
             "/controller_manager",
         ],
         output="screen",
-        condition=IfCondition(LaunchConfiguration("imu_broadcaster")),
+        condition=IfCondition(LaunchConfiguration("use_mag")),
     )
 
     twist_mux_node = Node(
@@ -195,7 +200,8 @@ def generate_launch_description():
                 OnProcessExit(
                     target_action=imu_broadcaster_spawner,
                     on_exit=[mag_broadcaster_spawner],
-                )
+                ),
+                condition=IfCondition(LaunchConfiguration("use_mag")),
             ),
         ]
     )
