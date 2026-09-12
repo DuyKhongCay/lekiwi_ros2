@@ -61,6 +61,11 @@ def generate_launch_description():
             default_value="mock",
             description="IMU hardware interface type: real or mock.",
         ),
+        DeclareLaunchArgument(
+            "robot_description_topic",
+            default_value="/rviz/robot_description",
+            description="Topic name for robot_description used by local visualizer.",
+        ),
     ]
 
     rviz_config = LaunchConfiguration("rviz_config")
@@ -76,6 +81,7 @@ def generate_launch_description():
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "hardware_type": LaunchConfiguration("hardware_type"),
             "imu_hardware_type": LaunchConfiguration("imu_hardware_type"),
+            "robot_description_topic": LaunchConfiguration("robot_description_topic"),
         }.items(),
         condition=IfCondition(publish_robot_state),
     )

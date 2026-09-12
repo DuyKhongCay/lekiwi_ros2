@@ -44,6 +44,11 @@ def generate_launch_description():
             default_value="false",
             description="Use simulation clock if true",
         ),
+        DeclareLaunchArgument(
+            "robot_description_topic",
+            default_value="robot_description",
+            description="Topic name to publish the robot_description string.",
+        ),
     ]
 
     robot_description_content = ParameterValue(
@@ -76,6 +81,9 @@ def generate_launch_description():
                 ),
                 "publish_frequency": 50.0,
             },
+        ],
+        remappings=[
+            ("robot_description", LaunchConfiguration("robot_description_topic")),
         ],
     )
 
