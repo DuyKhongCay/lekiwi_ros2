@@ -35,20 +35,20 @@ def generate_launch_description():
         default_value="0.5",
         description="Angular velocity in rad/s during rotation maneuvers.",
     )
-    curr_wheel_radius_arg = DeclareLaunchArgument(
-        "current_wheel_radius",
-        default_value="0.065",
-        description="Current configured wheel radius in meters.",
-    )
-    curr_robot_radius_arg = DeclareLaunchArgument(
-        "current_robot_radius",
-        default_value="0.1268",
-        description="Current configured robot radius (wheelbase distance to center) in meters.",
+    controller_name_arg = DeclareLaunchArgument(
+        "controller_name",
+        default_value="omni_base_controller",
+        description="Name of the running omni base controller node to query parameters from.",
     )
     actual_measured_dist_arg = DeclareLaunchArgument(
         "actual_measured_dist",
         default_value="0.0",
         description="Ground truth measured distance for rollout mode (0.0 uses target distance).",
+    )
+    odom_topic_arg = DeclareLaunchArgument(
+        "odom_topic",
+        default_value="/odometry/filtered",
+        description="Odometry topic for state feedback (e.g. /odometry/filtered or /omni_base_controller/odom).",
     )
 
     calib_node = Node(
@@ -63,11 +63,10 @@ def generate_launch_description():
                 "rot_cnt": LaunchConfiguration("rot_cnt"),
                 "linear_vel": LaunchConfiguration("linear_vel"),
                 "angular_vel": LaunchConfiguration("angular_vel"),
-                "current_wheel_radius": LaunchConfiguration("current_wheel_radius"),
-                "current_robot_radius": LaunchConfiguration("current_robot_radius"),
+                "controller_name": LaunchConfiguration("controller_name"),
                 "actual_measured_dist": LaunchConfiguration("actual_measured_dist"),
                 "imu_topic": "/imu/data_transformed",
-                "odom_topic": "/omni_base_controller/odom",
+                "odom_topic": LaunchConfiguration("odom_topic"),
                 "tag_pose_topic": "/chessboard/robot_pose",
                 "cmd_vel_topic": "/cmd_vel_calib",
             }
@@ -81,9 +80,9 @@ def generate_launch_description():
             rot_cnt_arg,
             linear_vel_arg,
             angular_vel_arg,
-            curr_wheel_radius_arg,
-            curr_robot_radius_arg,
+            controller_name_arg,
             actual_measured_dist_arg,
+            odom_topic_arg,
             calib_node,
         ]
     )
