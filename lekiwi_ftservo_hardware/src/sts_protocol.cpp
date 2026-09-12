@@ -21,6 +21,8 @@ namespace lekiwi_ftservo_hardware
 {
   namespace
   {
+    using namespace sts::protocol;
+
     /**
      * @brief Computes standard Feetech STS frame checksum: ~(ID + Length + Instruction + Params) & 0xFF.
      *
@@ -283,7 +285,7 @@ namespace lekiwi_ftservo_hardware
       return false;
     }
     std::vector<std::vector<uint8_t>> raw_data;
-    if (!sync_read(ids, kPresentPositionRegister, 4U, &raw_data, error))
+    if (!sync_read(ids, sts::register_addr::kPresentPosition, 4U, &raw_data, error))
     {
       return false;
     }
@@ -309,8 +311,8 @@ namespace lekiwi_ftservo_hardware
       return false;
     }
     std::vector<std::vector<uint8_t>> raw_data;
-    // 15 bytes from register 56 (kPresentPositionRegister) to 70 (kPresentCurrentRegister + 1)
-    if (!sync_read(ids, kPresentPositionRegister, 15U, &raw_data, error))
+    // 15 bytes from register 56 (kPresentPosition) to 70 (kPresentCurrent + 1)
+    if (!sync_read(ids, sts::register_addr::kPresentPosition, 15U, &raw_data, error))
     {
       return false;
     }
@@ -323,11 +325,11 @@ namespace lekiwi_ftservo_hardware
       diag.position_ticks = static_cast<int>(feedback[0]) | (static_cast<int>(feedback[1]) << 8);
       diag.speed_ticks = decode_velocity_ticks(feedback[2], feedback[3]);
       diag.load_raw = static_cast<int>(static_cast<int16_t>(feedback[4] | (feedback[5] << 8)));
-      diag.voltage_v = static_cast<double>(feedback[6]) * 0.1;
+      diag.voltage_v = static_cast<double>(feedback[6]) * sts::telemetry_scale::kVoltsPerUnit;
       diag.temperature_c = static_cast<double>(feedback[7]);
       diag.moving = (feedback[10] != 0);
       const int16_t current_ticks = static_cast<int16_t>(feedback[13] | (feedback[14] << 8));
-      diag.current_a = static_cast<double>(current_ticks) * 0.0065;
+      diag.current_a = static_cast<double>(current_ticks) * sts::telemetry_scale::kAmperesPerUnit;
       diag.status = 0;
     }
     return true;
@@ -342,7 +344,7 @@ namespace lekiwi_ftservo_hardware
       return false;
     }
     std::vector<uint8_t> feedback;
-    if (!read_register(id, kPresentPositionRegister, 15U, &feedback, error))
+    if (!read_register(id, sts::register_addr::kPresentPosition, 15U, &feedback, error))
     {
       return false;
     }
@@ -350,11 +352,11 @@ namespace lekiwi_ftservo_hardware
     diagnostic->position_ticks = static_cast<int>(feedback[0]) | (static_cast<int>(feedback[1]) << 8);
     diagnostic->speed_ticks = decode_velocity_ticks(feedback[2], feedback[3]);
     diagnostic->load_raw = static_cast<int>(static_cast<int16_t>(feedback[4] | (feedback[5] << 8)));
-    diagnostic->voltage_v = static_cast<double>(feedback[6]) * 0.1;
+    diagnostic->voltage_v = static_cast<double>(feedback[6]) * sts::telemetry_scale::kVoltsPerUnit;
     diagnostic->temperature_c = static_cast<double>(feedback[7]);
     diagnostic->moving = (feedback[10] != 0);
     const int16_t current_ticks = static_cast<int16_t>(feedback[13] | (feedback[14] << 8));
-    diagnostic->current_a = static_cast<double>(current_ticks) * 0.0065;
+    diagnostic->current_a = static_cast<double>(current_ticks) * sts::telemetry_scale::kAmperesPerUnit;
     diagnostic->status = 0;
     return true;
   }
@@ -382,7 +384,7 @@ namespace lekiwi_ftservo_hardware
       set_error(error, "Velocity sync-write IDs and commands must have equal non-zero size");
       return false;
     }
-    std::vector<uint8_t> parameters{kGoalSpeedRegister, 2U};
+    std::vector<uint8_t> parameters{sts::register_addr::kGoalSpeed, 2U};
     for (size_t index = 0; index < ids.size(); ++index)
     {
       const auto encoded = encode_velocity_ticks(velocity_ticks[index]);
@@ -400,12 +402,12 @@ namespace lekiwi_ftservo_hardware
       set_error(error, "Position sync-write IDs and commands must have equal non-zero size");
       return false;
     }
-    std::vector<uint8_t> parameters{kAccelerationRegister, 7U};
+    std::vector<uint8_t> parameters{sts::register_addr::kAcceleration, 7U};
     for (size_t index = 0; index < ids.size(); ++index)
     {
-      const int position = std::clamp(positions[index], 0, 4095);
+      const int position = std::clamp(positions[index], 0, sts::resolution::kEncoderResolution - 1);
       const auto speed = encode_velocity_ticks(2400);
-      parameters.insert(parameters.end(), {ids[index], 50U,
+      parameters.insert(parameters.end(), {ids[index], sts::default_config::kDefaultArmAcceleration,
                                            static_cast<uint8_t>(position & 0xff), static_cast<uint8_t>((position >> 8) & 0xff),
                                            0U, 0U, speed[0], speed[1]});
     }
@@ -420,7 +422,7 @@ namespace lekiwi_ftservo_hardware
       set_error(error, "Torque sync-write IDs and enable states must have equal non-zero size");
       return false;
     }
-    std::vector<uint8_t> parameters{kTorqueEnableRegister, 1U};
+    std::vector<uint8_t> parameters{sts::register_addr::kTorqueEnable, 1U};
     for (size_t index = 0; index < ids.size(); ++index)
     {
       parameters.push_back(ids[index]);

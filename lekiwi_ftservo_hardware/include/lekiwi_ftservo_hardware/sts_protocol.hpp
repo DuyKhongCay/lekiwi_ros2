@@ -20,6 +20,8 @@
 
 #include <libserial/SerialPort.h>
 
+#include "lekiwi_ftservo_hardware/sts_constants.hpp"
+
 namespace lekiwi_ftservo_hardware
 {
 
@@ -82,52 +84,6 @@ namespace lekiwi_ftservo_hardware
     class StsProtocol
     {
     public:
-        /// STS frame header byte (0xFF).
-        static constexpr uint8_t kHeader = 0xff;
-        /// STS broadcast address ID (0xFE = 254).
-        static constexpr uint8_t kBroadcastId = 0xfe;
-        /// Instruction: Ping servo presence.
-        static constexpr uint8_t kInstructionPing = 0x01;
-        /// Instruction: Read memory control table registers.
-        static constexpr uint8_t kInstructionRead = 0x02;
-        /// Instruction: Direct write to memory control table registers.
-        static constexpr uint8_t kInstructionWrite = 0x03;
-        /// Instruction: Buffered register write (staged until Action command).
-        static constexpr uint8_t kInstructionRegWrite = 0x04;
-        /// Instruction: Trigger execution of staged RegWrite instructions.
-        static constexpr uint8_t kInstructionAction = 0x05;
-        /// Instruction: Synchronized read from multiple servos in sequence.
-        static constexpr uint8_t kInstructionSyncRead = 0x82;
-        /// Instruction: Synchronized write to multiple servos in one broadcast frame.
-        static constexpr uint8_t kInstructionSyncWrite = 0x83;
-
-        /// Control table register: Operating mode (0 = Position, 1 = Velocity/Wheel, 2 = PWM, 3 = Step).
-        static constexpr uint8_t kModeRegister = 33;
-        /// Control table register: Motor torque enable switch (0 = disabled, 1 = enabled).
-        static constexpr uint8_t kTorqueEnableRegister = 40;
-        /// Control table register: Acceleration limit profile.
-        static constexpr uint8_t kAccelerationRegister = 41;
-        /// Control table register: Target goal position (2 bytes, low byte first).
-        static constexpr uint8_t kGoalPositionRegister = 42;
-        /// Control table register: Target goal velocity (2 bytes, sign-magnitude).
-        static constexpr uint8_t kGoalSpeedRegister = 46;
-        /// Control table register: EEPROM / Flash lock register.
-        static constexpr uint8_t kLockRegister = 55;
-        /// Control table register: Current present position feedback (2 bytes).
-        static constexpr uint8_t kPresentPositionRegister = 56;
-        /// Control table register: Current present velocity feedback (2 bytes).
-        static constexpr uint8_t kPresentSpeedRegister = 58;
-        /// Control table register: Current motor load feedback (2 bytes).
-        static constexpr uint8_t kPresentLoadRegister = 60;
-        /// Control table register: Present input supply voltage (1 byte, in 0.1V units).
-        static constexpr uint8_t kPresentVoltageRegister = 62;
-        /// Control table register: Present internal temperature (1 byte, in 1°C units).
-        static constexpr uint8_t kPresentTemperatureRegister = 63;
-        /// Control table register: Motion status flag (1 byte, 1 if moving, 0 if stationary).
-        static constexpr uint8_t kMovingRegister = 66;
-        /// Control table register: Present motor drive current (2 bytes, in 6.5mA units).
-        static constexpr uint8_t kPresentCurrentRegister = 69;
-
         /**
          * @brief Destructor. Closes the serial device gracefully if still open.
          */
