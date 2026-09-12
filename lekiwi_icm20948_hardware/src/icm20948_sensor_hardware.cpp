@@ -210,6 +210,12 @@ namespace lekiwi_icm20948_hardware
             }
         }
 
+        // Cache state interface names to avoid heap allocations in read()
+        for (size_t i = 0; i < expected_interfaces.size() && i < state_interface_names_.size(); ++i)
+        {
+            state_interface_names_[i] = sensor_name_ + "/" + expected_interfaces[i];
+        }
+
         RCLCPP_INFO(get_logger(), "Initialized ICM20948SensorHardware for sensor '%s' on /dev/i2c-%d (addr 0x%02X)",
                     sensor_name_.c_str(), driver_config_.i2c_bus, driver_config_.i2c_address);
 
@@ -278,157 +284,208 @@ namespace lekiwi_icm20948_hardware
             RCLCPP_INFO(get_logger(), "Starting Gyro auto-calibration (%d samples)... Keep robot stationary!", gyro_calib_samples_);
         }
 
-        // Dat gia tri khoi tao: quaternion dong nhat (0,0,0,1), gia toc trong truong +Z = 9.81 m/s^2
-        set_state(sensor_name_ + "/orientation.x", 0.0);
-        set_state(sensor_name_ + "/orientation.y", 0.0);
-        set_state(sensor_name_ + "/orientation.z", 0.0);
-        set_state(sensor_name_ + "/orientation.w", 1.0);
+        // Initialize shared state buffer
+        {
+            std::lock_guard<std::mutex> lock(shared_state_.mutex);
+            shared_state_.orientation = {0.0, 0.0, 0.0, 1.0};
+            shared_state_.angular_velocity = {0.0, 0.0, 0.0};
+            shared_state_.linear_acceleration = {0.0, 0.0, GRAVITY_EARTH};
+            shared_state_.magnetic_field = {2.0e-5, 0.0, 4.0e-5};
+            shared_state_.mag_valid = true;
+            shared_state_.valid = true;
+            shared_state_.last_read_time = std::chrono::steady_clock::now();
+        }
 
-        set_state(sensor_name_ + "/angular_velocity.x", 0.0);
-        set_state(sensor_name_ + "/angular_velocity.y", 0.0);
-        set_state(sensor_name_ + "/angular_velocity.z", 0.0);
+        // Dat gia tri khoi tao qua ten interface da duoc cache (khong cap phat heap)
+        set_state(state_interface_names_[0], 0.0);
+        set_state(state_interface_names_[1], 0.0);
+        set_state(state_interface_names_[2], 0.0);
+        set_state(state_interface_names_[3], 1.0);
 
-        set_state(sensor_name_ + "/linear_acceleration.x", 0.0);
-        set_state(sensor_name_ + "/linear_acceleration.y", 0.0);
-        set_state(sensor_name_ + "/linear_acceleration.z", GRAVITY_EARTH);
+        set_state(state_interface_names_[4], 0.0);
+        set_state(state_interface_names_[5], 0.0);
+        set_state(state_interface_names_[6], 0.0);
 
-        set_state(sensor_name_ + "/magnetic_field.x", 2.0e-5);
-        set_state(sensor_name_ + "/magnetic_field.y", 0.0);
-        set_state(sensor_name_ + "/magnetic_field.z", 4.0e-5);
+        set_state(state_interface_names_[7], 0.0);
+        set_state(state_interface_names_[8], 0.0);
+        set_state(state_interface_names_[9], GRAVITY_EARTH);
+
+        set_state(state_interface_names_[10], 2.0e-5);
+        set_state(state_interface_names_[11], 0.0);
+        set_state(state_interface_names_[12], 4.0e-5);
+
+        // Khoi dong Async Worker Thread khi chay phan cung thật
+        if (!mock_sensor_)
+        {
+            io_running_ = true;
+            io_worker_thread_ = std::thread(&ICM20948SensorHardware::io_worker_loop, this);
+            RCLCPP_INFO(get_logger(), "Started ICM20948 Async I/O Worker Thread (100 Hz).");
+        }
 
         return hardware_interface::CallbackReturn::SUCCESS;
     }
 
-    // Xu ly khi deactivate sensor
+    // Xu ly khi deactivate sensor: dung worker thread an toan
     hardware_interface::CallbackReturn ICM20948SensorHardware::on_deactivate(
         const rclcpp_lifecycle::State & /*previous_state*/)
     {
         RCLCPP_INFO(get_logger(), "Deactivating ICM20948SensorHardware...");
+        io_running_ = false;
+        if (io_worker_thread_.joinable())
+        {
+            io_worker_thread_.join();
+        }
         return hardware_interface::CallbackReturn::SUCCESS;
     }
 
-    // Chu ky RT read(): doc cam bien, ap dung calib va cap nhat 13 state interfaces
+    // Chu ky RT read(): khong blocking I/O, khong cap phat dong tren heap, thoi gian thuc thi < 5 us
     hardware_interface::return_type ICM20948SensorHardware::read(
         const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
     {
-        // Truong hop mock mode: cap nhat du lieu tinh gia lap
         if (mock_sensor_)
         {
             total_reads_++;
-            set_state(sensor_name_ + "/orientation.x", 0.0);
-            set_state(sensor_name_ + "/orientation.y", 0.0);
-            set_state(sensor_name_ + "/orientation.z", 0.0);
-            set_state(sensor_name_ + "/orientation.w", 1.0);
+            set_state(state_interface_names_[0], 0.0);
+            set_state(state_interface_names_[1], 0.0);
+            set_state(state_interface_names_[2], 0.0);
+            set_state(state_interface_names_[3], 1.0);
 
-            set_state(sensor_name_ + "/angular_velocity.x", 0.0);
-            set_state(sensor_name_ + "/angular_velocity.y", 0.0);
-            set_state(sensor_name_ + "/angular_velocity.z", 0.0);
+            set_state(state_interface_names_[4], 0.0);
+            set_state(state_interface_names_[5], 0.0);
+            set_state(state_interface_names_[6], 0.0);
 
-            set_state(sensor_name_ + "/linear_acceleration.x", 0.0);
-            set_state(sensor_name_ + "/linear_acceleration.y", 0.0);
-            set_state(sensor_name_ + "/linear_acceleration.z", GRAVITY_EARTH);
+            set_state(state_interface_names_[7], 0.0);
+            set_state(state_interface_names_[8], 0.0);
+            set_state(state_interface_names_[9], GRAVITY_EARTH);
 
-            set_state(sensor_name_ + "/magnetic_field.x", 2.0e-5);
-            set_state(sensor_name_ + "/magnetic_field.y", 0.0);
-            set_state(sensor_name_ + "/magnetic_field.z", 4.0e-5);
-
+            set_state(state_interface_names_[10], 2.0e-5);
+            set_state(state_interface_names_[11], 0.0);
+            set_state(state_interface_names_[12], 4.0e-5);
             return hardware_interface::return_type::OK;
         }
 
-        total_reads_++;
-        SensorData data;
-        std::string err;
-
-        // Doc du lieu tu phan cung I2C, xu ly loi thoang qua (transient noise)
-        if (!driver_.read_sensor_data(data, &err))
+        // Doc nhanh tu shared state buffer (< 5 us)
+        std::array<double, 3> w;
+        std::array<double, 3> a;
+        std::array<double, 3> m;
+        bool mag_valid = false;
         {
-            consecutive_errors_++;
-            failed_reads_++;
-            RCLCPP_WARN_THROTTLE(
-                get_logger(), *get_clock(), 1000,
-                "ICM20948 I2C read failed: %s (consecutive errors: %d)",
-                err.c_str(), consecutive_errors_);
-
-            // Tra ve ERROR neu loi lien tiep vuot nguong toi da
-            if (consecutive_errors_ > max_consecutive_errors_)
+            std::lock_guard<std::mutex> lock(shared_state_.mutex);
+            if (!shared_state_.valid)
             {
-                RCLCPP_ERROR(get_logger(), "ICM20948 exceeded max consecutive errors (%d), reporting failure",
-                             max_consecutive_errors_);
-                return hardware_interface::return_type::ERROR;
+                return hardware_interface::return_type::OK;
             }
-            // Giu nguyen gia tri hop le truoc do khi bi loi nhe
-            return hardware_interface::return_type::OK;
+            w = shared_state_.angular_velocity;
+            a = shared_state_.linear_acceleration;
+            m = shared_state_.magnetic_field;
+            mag_valid = shared_state_.mag_valid;
         }
 
-        consecutive_errors_ = 0;
-        last_valid_data_ = data;
+        // Cap nhat 13 state interfaces qua ten da cache san, loai bo toan bo malloc/free
+        set_state(state_interface_names_[0], 0.0);
+        set_state(state_interface_names_[1], 0.0);
+        set_state(state_interface_names_[2], 0.0);
+        set_state(state_interface_names_[3], 1.0);
 
-        // Ap dung bu tru bias, he so ti le va dinh huong truc theo chuan REP-103
-        const double ax = (data.accel_m_s2[0] - accel_bias_[0]) * accel_axis_sign_[0];
-        const double ay = (data.accel_m_s2[1] - accel_bias_[1]) * accel_axis_sign_[1];
-        const double az = (data.accel_m_s2[2] - accel_bias_[2]) * accel_axis_sign_[2];
+        set_state(state_interface_names_[4], w[0]);
+        set_state(state_interface_names_[5], w[1]);
+        set_state(state_interface_names_[6], w[2]);
 
-        // Xu ly tinh toan Gyro bias auto-calibration
-        double gx = 0.0;
-        double gy = 0.0;
-        double gz = 0.0;
+        set_state(state_interface_names_[7], a[0]);
+        set_state(state_interface_names_[8], a[1]);
+        set_state(state_interface_names_[9], a[2]);
 
-        if (auto_calibrate_gyro_ && !gyro_calibrated_)
+        if (mag_valid)
         {
-            gyro_bias_sum_[0] += data.gyro_rad_s[0];
-            gyro_bias_sum_[1] += data.gyro_rad_s[1];
-            gyro_bias_sum_[2] += data.gyro_rad_s[2];
-            current_calib_count_++;
-
-            if (current_calib_count_ >= gyro_calib_samples_)
-            {
-                gyro_bias_[0] = gyro_bias_sum_[0] / static_cast<double>(gyro_calib_samples_);
-                gyro_bias_[1] = gyro_bias_sum_[1] / static_cast<double>(gyro_calib_samples_);
-                gyro_bias_[2] = gyro_bias_sum_[2] / static_cast<double>(gyro_calib_samples_);
-                gyro_calibrated_ = true;
-                RCLCPP_INFO(get_logger(), "Gyro bias calibration complete (%d samples)! Bias: [gx: %.6f, gy: %.6f, gz: %.6f] rad/s",
-                            gyro_calib_samples_, gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
-            }
-            // Trong qua trinh lay mau calibration, giu gia tri toc do goc = 0
-            gx = 0.0;
-            gy = 0.0;
-            gz = 0.0;
-        }
-        else
-        {
-            gx = (data.gyro_rad_s[0] - gyro_bias_[0]) * gyro_axis_sign_[0];
-            gy = (data.gyro_rad_s[1] - gyro_bias_[1]) * gyro_axis_sign_[1];
-            gz = (data.gyro_rad_s[2] - gyro_bias_[2]) * gyro_axis_sign_[2];
-        }
-
-        // Raw magnetometer data in Tesla aligned to REP-103 robot frame
-        // Hard-iron and soft-iron calibration is decoupled and handled by Layer 2 magnetometer_pipeline
-        double mx = data.mag_tesla[0] * mag_axis_sign_[0];
-        double my = data.mag_tesla[1] * mag_axis_sign_[1];
-        double mz = data.mag_tesla[2] * mag_axis_sign_[2];
-
-        // Raw IMU exports identity quaternion (covariance[0] = -1.0 in controller)
-        set_state(sensor_name_ + "/orientation.x", 0.0);
-        set_state(sensor_name_ + "/orientation.y", 0.0);
-        set_state(sensor_name_ + "/orientation.z", 0.0);
-        set_state(sensor_name_ + "/orientation.w", 1.0);
-
-        set_state(sensor_name_ + "/angular_velocity.x", gx);
-        set_state(sensor_name_ + "/angular_velocity.y", gy);
-        set_state(sensor_name_ + "/angular_velocity.z", gz);
-
-        set_state(sensor_name_ + "/linear_acceleration.x", ax);
-        set_state(sensor_name_ + "/linear_acceleration.y", ay);
-        set_state(sensor_name_ + "/linear_acceleration.z", az);
-
-        if (data.mag_valid)
-        {
-            set_state(sensor_name_ + "/magnetic_field.x", mx);
-            set_state(sensor_name_ + "/magnetic_field.y", my);
-            set_state(sensor_name_ + "/magnetic_field.z", mz);
+            set_state(state_interface_names_[10], m[0]);
+            set_state(state_interface_names_[11], m[1]);
+            set_state(state_interface_names_[12], m[2]);
         }
 
         return hardware_interface::return_type::OK;
+    }
+
+    void ICM20948SensorHardware::io_worker_loop()
+    {
+        using namespace std::chrono_literals;
+        constexpr auto loop_period = 10ms; // 100 Hz polling rate
+
+        while (io_running_)
+        {
+            const auto start_time = std::chrono::steady_clock::now();
+            total_reads_++;
+            SensorData data;
+            std::string err;
+
+            if (!driver_.read_sensor_data(data, &err))
+            {
+                consecutive_errors_++;
+                failed_reads_++;
+            }
+            else
+            {
+                consecutive_errors_ = 0;
+                last_valid_data_ = data;
+
+                const double ax = (data.accel_m_s2[0] - accel_bias_[0]) * accel_axis_sign_[0];
+                const double ay = (data.accel_m_s2[1] - accel_bias_[1]) * accel_axis_sign_[1];
+                const double az = (data.accel_m_s2[2] - accel_bias_[2]) * accel_axis_sign_[2];
+
+                double gx = 0.0;
+                double gy = 0.0;
+                double gz = 0.0;
+
+                if (auto_calibrate_gyro_ && !gyro_calibrated_)
+                {
+                    gyro_bias_sum_[0] += data.gyro_rad_s[0];
+                    gyro_bias_sum_[1] += data.gyro_rad_s[1];
+                    gyro_bias_sum_[2] += data.gyro_rad_s[2];
+                    current_calib_count_++;
+
+                    if (current_calib_count_ >= gyro_calib_samples_)
+                    {
+                        gyro_bias_[0] = gyro_bias_sum_[0] / static_cast<double>(gyro_calib_samples_);
+                        gyro_bias_[1] = gyro_bias_sum_[1] / static_cast<double>(gyro_calib_samples_);
+                        gyro_bias_[2] = gyro_bias_sum_[2] / static_cast<double>(gyro_calib_samples_);
+                        gyro_calibrated_ = true;
+                        RCLCPP_INFO(get_logger(), "Gyro bias calibration complete (%d samples)! Bias: [gx: %.6f, gy: %.6f, gz: %.6f] rad/s",
+                                    gyro_calib_samples_, gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
+                    }
+                    gx = 0.0;
+                    gy = 0.0;
+                    gz = 0.0;
+                }
+                else
+                {
+                    gx = (data.gyro_rad_s[0] - gyro_bias_[0]) * gyro_axis_sign_[0];
+                    gy = (data.gyro_rad_s[1] - gyro_bias_[1]) * gyro_axis_sign_[1];
+                    gz = (data.gyro_rad_s[2] - gyro_bias_[2]) * gyro_axis_sign_[2];
+                }
+
+                double mx = data.mag_tesla[0] * mag_axis_sign_[0];
+                double my = data.mag_tesla[1] * mag_axis_sign_[1];
+                double mz = data.mag_tesla[2] * mag_axis_sign_[2];
+
+                {
+                    std::lock_guard<std::mutex> lock(shared_state_.mutex);
+                    shared_state_.angular_velocity = {gx, gy, gz};
+                    shared_state_.linear_acceleration = {ax, ay, az};
+                    if (data.mag_valid)
+                    {
+                        shared_state_.magnetic_field = {mx, my, mz};
+                        shared_state_.mag_valid = true;
+                    }
+                    shared_state_.valid = true;
+                    shared_state_.last_read_time = std::chrono::steady_clock::now();
+                }
+            }
+
+            const auto elapsed = std::chrono::steady_clock::now() - start_time;
+            if (elapsed < loop_period)
+            {
+                std::this_thread::sleep_for(loop_period - elapsed);
+            }
+        }
     }
 
     void ICM20948SensorHardware::produce_diagnostics(
@@ -443,23 +500,24 @@ namespace lekiwi_icm20948_hardware
         }
 
         // 1. Danh gia trang thai suc khoe tong the
-        if (consecutive_errors_ > max_consecutive_errors_)
+        const int err_count = consecutive_errors_.load();
+        if (err_count > max_consecutive_errors_)
         {
             stat.summaryf(
                 diagnostic_msgs::msg::DiagnosticStatus::ERROR,
-                "I2C communication failure (%d consecutive errors)", consecutive_errors_);
+                "I2C communication failure (%d consecutive errors)", err_count);
         }
-        else if (auto_calibrate_gyro_ && !gyro_calibrated_)
+        else if (auto_calibrate_gyro_ && !gyro_calibrated_.load())
         {
             stat.summaryf(
                 diagnostic_msgs::msg::DiagnosticStatus::WARN,
                 "Calibrating Gyro Bias (%d/%d samples)", current_calib_count_, gyro_calib_samples_);
         }
-        else if (consecutive_errors_ > 0)
+        else if (err_count > 0)
         {
             stat.summaryf(
                 diagnostic_msgs::msg::DiagnosticStatus::WARN,
-                "Transient I2C read errors (%d consecutive)", consecutive_errors_);
+                "Transient I2C read errors (%d consecutive)", err_count);
         }
         else
         {
@@ -472,13 +530,15 @@ namespace lekiwi_icm20948_hardware
                 << std::hex << std::uppercase << static_cast<int>(driver_config_.i2c_address) << ")";
         stat.add("I2C Device", addr_ss.str());
 
-        stat.add("Consecutive Read Errors", consecutive_errors_);
-        stat.add("Total Reads", total_reads_);
-        stat.add("Failed Reads", failed_reads_);
+        stat.add("Consecutive Read Errors", static_cast<int>(consecutive_errors_.load()));
+        stat.add("Total Reads", static_cast<uint64_t>(total_reads_.load()));
+        stat.add("Failed Reads", static_cast<uint64_t>(failed_reads_.load()));
 
-        if (total_reads_ > 0)
+        const uint64_t reads = total_reads_.load();
+        const uint64_t fails = failed_reads_.load();
+        if (reads > 0)
         {
-            double error_rate = (static_cast<double>(failed_reads_) / static_cast<double>(total_reads_)) * 100.0;
+            double error_rate = (static_cast<double>(fails) / static_cast<double>(reads)) * 100.0;
             stat.addf("Error Rate (%)", "%.2f", error_rate);
         }
         else

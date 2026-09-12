@@ -12,6 +12,7 @@
 #pragma once
 
 #include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/polygon_stamped.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -30,7 +31,7 @@ namespace lekiwi_perception
 {
 
   /**
-   * @brief Headless component rendering piece bounding box overlays and 2D board panels to compressed image topics.
+   * @brief Headless component rendering piece bounding box overlays, tag corner coordinates, and 2D board panels.
    */
   class ChessVisualizerComponent : public rclcpp::Node
   {
@@ -55,6 +56,11 @@ namespace lekiwi_perception
     void detectionsCallback(const vision_msgs::msg::Detection2DArray::ConstSharedPtr msg);
 
     /**
+     * Receive chessboard tag corner centers.
+     */
+    void tagCentersCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg);
+
+    /**
      * Load transparent piece PNG sprites from resources directory.
      */
     void loadPieceSprites(int cell_size, const std::string &pieces_dir);
@@ -73,6 +79,12 @@ namespace lekiwi_perception
         cv::Mat &frame, const std::vector<vision_msgs::msg::Detection2D> &detections);
 
     /**
+     * Draw detected AprilTag centers and corner labels onto the camera frame.
+     */
+    void drawTagCenters(
+        cv::Mat &frame, const std::vector<geometry_msgs::msg::Point32> &tag_pts);
+
+    /**
      * Parse FEN string into square-to-piece character map.
      */
     std::map<std::string, std::string> parseFenToOccupancy(const std::string &fen_str);
@@ -81,6 +93,7 @@ namespace lekiwi_perception
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fen_sub_;
     rclcpp::Subscription<vision_msgs::msg::Detection2DArray>::SharedPtr detections_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr tag_centers_sub_;
 
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr overlay_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr board_2d_pub_;
@@ -89,12 +102,14 @@ namespace lekiwi_perception
     std::string camera_topic_{"/cameras/stereo_left/image_raw"};
     std::string fen_topic_{"/chess/fen"};
     std::string detections_topic_{"/chess/detections_2d"};
+    std::string tag_centers_topic_{"/chess/tag_centers"};
     int jpeg_quality_{80};
     int board_panel_size_{480};
 
     std::string current_fen_;
     std::string last_valid_fen_;
     std::vector<vision_msgs::msg::Detection2D> latest_detections_;
+    std::vector<geometry_msgs::msg::Point32> latest_tag_centers_;
     std::string pieces_dir_;
     std::map<std::string, cv::Mat> sprite_cache_;
     int cached_cell_size_{0};

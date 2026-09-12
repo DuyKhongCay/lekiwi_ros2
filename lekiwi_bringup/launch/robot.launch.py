@@ -15,10 +15,6 @@ def generate_launch_description():
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")
 
-    ekf_params = PathJoinSubstitution(
-        [bringup_share, "config", "localization", "ekf.yaml"]
-    )
-
     # Global and Subsystem Arguments
     declared_arguments = [
         DeclareLaunchArgument(
@@ -94,6 +90,7 @@ def generate_launch_description():
             "arm_controller": LaunchConfiguration("arm_controller"),
             "base_controller": LaunchConfiguration("base_controller"),
             "imu_broadcaster": LaunchConfiguration("imu_broadcaster"),
+            "use_mag": "false",
         }.items(),
     )
 
@@ -103,7 +100,9 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "use_mag": "false",
         }.items(),
+        condition=IfCondition(LaunchConfiguration("imu_broadcaster")),
     )
 
     cameras = IncludeLaunchDescription(
@@ -157,15 +156,14 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("navigation")),
     )
 
-    ekf_node = Node(
-        package="robot_localization",
-        executable="ekf_node",
-        name="ekf_filter_node",
-        output="screen",
-        parameters=[
-            ekf_params,
-            {"use_sim_time": LaunchConfiguration("use_sim_time")},
-        ],
+    localization = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([bringup_share, "launch", "localization.launch.py"])
+        ),
+        launch_arguments={
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "enable_ekf": LaunchConfiguration("enable_ekf"),
+        }.items(),
         condition=IfCondition(LaunchConfiguration("enable_ekf")),
     )
 
@@ -175,7 +173,7 @@ def generate_launch_description():
             description,
             controllers,
             imu,
-            ekf_node,
+            localization,
             cameras,
             control,
             diagnostics,

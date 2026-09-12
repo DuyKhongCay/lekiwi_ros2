@@ -22,23 +22,10 @@ namespace lekiwi_perception
 {
 
   static const std::map<std::string, std::string> PIECE_PNG_NAMES = {
-      {"B", "w-bishop.png"}, {"K", "w-king.png"}, {"N", "w-knight.png"}, {"P", "w-pawn.png"},
-      {"Q", "w-queen.png"},  {"R", "w-rook.png"},   {"b", "b-bishop.png"}, {"k", "b-king.png"},
-      {"n", "b-knight.png"}, {"p", "b-pawn.png"},   {"q", "b-queen.png"},  {"r", "b-rook.png"}};
+      {"B", "w-bishop.png"}, {"K", "w-king.png"}, {"N", "w-knight.png"}, {"P", "w-pawn.png"}, {"Q", "w-queen.png"}, {"R", "w-rook.png"}, {"b", "b-bishop.png"}, {"k", "b-king.png"}, {"n", "b-knight.png"}, {"p", "b-pawn.png"}, {"q", "b-queen.png"}, {"r", "b-rook.png"}};
 
   static const std::map<std::string, cv::Scalar> CLASS_COLORS_BGR = {
-      {"w-king", cv::Scalar(255, 255, 255)},   {"K", cv::Scalar(255, 255, 255)},
-      {"w-queen", cv::Scalar(220, 220, 255)},  {"Q", cv::Scalar(220, 220, 255)},
-      {"w-rook", cv::Scalar(180, 180, 255)},   {"R", cv::Scalar(180, 180, 255)},
-      {"w-bishop", cv::Scalar(140, 140, 255)}, {"B", cv::Scalar(140, 140, 255)},
-      {"w-knight", cv::Scalar(100, 100, 255)}, {"N", cv::Scalar(100, 100, 255)},
-      {"w-pawn", cv::Scalar(60, 60, 255)},     {"P", cv::Scalar(60, 60, 255)},
-      {"b-king", cv::Scalar(50, 50, 50)},      {"k", cv::Scalar(50, 50, 50)},
-      {"b-queen", cv::Scalar(70, 70, 70)},     {"q", cv::Scalar(70, 70, 70)},
-      {"b-rook", cv::Scalar(90, 90, 90)},      {"r", cv::Scalar(90, 90, 90)},
-      {"b-bishop", cv::Scalar(110, 110, 110)}, {"b", cv::Scalar(110, 110, 110)},
-      {"b-knight", cv::Scalar(130, 130, 130)}, {"n", cv::Scalar(130, 130, 130)},
-      {"b-pawn", cv::Scalar(150, 150, 150)},   {"p", cv::Scalar(150, 150, 150)}};
+      {"w-king", cv::Scalar(255, 255, 255)}, {"K", cv::Scalar(255, 255, 255)}, {"w-queen", cv::Scalar(220, 220, 255)}, {"Q", cv::Scalar(220, 220, 255)}, {"w-rook", cv::Scalar(180, 180, 255)}, {"R", cv::Scalar(180, 180, 255)}, {"w-bishop", cv::Scalar(140, 140, 255)}, {"B", cv::Scalar(140, 140, 255)}, {"w-knight", cv::Scalar(100, 100, 255)}, {"N", cv::Scalar(100, 100, 255)}, {"w-pawn", cv::Scalar(60, 60, 255)}, {"P", cv::Scalar(60, 60, 255)}, {"b-king", cv::Scalar(50, 50, 50)}, {"k", cv::Scalar(50, 50, 50)}, {"b-queen", cv::Scalar(70, 70, 70)}, {"q", cv::Scalar(70, 70, 70)}, {"b-rook", cv::Scalar(90, 90, 90)}, {"r", cv::Scalar(90, 90, 90)}, {"b-bishop", cv::Scalar(110, 110, 110)}, {"b", cv::Scalar(110, 110, 110)}, {"b-knight", cv::Scalar(130, 130, 130)}, {"n", cv::Scalar(130, 130, 130)}, {"b-pawn", cv::Scalar(150, 150, 150)}, {"p", cv::Scalar(150, 150, 150)}};
 
   ChessVisualizerComponent::ChessVisualizerComponent(const rclcpp::NodeOptions &options)
       : Node("chess_visualizer_component", options)
@@ -46,6 +33,7 @@ namespace lekiwi_perception
     camera_topic_ = this->declare_parameter<std::string>("camera_topic", "/cameras/stereo_left/image_raw");
     fen_topic_ = this->declare_parameter<std::string>("fen_topic", "/chess/fen");
     detections_topic_ = this->declare_parameter<std::string>("detections_topic", "/chess/detections_2d");
+    tag_centers_topic_ = this->declare_parameter<std::string>("tag_centers_topic", "/chess/tag_centers");
     jpeg_quality_ = this->declare_parameter<int>("jpeg_quality", 80);
     board_panel_size_ = this->declare_parameter<int>("board_panel_size", 480);
 
@@ -71,6 +59,10 @@ namespace lekiwi_perception
     detections_sub_ = this->create_subscription<vision_msgs::msg::Detection2DArray>(
         detections_topic_, rclcpp::SensorDataQoS(),
         std::bind(&ChessVisualizerComponent::detectionsCallback, this, std::placeholders::_1));
+
+    tag_centers_sub_ = this->create_subscription<geometry_msgs::msg::PolygonStamped>(
+        tag_centers_topic_, rclcpp::QoS(1).transient_local().reliable(),
+        std::bind(&ChessVisualizerComponent::tagCentersCallback, this, std::placeholders::_1));
 
     camera_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
         camera_topic_, rclcpp::SensorDataQoS(),
@@ -99,6 +91,12 @@ namespace lekiwi_perception
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     latest_detections_ = msg->detections;
+  }
+
+  void ChessVisualizerComponent::tagCentersCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    latest_tag_centers_ = msg->polygon.points;
   }
 
   void ChessVisualizerComponent::loadPieceSprites(int cell_size, const std::string &pieces_dir)
@@ -203,6 +201,60 @@ namespace lekiwi_perception
       cv::putText(
           frame, label_str, cv::Point(x1 + 2, label_y1 + text_size.height + 1),
           cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
+    }
+  }
+
+  void ChessVisualizerComponent::drawTagCenters(
+      cv::Mat &frame, const std::vector<geometry_msgs::msg::Point32> &tag_pts)
+  {
+    if (tag_pts.empty() || frame.cols <= 0 || frame.rows <= 0)
+    {
+      return;
+    }
+
+    const double img_w = static_cast<double>(frame.cols);
+    const double img_h = static_cast<double>(frame.rows);
+
+    static const std::map<int, std::string> TAG_NAMES = {
+        {0, "A1"}, {1, "H1"}, {2, "H8"}, {3, "A8"}};
+
+    std::map<int, cv::Point> corners_px;
+    for (const auto &pt : tag_pts)
+    {
+      int tag_id = static_cast<int>(pt.z);
+      int u = std::clamp(static_cast<int>(pt.x * img_w), 0, frame.cols - 1);
+      int v = std::clamp(static_cast<int>(pt.y * img_h), 0, frame.rows - 1);
+      corners_px[tag_id] = cv::Point(u, v);
+
+      // Draw tag center point (cyan circle)
+      cv::circle(frame, cv::Point(u, v), 5, cv::Scalar(255, 255, 0), -1, cv::LINE_AA);
+      cv::circle(frame, cv::Point(u, v), 8, cv::Scalar(0, 200, 255), 2, cv::LINE_AA);
+
+      // Label with Tag Name and pixel coordinates
+      std::string tag_name = (TAG_NAMES.count(tag_id) > 0) ? TAG_NAMES.at(tag_id) : ("ID" + std::to_string(tag_id));
+      std::stringstream tag_text_ss;
+      tag_text_ss << tag_name << "(" << u << "," << v << ")";
+      std::string tag_text = tag_text_ss.str();
+
+      int baseline = 0;
+      cv::Size text_size = cv::getTextSize(tag_text, cv::FONT_HERSHEY_SIMPLEX, 0.45, 1, &baseline);
+      int text_x = std::clamp(u + 10, 0, frame.cols - text_size.width - 4);
+      int text_y = std::clamp(v - 8, text_size.height + 4, frame.rows - 4);
+
+      cv::rectangle(
+          frame, cv::Rect(text_x - 2, text_y - text_size.height - 2, text_size.width + 4, text_size.height + 4),
+          cv::Scalar(0, 0, 0), -1);
+      cv::putText(
+          frame, tag_text, cv::Point(text_x, text_y),
+          cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+    }
+
+    // If 4 tags are available in standard order (0:A1, 1:H1, 2:H8, 3:A8), draw polygon outline
+    if (corners_px.count(0) && corners_px.count(1) && corners_px.count(2) && corners_px.count(3))
+    {
+      std::vector<cv::Point> board_poly = {
+          corners_px[0], corners_px[1], corners_px[2], corners_px[3]};
+      cv::polylines(frame, board_poly, true, cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
     }
   }
 
@@ -347,13 +399,16 @@ namespace lekiwi_perception
 
     const std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
 
-    // 1. Overlay detections onto camera image & Publish /chess/overlay_image/compressed
+    // 1. Overlay detections and tag centers onto camera image & Publish /chess/overlay_image/compressed
     cv::Mat overlay_img = cv_ptr->image.clone();
     std::vector<vision_msgs::msg::Detection2D> dets;
+    std::vector<geometry_msgs::msg::Point32> tags;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       dets = latest_detections_;
+      tags = latest_tag_centers_;
     }
+    drawTagCenters(overlay_img, tags);
     drawPieceDetections(overlay_img, dets);
 
     std::vector<uchar> overlay_buf;

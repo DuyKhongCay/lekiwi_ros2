@@ -1,6 +1,10 @@
 /**
  * @file chessboard_pose_estimator.hpp
- * @brief Direct AprilTag/Aruco chessboard pose estimation, TF broadcasting, and map anchor locking.
+ * @brief High-precision AprilTag/ArUco visual pose estimation for LeKiwi mobile base.
+ *
+ * Adheres to Single Responsibility Principle (SRP):
+ * Detects chessboard tags, solves Perspective-n-Point (PnP), and publishes 6-DoF robot pose
+ * in the map frame and 2D tag centers for vision downstream pipelines.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -21,6 +25,10 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/opencv.hpp>
 
+#include <Eigen/Core>
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
+
 #include "cv_bridge/cv_bridge.hpp"
 #include "apriltag_msgs/msg/april_tag_detection_array.hpp"
 #include "diagnostic_updater/diagnostic_updater.hpp"
@@ -31,230 +39,113 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
-#include "std_srvs/srv/trigger.hpp"
 
 #include "tf2/LinearMath/Transform.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/static_transform_broadcaster.h"
-#include "tf2_ros/transform_broadcaster.h"
 #include "tf2_ros/transform_listener.h"
+
+#include "apriltag_localizer/pose_solver.hpp"
 
 namespace apriltag_localizer
 {
 
-  /**
-   * @brief Configuration for a single AprilTag mounted on the chessboard.
-   */
-  struct TagConfig
-  {
-    int id{0};
-    std::string name;
-    cv::Point3d center{0.0, 0.0, 0.0};
-    double yaw{0.0};
-    std::vector<cv::Point3d> corners_board;
-  };
-
-  /**
-   * @brief Pure algorithmic helper functions for pose estimation and geometric calculations.
-   */
-  class PoseSolver
-  {
-  public:
     /**
-     * @brief Computes 4 3D corner coordinates of a square tag in chessboard coordinates.
-     * @param[in] center 3D center in chessboard_frame.
-     * @param[in] size Edge length in meters (e.g. 0.02).
-     * @param[in] yaw_rad In-plane rotation around Z axis in radians. Default is 0.0.
-     * @return 4 3D points ordered CCW matching ArUco: top-left, top-right, bottom-right, bottom-left.
+     * @brief Dedicated ROS 2 component for visual chessboard pose estimation.
      */
-    static std::vector<cv::Point3d> compute_tag_corners(
-        const cv::Point3d &center, double size, double yaw_rad = 0.0);
+    class ChessboardPoseEstimator : public rclcpp::Node
+    {
+    public:
+        explicit ChessboardPoseEstimator(const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
+        ~ChessboardPoseEstimator() override = default;
 
-    /**
-     * @brief Estimates chessboard pose T_cam^board from detected tag corners and IDs.
-     * @param[in] marker_corners Detected 2D marker corners from ArucoDetector.
-     * @param[in] marker_ids Detected marker IDs.
-     * @param[in] tag_configs Map of configured tags with their fixed 3D layout on the board.
-     * @param[in] camera_mat 3x3 intrinsic camera matrix.
-     * @param[in] dist_coeffs Camera distortion coefficients vector.
-     * @param[out] rvec 3x1 Rodrigues rotation vector of the board in camera optical frame.
-     * @param[out] tvec 3x1 translation vector of the board in camera optical frame.
-     * @param[out] used_tags_cnt Number of valid board tags used in PnP estimation.
-     * @return True if pose estimation succeeds and satisfies validity constraints, false otherwise.
-     */
-    static bool estimate_board_pose(
-        const std::vector<std::vector<cv::Point2f>> &marker_corners,
-        const std::vector<int> &marker_ids,
-        const std::map<int, TagConfig> &tag_configs,
-        const cv::Mat &camera_mat,
-        const cv::Mat &dist_coeffs,
-        cv::Mat &rvec,
-        cv::Mat &tvec,
-        int &used_tags_cnt);
+    private:
+        void load_parameters();
+        void init_detector();
+        void publish_static_transforms();
 
-    /**
-     * @brief Computes T_cam^board from a single tag's T_cam^tag using T_cam^board = T_cam^tag * (T_board^tag)^-1.
-     * @param[in] rvec_tag Rodrigues rotation vector of the single tag in camera frame.
-     * @param[in] tvec_tag Translation vector of the single tag in camera frame.
-     * @param[in] tag_center_board 3D center position of the tag in chessboard_frame.
-     * @param[in] tag_yaw_board Yaw rotation angle (radians) of the tag in chessboard_frame.
-     * @param[out] rvec_board Resulting Rodrigues rotation vector of chessboard in camera frame.
-     * @param[out] tvec_board Resulting translation vector of chessboard in camera frame.
-     */
-    static void compute_board_from_single_tag(
-        const cv::Mat &rvec_tag,
-        const cv::Mat &tvec_tag,
-        const cv::Point3d &tag_center_board,
-        double tag_yaw_board,
-        cv::Mat &rvec_board,
-        cv::Mat &tvec_board);
-  };
+        // Subscriptions
+        void on_camera_info(const sensor_msgs::msg::CameraInfo::ConstSharedPtr &msg);
+        void on_camera_mode(const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg);
+        void on_image(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
 
-  /**
-   * @brief ROS 2 Node that detects AprilTags in images, publishes robot poses, TFs, and diagnostics.
-   */
-  class ChessboardPoseEstimator : public rclcpp::Node
-  {
-  public:
-    /**
-     * @brief Constructs a ChessboardPoseEstimator node.
-     * @param[in] options Node configuration options (e.g. parameter overrides).
-     */
-    explicit ChessboardPoseEstimator(const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
+        // Sub-pipeline helper methods
+        bool should_process_image(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
+        cv_bridge::CvImageConstPtr convert_to_grayscale(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
+        void detect_tags(
+            const cv::Mat &gray_img,
+            std::vector<std::vector<cv::Point2f>> &marker_corners,
+            std::vector<int> &marker_ids);
 
-    /**
-     * @brief Virtual default destructor.
-     */
-    ~ChessboardPoseEstimator() override = default;
+        void publish_tag_detections_for_calib(
+            const std_msgs::msg::Header &header,
+            const std::vector<std::vector<cv::Point2f>> &marker_corners,
+            const std::vector<int> &marker_ids);
 
-  private:
-    /**
-     * @brief Declares and loads ROS parameters for tag layouts and frame IDs.
-     */
-    void load_parameters();
+        void publish_tag_centers(
+            const std_msgs::msg::Header &header,
+            const cv::Size &img_size,
+            const std::vector<std::vector<cv::Point2f>> &marker_corners,
+            const std::vector<int> &marker_ids);
 
-    /**
-     * @brief Initializes OpenCV Aruco detector dictionary and parameters.
-     */
-    void init_detector();
+        void estimate_and_publish_robot_pose(
+            const std_msgs::msg::Header &header,
+            const std::vector<std::vector<cv::Point2f>> &marker_corners,
+            const std::vector<int> &marker_ids);
 
-    /**
-     * @brief Callback invoked when camera calibration info arrives.
-     * @param[in] msg Const shared pointer to CameraInfo message containing intrinsics and distortion.
-     */
-    void on_camera_info(const sensor_msgs::msg::CameraInfo::ConstSharedPtr &msg);
+        void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
 
-    /**
-     * @brief Callback invoked when camera mode changes.
-     * @param[in] msg Const shared pointer to CameraMode message.
-     */
-    void on_camera_mode(const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg);
+        // Parameters
+        bool calib_{false};
+        std::string tag_family_{"16h5"};
+        double tag_size_{0.029};
+        double detection_rate_hz_{5.0};
+        int min_tags_cnt_{2};
+        std::string map_frame_{"map"};
+        std::string odom_frame_{"odom"};
+        std::string chessboard_frame_{"chessboard_frame"};
+        std::string camera_frame_{"stereo_left_optical"};
+        std::string base_frame_{"base_footprint"};
+        std::vector<double> chessboard_pose_in_map_{0.0, 0.0, 0.004, 0.0, 0.0, 0.0};
+        bool publish_static_tf_{true};
 
-    /**
-     * @brief Callback invoked when a camera image frame arrives.
-     * @param[in] msg Const shared pointer to Image message.
-     */
-    void on_image(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
+        // Calibration & Detection structures
+        std::map<int, TagConfig> tag_configs_;
+        cv::Mat camera_matrix_;
+        cv::Mat dist_coeffs_;
+        bool has_camera_info_{false};
 
-    /**
-     * @brief Service callback to lock the map->odom anchor transform from the latest tag detection.
-     */
-    void on_lock_anchor(
-        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-        std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+        cv::Ptr<cv::aruco::Dictionary> aruco_dict_;
+        cv::Ptr<cv::aruco::DetectorParameters> aruco_params_;
 
-    /**
-     * @brief Service callback to reset the map->odom anchor lock.
-     */
-    void on_reset_anchor(
-        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-        std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+        // ROS 2 Interfaces
+        rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
+        rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+        rclcpp::Subscription<lekiwi_interfaces::msg::CameraMode>::SharedPtr camera_mode_sub_;
 
-    /**
-     * @brief Periodic timer callback that broadcasts static TF and map->odom transform if anchored.
-     */
-    void publish_static_and_anchor_tf();
+        rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr robot_pose_pub_;
+        rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_detections_pub_;
+        rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr tag_centers_pub_;
 
-    /**
-     * @brief Populates diagnostics status with framerate, latency, tag health, and anchor state.
-     * @param[out] stat Diagnostics status wrapper to populate.
-     */
-    void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
+        std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
+        std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+        std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-    // Node Parameters
-    bool calib_{false};
-    std::string tag_family_{"16h5"};
-    double tag_size_{0.02};
-    double detection_rate_hz_{2.0};
-    std::string map_frame_{"map"};
-    std::string odom_frame_{"odom"};
-    std::string chessboard_frame_{"chessboard_frame"};
-    std::string camera_frame_{"stereo_left_optical"};
-    std::string base_frame_{"base_link"};
-    std::vector<double> chessboard_pose_in_map_{0.0, 0.0, 0.004, 0.0, 0.0, 0.0};
-    bool publish_tf_{true};
-    bool publish_map_to_chessboard_{true};
-    bool publish_map_to_odom_{true};
+        // Gating & Rate limiting
+        uint8_t current_camera_mode_{lekiwi_interfaces::msg::CameraMode::STANDBY};
+        rclcpp::Time last_detection_stamp_{0, 0, RCL_ROS_TIME};
 
-    // Calibration & Config
-    std::map<int, TagConfig> tag_configs_;
-    cv::Mat camera_matrix_;
-    cv::Mat dist_coeffs_;
-    bool has_camera_info_{false};
-
-    // OpenCV Aruco Detector
-    cv::Ptr<cv::aruco::Dictionary> aruco_dict_;
-    cv::Ptr<cv::aruco::DetectorParameters> aruco_params_;
-
-    // ROS 2 Interfaces
-    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
-    rclcpp::Subscription<lekiwi_interfaces::msg::CameraMode>::SharedPtr camera_mode_sub_;
-
-    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr robot_pose_pub_;
-    rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_detections_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr tag_centers_pub_;
-
-    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr lock_anchor_srv_;
-    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_anchor_srv_;
-
-    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
-    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-
-    rclcpp::TimerBase::SharedPtr tf_timer_;
-
-    // State gating & execution control
-    uint8_t current_camera_mode_{lekiwi_interfaces::msg::CameraMode::STANDBY};
-    rclcpp::Time last_detection_time_{0, 0, RCL_ROS_TIME};
-
-    // Anchor lock state
-    bool is_anchored_{false};
-    geometry_msgs::msg::TransformStamped T_map_odom_locked_;
-    bool has_latest_tag_detection_{false};
-    tf2::Transform latest_T_map_base_;
-    rclcpp::Time latest_detection_stamp_;
-
-    // Last known poses
-    cv::Mat last_rvec_;
-    cv::Mat last_tvec_;
-    bool has_last_pose_{false};
-
-    // Diagnostics & Telemetry
-    diagnostic_updater::Updater diagnostic_updater_{this};
-    std::atomic<double> last_e2e_latency_ms_{0.0};
-    std::atomic<double> last_process_time_ms_{0.0};
-    std::atomic<float> current_fps_{0.0F};
-    std::atomic<uint64_t> frame_counter_{0};
-    std::chrono::steady_clock::time_point last_fps_time_;
-    uint64_t last_fps_frame_count_{0};
-    std::atomic<int> last_detected_tags_count_{0};
-    std::atomic<int> last_used_tags_count_{0};
-    std::mutex diag_mutex_;
-    std::string last_detected_tag_ids_str_{"None"};
-    std::string last_diag_error_;
-  };
+        // Diagnostics & Telemetry
+        diagnostic_updater::Updater diagnostic_updater_{this};
+        std::atomic<double> last_proc_time_ms_{0.0};
+        std::atomic<float> current_fps_{0.0F};
+        std::atomic<uint64_t> frame_counter_{0};
+        std::chrono::steady_clock::time_point last_fps_time_;
+        uint64_t last_fps_frame_count_{0};
+        std::atomic<int> last_used_tags_{0};
+        std::mutex diag_mutex_;
+        std::string last_detected_tag_ids_str_{"None"};
+    };
 
 } // namespace apriltag_localizer
 

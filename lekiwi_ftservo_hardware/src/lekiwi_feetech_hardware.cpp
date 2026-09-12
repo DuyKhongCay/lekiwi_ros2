@@ -25,23 +25,6 @@
 
 namespace lekiwi_ftservo_hardware
 {
-  namespace
-  {
-    /// Magnetic encoder ticks per complete revolution for Feetech STS (12-bit resolution: 4096).
-    constexpr int kEncoderTicksPerRevolution = 4096;
-    /// Multiplier to convert encoder ticks into radians: (2 * PI) / 4096.
-    constexpr double kRadiansPerEncoderTick = (2.0 * M_PI) / kEncoderTicksPerRevolution;
-    /// Multiplier to convert radians into encoder ticks: 4096 / (2 * PI).
-    constexpr double kEncoderTicksPerRadian = kEncoderTicksPerRevolution / (2.0 * M_PI);
-    /// Register address for operating mode configuration.
-    constexpr uint8_t kModeRegister = StsProtocol::kModeRegister;
-    /// Register address for motor torque enable state.
-    constexpr uint8_t kTorqueEnableRegister = StsProtocol::kTorqueEnableRegister;
-    /// STS operating mode: Position control mode.
-    constexpr uint8_t kPositionMode = 0;
-    /// STS operating mode: Continuous velocity / wheel speed mode.
-    constexpr uint8_t kVelocityMode = 1;
-  } // namespace
 
   LeKiwiFeetechHardwareInterface::~LeKiwiFeetechHardwareInterface()
   {
@@ -141,6 +124,8 @@ namespace lekiwi_ftservo_hardware
     }
     joints_.clear();
     joint_ids_.clear();
+    wheel_ids_.clear();
+    arm_ids_.clear();
     for (const auto &joint_info : info_.joints)
     {
       const auto id_it = joint_info.parameters.find("id");
@@ -191,8 +176,24 @@ namespace lekiwi_ftservo_hardware
       runtime.velocity_radians_per_second_per_tick = 0.00785398;
       runtime.max_velocity_radians_per_second = 25.0;
       runtime.velocity_direction = 1;
+      runtime.acceleration = is_velocity ? sts::default_config::kWheelAcceleration
+                                         : sts::default_config::kDefaultArmAcceleration;
+
+      // Pre-cache string interface names to guarantee zero heap allocation in real-time read/write loops
+      runtime.position_state_name = runtime.name + "/" + hardware_interface::HW_IF_POSITION;
+      runtime.velocity_state_name = runtime.name + "/" + hardware_interface::HW_IF_VELOCITY;
+      runtime.command_interface_name = runtime.name + "/" + interface_name;
+
       joints_.push_back(runtime);
       joint_ids_.push_back(runtime.id);
+      if (is_velocity)
+      {
+        wheel_ids_.push_back(runtime.id);
+      }
+      else
+      {
+        arm_ids_.push_back(runtime.id);
+      }
     }
     return hardware_interface::CallbackReturn::SUCCESS;
   }
@@ -210,25 +211,41 @@ namespace lekiwi_ftservo_hardware
       }
       for (auto &joint : joints_)
       {
-        if (!joint.velocity_command)
-        {
-          continue;
-        }
         const auto yaml_joint = yaml_joints[joint.name];
-        if (!yaml_joint)
+        if (joint.velocity_command)
         {
-          throw YAML::Exception(yaml_joints.Mark(), "Wheel not found in YAML: " + joint.name);
+          if (!yaml_joint)
+          {
+            throw YAML::Exception(yaml_joints.Mark(), "Wheel not found in YAML: " + joint.name);
+          }
+          joint.velocity_radians_per_second_per_tick =
+              yaml_joint["velocity_radians_per_second_per_tick"].as<double>();
+          joint.max_velocity_radians_per_second =
+              yaml_joint["max_velocity_radians_per_second"].as<double>();
+          joint.velocity_direction = yaml_joint["velocity_direction"].as<int>();
+          // Bánh xe mobile_base luôn cố định acceleration = kWheelAcceleration (step response), không nạp từ YAML
+          joint.acceleration = sts::default_config::kWheelAcceleration;
+          if (joint.velocity_radians_per_second_per_tick <= 0.0 ||
+              joint.max_velocity_radians_per_second <= 0.0 ||
+              (joint.velocity_direction != -1 && joint.velocity_direction != 1))
+          {
+            throw YAML::Exception(yaml_joint.Mark(), "Invalid velocity conversion for " + joint.name);
+          }
         }
-        joint.velocity_radians_per_second_per_tick =
-            yaml_joint["velocity_radians_per_second_per_tick"].as<double>();
-        joint.max_velocity_radians_per_second =
-            yaml_joint["max_velocity_radians_per_second"].as<double>();
-        joint.velocity_direction = yaml_joint["velocity_direction"].as<int>();
-        if (joint.velocity_radians_per_second_per_tick <= 0.0 ||
-            joint.max_velocity_radians_per_second <= 0.0 ||
-            (joint.velocity_direction != -1 && joint.velocity_direction != 1))
+        else
         {
-          throw YAML::Exception(yaml_joint.Mark(), "Invalid velocity conversion for " + joint.name);
+          // Động cơ cánh tay: nạp acceleration từ YAML nếu có cấu hình
+          if (yaml_joint && yaml_joint["acceleration"])
+          {
+            const int acc = yaml_joint["acceleration"].as<int>();
+            if (acc < 0 || acc > sts::resolution::kMaxAccelerationRegister)
+            {
+              throw YAML::Exception(yaml_joint.Mark(), "Invalid acceleration [0.." +
+                                                           std::to_string(sts::resolution::kMaxAccelerationRegister) +
+                                                           "] for " + joint.name);
+            }
+            joint.acceleration = static_cast<uint8_t>(acc);
+          }
         }
       }
     }
@@ -262,6 +279,27 @@ namespace lekiwi_ftservo_hardware
         protocol_->close();
         (void)protocol_.release();
         return hardware_interface::CallbackReturn::ERROR;
+      }
+      if (!protocol_->write_register(joint.id, sts::register_addr::kAcceleration, {joint.acceleration}, &error))
+      {
+        RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
+                     "Failed to configure acceleration for joint '%s' (ID %d): %s",
+                     joint.name.c_str(), joint.id, error.c_str());
+        protocol_->close();
+        (void)protocol_.release();
+        return hardware_interface::CallbackReturn::ERROR;
+      }
+      if (joint.velocity_command)
+      {
+        RCLCPP_INFO(rclcpp::get_logger("LeKiwiFeetechHardware"),
+                    "Configured wheel joint '%s' (ID %d) velocity mode with acceleration = %u",
+                    joint.name.c_str(), joint.id, joint.acceleration);
+      }
+      else
+      {
+        RCLCPP_INFO(rclcpp::get_logger("LeKiwiFeetechHardware"),
+                    "Configured arm joint '%s' (ID %d) position mode with acceleration = %u",
+                    joint.name.c_str(), joint.id, joint.acceleration);
       }
     }
 
@@ -317,7 +355,7 @@ namespace lekiwi_ftservo_hardware
       std::lock_guard<std::mutex> lock(shared_state_.mutex);
       for (size_t i = 0; i < num_joints; ++i)
       {
-        const double pos_rad = (initial_states[i].position_ticks - 2048) * kRadiansPerEncoderTick;
+        const double pos_rad = (initial_states[i].position_ticks - kEncoderCenterTicks) * kRadiansPerEncoderTick;
         const double vel_scale = joints_[i].velocity_command ? joints_[i].velocity_radians_per_second_per_tick : 0.0;
         const double vel_rad_s = initial_states[i].speed_ticks * vel_scale * joints_[i].velocity_direction;
         shared_state_.positions[i] = pos_rad;
@@ -325,8 +363,8 @@ namespace lekiwi_ftservo_hardware
         shared_state_.telemetry[i].position_radians = pos_rad;
         shared_state_.telemetry[i].velocity_radians_per_second = vel_rad_s;
 
-        set_state(joints_[i].name + "/" + hardware_interface::HW_IF_POSITION, pos_rad);
-        set_state(joints_[i].name + "/" + hardware_interface::HW_IF_VELOCITY, vel_rad_s);
+        set_state(joints_[i].position_state_name, pos_rad);
+        set_state(joints_[i].velocity_state_name, vel_rad_s);
       }
       shared_state_.valid = true;
       shared_state_.last_read_time = std::chrono::steady_clock::now();
@@ -339,13 +377,13 @@ namespace lekiwi_ftservo_hardware
       {
         if (joints_[i].velocity_command)
         {
-          set_command(joints_[i].name + "/" + hardware_interface::HW_IF_VELOCITY, 0.0);
+          set_command(joints_[i].command_interface_name, 0.0);
           shared_command_.commands[i] = 0.0;
         }
         else
         {
           const double initial_pos = shared_state_.positions[i];
-          set_command(joints_[i].name + "/" + hardware_interface::HW_IF_POSITION, initial_pos);
+          set_command(joints_[i].command_interface_name, initial_pos);
           shared_command_.commands[i] = initial_pos;
         }
       }
@@ -404,16 +442,8 @@ namespace lekiwi_ftservo_hardware
       }
       return false;
     }
-    std::vector<uint8_t> ids;
-    std::vector<bool> enable_states;
-    ids.reserve(joints_.size());
-    enable_states.reserve(joints_.size());
-    for (const auto &joint : joints_)
-    {
-      ids.push_back(joint.id);
-      enable_states.push_back(enabled);
-    }
-    if (!protocol_->sync_write_torque(ids, enable_states, error))
+    const std::vector<bool> enable_states(joint_ids_.size(), enabled);
+    if (!protocol_->sync_write_torque(joint_ids_, enable_states, error))
     {
       return false;
     }
@@ -477,7 +507,7 @@ namespace lekiwi_ftservo_hardware
         const bool is_base_joint = joints_[i].velocity_command;
         if (is_base_joint && affects_base)
         {
-          set_command(joints_[i].name + "/" + hardware_interface::HW_IF_VELOCITY, 0.0);
+          set_command(joints_[i].command_interface_name, 0.0);
           shared_command_.commands[i] = 0.0;
         }
         else if (!is_base_joint && affects_arm)
@@ -485,7 +515,7 @@ namespace lekiwi_ftservo_hardware
           const double cur_pos = shared_state_.positions[i];
           if (std::isfinite(cur_pos))
           {
-            set_command(joints_[i].name + "/" + hardware_interface::HW_IF_POSITION, cur_pos);
+            set_command(joints_[i].command_interface_name, cur_pos);
             shared_command_.commands[i] = cur_pos;
           }
         }
@@ -493,14 +523,19 @@ namespace lekiwi_ftservo_hardware
       shared_command_.has_new_command = false;
     }
 
-    // 2. Collect target servo IDs
+    // 2. Select target servo IDs using pre-cached lists
     std::vector<uint8_t> target_ids;
-    for (const auto &joint : joints_)
+    if (target == SrvReq::TARGET_ALL)
     {
-      if ((joint.velocity_command && affects_base) || (!joint.velocity_command && affects_arm))
-      {
-        target_ids.push_back(joint.id);
-      }
+      target_ids = joint_ids_;
+    }
+    else if (target == SrvReq::TARGET_ARM)
+    {
+      target_ids = arm_ids_;
+    }
+    else if (target == SrvReq::TARGET_BASE)
+    {
+      target_ids = wheel_ids_;
     }
 
     // 3. Atomically perform serial operations protected by serial_mutex_
@@ -546,23 +581,18 @@ namespace lekiwi_ftservo_hardware
       }
       return false;
     }
-    std::vector<uint8_t> ids;
-    std::vector<int> commands;
-    for (const auto &joint : joints_)
+    if (wheel_ids_.empty())
     {
-      if (joint.velocity_command)
-      {
-        ids.push_back(joint.id);
-        commands.push_back(0);
-      }
+      return true;
     }
-    return ids.empty() || protocol_->sync_write_velocity(ids, commands, error);
+    const std::vector<int> commands(wheel_ids_.size(), 0);
+    return protocol_->sync_write_velocity(wheel_ids_, commands, error);
   }
 
   hardware_interface::return_type LeKiwiFeetechHardwareInterface::read(
       const rclcpp::Time &, const rclcpp::Duration &)
   {
-    // Fast memory read from shared buffer (executes in < 5 us, eliminating controller_manager overrun)
+    // Fast memory read from shared buffer (executes in < 5 us, zero heap allocation)
     std::lock_guard<std::mutex> lock(shared_state_.mutex);
     if (!shared_state_.valid)
     {
@@ -572,8 +602,8 @@ namespace lekiwi_ftservo_hardware
     const size_t num_joints = joints_.size();
     for (size_t i = 0; i < num_joints; ++i)
     {
-      set_state(joints_[i].name + "/" + hardware_interface::HW_IF_POSITION, shared_state_.positions[i]);
-      set_state(joints_[i].name + "/" + hardware_interface::HW_IF_VELOCITY, shared_state_.velocities[i]);
+      set_state(joints_[i].position_state_name, shared_state_.positions[i]);
+      set_state(joints_[i].velocity_state_name, shared_state_.velocities[i]);
     }
     return hardware_interface::return_type::OK;
   }
@@ -581,22 +611,20 @@ namespace lekiwi_ftservo_hardware
   hardware_interface::return_type LeKiwiFeetechHardwareInterface::write(
       const rclcpp::Time &, const rclcpp::Duration &)
   {
-    // Fast memory push to command buffer (executes in < 5 us)
+    // Fast memory push to command buffer (executes in < 5 us, zero heap allocation)
     const size_t num_joints = joints_.size();
     std::lock_guard<std::mutex> lock(shared_command_.mutex);
     for (size_t i = 0; i < num_joints; ++i)
     {
-      if (joints_[i].velocity_command)
+      const double cmd = get_command(joints_[i].command_interface_name);
+      if (std::isfinite(cmd))
       {
-        shared_command_.commands[i] = get_command(joints_[i].name + "/" + hardware_interface::HW_IF_VELOCITY);
+        shared_command_.commands[i] = cmd;
       }
-      else
+      else if (joints_[i].velocity_command)
       {
-        const double cmd = get_command(joints_[i].name + "/" + hardware_interface::HW_IF_POSITION);
-        if (std::isfinite(cmd))
-        {
-          shared_command_.commands[i] = cmd;
-        }
+        // Defensive reset to zero velocity if command is NaN or Inf
+        shared_command_.commands[i] = 0.0;
       }
     }
     shared_command_.has_new_command = true;
@@ -608,23 +636,21 @@ namespace lekiwi_ftservo_hardware
     const size_t num_joints = joints_.size();
     uint64_t iteration_count = 0;
 
-    std::vector<uint8_t> velocity_ids;
-    std::vector<uint8_t> position_ids;
-    for (const auto &joint : joints_)
-    {
-      if (joint.velocity_command)
-      {
-        velocity_ids.push_back(joint.id);
-      }
-      else
-      {
-        position_ids.push_back(joint.id);
-      }
-    }
+    // Use pre-cached velocity (wheel) and position (arm) ID vectors
+    const auto &velocity_ids = wheel_ids_;
+    const auto &position_ids = arm_ids_;
 
     std::vector<ServoFastState> fast_states;
     std::vector<ServoDiagnosticData> diag_states;
     std::string error;
+
+    // Pre-allocated scratch vectors to guarantee zero dynamic heap reallocations at 100 Hz
+    std::vector<double> current_cmds;
+    current_cmds.reserve(num_joints);
+    std::vector<int> velocity_commands;
+    velocity_commands.reserve(velocity_ids.size());
+    std::vector<int> position_commands;
+    position_commands.reserve(position_ids.size());
 
     while (io_running_)
     {
@@ -655,7 +681,7 @@ namespace lekiwi_ftservo_hardware
         {
           for (size_t i = 0; i < num_joints; ++i)
           {
-            const double pos_rad = (diag_states[i].position_ticks - 2048) * kRadiansPerEncoderTick;
+            const double pos_rad = (diag_states[i].position_ticks - kEncoderCenterTicks) * kRadiansPerEncoderTick;
             const double vel_scale = joints_[i].velocity_command ? joints_[i].velocity_radians_per_second_per_tick : 0.0;
             const double vel_rad_s = diag_states[i].speed_ticks * vel_scale * joints_[i].velocity_direction;
 
@@ -667,7 +693,7 @@ namespace lekiwi_ftservo_hardware
             telem.id = joints_[i].id;
             telem.position_radians = pos_rad;
             telem.velocity_radians_per_second = vel_rad_s;
-            telem.load_ratio = static_cast<double>(diag_states[i].load_raw) * 0.001;
+            telem.load_ratio = static_cast<double>(diag_states[i].load_raw) * sts::telemetry_scale::kLoadNormalizedPerUnit;
             telem.voltage_v = diag_states[i].voltage_v;
             telem.temperature_c = diag_states[i].temperature_c;
             telem.current_a = diag_states[i].current_a;
@@ -679,7 +705,7 @@ namespace lekiwi_ftservo_hardware
         {
           for (size_t i = 0; i < num_joints; ++i)
           {
-            const double pos_rad = (fast_states[i].position_ticks - 2048) * kRadiansPerEncoderTick;
+            const double pos_rad = (fast_states[i].position_ticks - kEncoderCenterTicks) * kRadiansPerEncoderTick;
             const double vel_scale = joints_[i].velocity_command ? joints_[i].velocity_radians_per_second_per_tick : 0.0;
             const double vel_rad_s = fast_states[i].speed_ticks * vel_scale * joints_[i].velocity_direction;
 
@@ -700,7 +726,6 @@ namespace lekiwi_ftservo_hardware
       }
 
       // 2. Hardware Write Phase:
-      std::vector<double> current_cmds;
       bool has_cmd = false;
       {
         std::lock_guard<std::mutex> lock(shared_command_.mutex);
@@ -714,15 +739,17 @@ namespace lekiwi_ftservo_hardware
 
       if (has_cmd && current_cmds.size() == num_joints)
       {
-        std::vector<int> velocity_commands;
-        std::vector<int> position_commands;
+        velocity_commands.clear();
+        position_commands.clear();
 
         for (size_t i = 0; i < num_joints; ++i)
         {
           if (joints_[i].velocity_command)
           {
+            const double vel = current_cmds[i];
+            const double safe_vel = std::isfinite(vel) ? vel : 0.0;
             velocity_commands.push_back(radians_per_second_to_ticks(
-                current_cmds[i],
+                safe_vel,
                 joints_[i].velocity_radians_per_second_per_tick,
                 joints_[i].max_velocity_radians_per_second,
                 joints_[i].velocity_direction));
@@ -733,7 +760,7 @@ namespace lekiwi_ftservo_hardware
             if (std::isfinite(pos))
             {
               position_commands.push_back(
-                  static_cast<int>(std::lround(pos * kEncoderTicksPerRadian)) + 2048);
+                  static_cast<int>(std::lround(pos * kEncoderTicksPerRadian)) + kEncoderCenterTicks);
             }
           }
         }
@@ -753,7 +780,7 @@ namespace lekiwi_ftservo_hardware
 
       // 3. Pacing: Target ~100 Hz (10 ms period)
       const auto loop_elapsed = std::chrono::steady_clock::now() - loop_start;
-      const auto target_period = std::chrono::milliseconds(10);
+      const auto target_period = std::chrono::milliseconds(sts::default_config::kDefaultLoopPeriodMs);
       if (loop_elapsed < target_period && io_running_)
       {
         std::this_thread::sleep_for(target_period - loop_elapsed);
@@ -797,7 +824,7 @@ namespace lekiwi_ftservo_hardware
     // Check freshness of last read
     const auto now = std::chrono::steady_clock::now();
     const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_read).count();
-    const bool is_stale = (age_ms > 200); // 200 ms timeout for 100Hz loop
+    const bool is_stale = (age_ms > sts::default_config::kTelemetryStaleTimeoutMs);
 
     // Telemetry aggregations
     double min_v = 999.0;
@@ -827,12 +854,12 @@ namespace lekiwi_ftservo_hardware
         high_curr_joint = telem.name;
       }
 
-      // Check temperature limits (STS servo safe limit is ~65-70 C)
-      if (telem.temperature_c >= 70.0)
+      // Check temperature limits
+      if (telem.temperature_c >= sts::default_config::kServoTempErrorLimitC)
       {
         error_joints.push_back(telem.name + " (Overheat: " + std::to_string(static_cast<int>(telem.temperature_c)) + "C)");
       }
-      else if (telem.temperature_c >= 60.0)
+      else if (telem.temperature_c >= sts::default_config::kServoTempWarnLimitC)
       {
         warn_joints.push_back(telem.name + " (Warm: " + std::to_string(static_cast<int>(telem.temperature_c)) + "C)");
       }
@@ -844,9 +871,9 @@ namespace lekiwi_ftservo_hardware
       }
     }
 
-    // Check voltage safety (Nominal 11.1V - 12.6V for 3S LiPo, warn if < 10.0V or > 13.5V)
-    const bool low_voltage = (min_v < 9.5 && min_v > 1.0);
-    const bool high_voltage = (max_v > 13.5);
+    // Check voltage safety (Nominal 11.1V - 12.6V for 3S LiPo)
+    const bool low_voltage = (min_v < sts::default_config::kBatteryLowVoltageLimitV && min_v > 1.0);
+    const bool high_voltage = (max_v > sts::default_config::kBatteryHighVoltageLimitV);
 
     // 1. Overall Status Evaluation
     if (is_stale)

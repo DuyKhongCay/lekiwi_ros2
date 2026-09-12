@@ -18,6 +18,8 @@
 #include <cstdint>
 #include <stdexcept>
 
+#include "lekiwi_ftservo_hardware/sts_constants.hpp"
+
 namespace lekiwi_ftservo_hardware
 {
 
@@ -26,12 +28,12 @@ namespace lekiwi_ftservo_hardware
    *
    * Bit 15 indicates rotation direction (0 for CCW / positive magnitude, 1 for CW / negative magnitude).
    */
-  constexpr int kStsVelocitySignBit = 15;
+  constexpr int kStsVelocitySignBit = sts::resolution::kVelocitySignBit;
 
   /**
    * @brief Maximum tick magnitude expressible in the STS 15-bit magnitude field (0x7FFF = 32767).
    */
-  constexpr int kStsVelocityMaxTicks = (1 << kStsVelocitySignBit) - 1;
+  constexpr int kStsVelocityMaxTicks = sts::resolution::kMaxVelocityTicks;
 
   /**
    * @brief Converts signed STS velocity ticks to the protocol's 2-byte sign-magnitude word.

@@ -4,13 +4,13 @@
     frame_id: "stereo_left_optical"
     camera_topic: "/cameras/stereo_left/image_raw"
     fen_topic: "/chess/fen"
-    detections_topic: "/chess/detections_2d"
+    detections_topic: "/chess/detections"
     tag_centers_topic: "/chess/tag_centers"
 
     # Hailo Hardware & Models (empty string defaults to package share directory)
     vdevice_group_id: "lekiwi_chess"
-    board_hef_path: ""
-    pcs_hef_path: ""
+    board_hef_path: /root/docker_ws/lekiwi_ros2/install/lekiwi_perception/share/lekiwi_perception/resources/models/yolov8n-seg.hef
+    pcs_hef_path: /root/docker_ws/lekiwi_ros2/install/lekiwi_perception/share/lekiwi_perception/resources/models/yolo11n.hef
 
     # Pipeline & Processing Parameters
     transition_timeout_ms: 5000

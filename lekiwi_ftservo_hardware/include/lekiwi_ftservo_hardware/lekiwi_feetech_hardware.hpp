@@ -29,6 +29,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "lekiwi_interfaces/srv/set_torque_enabled.hpp"
+#include "lekiwi_ftservo_hardware/sts_constants.hpp"
 #include "lekiwi_ftservo_hardware/sts_protocol.hpp"
 
 namespace lekiwi_ftservo_hardware
@@ -166,6 +167,12 @@ namespace lekiwi_ftservo_hardware
       double velocity_radians_per_second_per_tick{};
       double max_velocity_radians_per_second{};
       int velocity_direction{1};
+      uint8_t acceleration{0};
+
+      /// Pre-cached interface names to guarantee zero heap allocations in read() and write() loops.
+      std::string position_state_name;
+      std::string velocity_state_name;
+      std::string command_interface_name;
     };
 
     /**
@@ -260,9 +267,11 @@ namespace lekiwi_ftservo_hardware
     std::unique_ptr<StsProtocol> protocol_;
     std::vector<JointRuntime> joints_;
     std::vector<uint8_t> joint_ids_;
+    std::vector<uint8_t> wheel_ids_;
+    std::vector<uint8_t> arm_ids_;
     std::string usb_port_;
-    int baud_rate_{1000000};
-    int timeout_ms_{20};
+    int baud_rate_{sts::default_config::kDefaultBaudRate};
+    int timeout_ms_{sts::default_config::kDefaultTimeoutMs};
 
     // Torque control state flags
     std::atomic<bool> arm_torque_enabled_{true};

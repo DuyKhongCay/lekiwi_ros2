@@ -18,28 +18,28 @@ namespace lekiwi_ftservo_hardware
    */
   TEST(StsProtocolTest, ValidatesProtocolConstants)
   {
-    EXPECT_EQ(StsProtocol::kHeader, 0xff);
-    EXPECT_EQ(StsProtocol::kBroadcastId, 0xfe);
-    EXPECT_EQ(StsProtocol::kInstructionRead, 0x02);
-    EXPECT_EQ(StsProtocol::kInstructionWrite, 0x03);
-    EXPECT_EQ(StsProtocol::kInstructionRegWrite, 0x04);
-    EXPECT_EQ(StsProtocol::kInstructionAction, 0x05);
-    EXPECT_EQ(StsProtocol::kInstructionSyncRead, 0x82);
-    EXPECT_EQ(StsProtocol::kInstructionSyncWrite, 0x83);
+    EXPECT_EQ(sts::protocol::kHeader, 0xff);
+    EXPECT_EQ(sts::protocol::kBroadcastId, 0xfe);
+    EXPECT_EQ(sts::protocol::kInstructionRead, 0x02);
+    EXPECT_EQ(sts::protocol::kInstructionWrite, 0x03);
+    EXPECT_EQ(sts::protocol::kInstructionRegWrite, 0x04);
+    EXPECT_EQ(sts::protocol::kInstructionAction, 0x05);
+    EXPECT_EQ(sts::protocol::kInstructionSyncRead, 0x82);
+    EXPECT_EQ(sts::protocol::kInstructionSyncWrite, 0x83);
 
-    EXPECT_EQ(StsProtocol::kModeRegister, 33);
-    EXPECT_EQ(StsProtocol::kTorqueEnableRegister, 40);
-    EXPECT_EQ(StsProtocol::kAccelerationRegister, 41);
-    EXPECT_EQ(StsProtocol::kGoalPositionRegister, 42);
-    EXPECT_EQ(StsProtocol::kGoalSpeedRegister, 46);
-    EXPECT_EQ(StsProtocol::kLockRegister, 55);
-    EXPECT_EQ(StsProtocol::kPresentPositionRegister, 56);
-    EXPECT_EQ(StsProtocol::kPresentSpeedRegister, 58);
-    EXPECT_EQ(StsProtocol::kPresentLoadRegister, 60);
-    EXPECT_EQ(StsProtocol::kPresentVoltageRegister, 62);
-    EXPECT_EQ(StsProtocol::kPresentTemperatureRegister, 63);
-    EXPECT_EQ(StsProtocol::kMovingRegister, 66);
-    EXPECT_EQ(StsProtocol::kPresentCurrentRegister, 69);
+    EXPECT_EQ(sts::register_addr::kMode, 33);
+    EXPECT_EQ(sts::register_addr::kTorqueEnable, 40);
+    EXPECT_EQ(sts::register_addr::kAcceleration, 41);
+    EXPECT_EQ(sts::register_addr::kGoalPosition, 42);
+    EXPECT_EQ(sts::register_addr::kGoalSpeed, 46);
+    EXPECT_EQ(sts::register_addr::kLock, 55);
+    EXPECT_EQ(sts::register_addr::kPresentPosition, 56);
+    EXPECT_EQ(sts::register_addr::kPresentSpeed, 58);
+    EXPECT_EQ(sts::register_addr::kPresentLoad, 60);
+    EXPECT_EQ(sts::register_addr::kPresentVoltage, 62);
+    EXPECT_EQ(sts::register_addr::kPresentTemperature, 63);
+    EXPECT_EQ(sts::register_addr::kMoving, 66);
+    EXPECT_EQ(sts::register_addr::kPresentCurrent, 69);
   }
 
   /**

@@ -46,12 +46,9 @@ namespace lekiwi_perception
 
     frame_id_ = declare_parameter<std::string>("frame_id", "stereo_left_optical");
     vdevice_group_id_ = declare_parameter<std::string>("vdevice_group_id", "lekiwi_chess");
-    board_hef_path_ = declare_parameter<std::string>("board_hef_path", "");
-    pcs_hef_path_ = declare_parameter<std::string>("pcs_hef_path", "");
     confidence_threshold_ = declare_parameter<double>("confidence_threshold", 0.35);
     const int history_window = declare_parameter<int>("history_window_size", 3);
     transition_timeout_ = std::chrono::milliseconds(declare_parameter<int>("transition_timeout_ms", 5000));
-
 
     game_tracker_ = std::make_unique<hailo::ChessGameStateTracker>(history_window);
 

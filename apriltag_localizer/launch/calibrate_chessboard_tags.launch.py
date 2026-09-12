@@ -1,7 +1,10 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""Launch file for running the chessboard AprilTag calibrator node."""
+
 import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -9,9 +12,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-# Generates launch description for running chessboard tag calibration node.
-def generate_launch_description():
-    # Configures launch arguments and registers the chessboard tag calibrator node.
+def generate_launch_description() -> LaunchDescription:
+    """Configures launch arguments and registers the chessboard tag calibrator node."""
     pkg_share = get_package_share_directory("apriltag_localizer")
     default_config_path = os.path.join(
         pkg_share, "config", "calibrate_chessboard_tags.yaml"
@@ -23,17 +25,27 @@ def generate_launch_description():
         description="Path to calibrator YAML config file.",
     )
 
+    headless_arg = DeclareLaunchArgument(
+        "headless",
+        default_value="false",
+        description="Run node in headless mode without GUI window.",
+    )
+
     calib_node = Node(
         package="apriltag_localizer",
         executable="calibrate_chessboard_tags.py",
         name="chessboard_tag_calibrator",
         output="screen",
-        parameters=[LaunchConfiguration("config_file")],
+        parameters=[
+            LaunchConfiguration("config_file"),
+            {"headless": LaunchConfiguration("headless")},
+        ],
     )
 
     return LaunchDescription(
         [
             config_file_arg,
+            headless_arg,
             calib_node,
         ]
     )

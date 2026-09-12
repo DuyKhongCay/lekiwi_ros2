@@ -17,8 +17,12 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "diagnostic_updater/diagnostic_updater.hpp"
@@ -29,10 +33,26 @@
 #include "rclcpp/macros.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 
+#include "lekiwi_icm20948_hardware/icm20948_defs.hpp"
 #include "lekiwi_icm20948_hardware/icm20948_driver.hpp"
 
 namespace lekiwi_icm20948_hardware
 {
+
+    /**
+     * @brief Thread-safe shared state buffer holding latest filtered IMU measurements.
+     */
+    struct SharedImuState
+    {
+        mutable std::mutex mutex;
+        std::array<double, 4> orientation{0.0, 0.0, 0.0, 1.0};
+        std::array<double, 3> angular_velocity{0.0, 0.0, 0.0};
+        std::array<double, 3> linear_acceleration{0.0, 0.0, GRAVITY_EARTH};
+        std::array<double, 3> magnetic_field{2.0e-5, 0.0, 4.0e-5};
+        bool mag_valid{false};
+        bool valid{false};
+        std::chrono::steady_clock::time_point last_read_time;
+    };
 
     /**
      * @brief Sensor hardware interface plugin for ICM-20948 9-Axis IMU.
@@ -86,23 +106,37 @@ namespace lekiwi_icm20948_hardware
             const rclcpp_lifecycle::State &previous_state) override;
 
         /**
-         * @brief Reads fresh IMU burst sample and updates ros2_control state interface buffers.
+         * @brief Reads fresh IMU state from the shared buffer into ros2_control state interfaces.
          *
-         * @note **Real-Time Safety:** In hardware mode, this performs an I2C burst read over `/dev/i2c-X`
-         * which consumes ~1.0 ms at 400 kHz Fast Mode. Ensure the controller manager update rate accounts for this timing.
+         * @note **Real-Time Safety:** This function is non-blocking (< 5 µs). It simply copies
+         * cached kinematic variables from the thread-safe shared buffer using pre-allocated
+         * interface names, guaranteeing zero dynamic heap allocations in the RT control loop.
          *
          * @param[in] time Current ROS system time.
          * @param[in] period Control loop cycle duration since last call.
-         * @return hardware_interface::return_type OK on success, ERROR if consecutive bus failures exceed threshold.
+         * @return hardware_interface::return_type OK on success.
          */
         hardware_interface::return_type read(
             const rclcpp::Time &time, const rclcpp::Duration &period) override;
 
     private:
+        /**
+         * @brief Background worker loop executing asynchronous I2C burst reads at 100 Hz.
+         */
+        void io_worker_loop();
+
         ICM20948Driver driver_;
         DriverConfig driver_config_;
         std::string sensor_name_{"icm20948_imu"};
         bool mock_sensor_{false};
+
+        // Pre-cached state interface names to avoid any dynamic std::string allocations in read()
+        std::array<std::string, 13> state_interface_names_;
+
+        // Thread-safe Async I/O state
+        SharedImuState shared_state_;
+        std::thread io_worker_thread_;
+        std::atomic<bool> io_running_{false};
 
         // Sensor Calibration & Remapping
         std::array<double, 3> accel_bias_{0.0, 0.0, 0.0};
@@ -117,13 +151,13 @@ namespace lekiwi_icm20948_hardware
         int gyro_calib_samples_{500};
         int current_calib_count_{0};
         std::array<double, 3> gyro_bias_sum_{0.0, 0.0, 0.0};
-        bool gyro_calibrated_{false};
+        std::atomic<bool> gyro_calibrated_{false};
 
         // Error & Reliability tracking
-        int consecutive_errors_{0};
+        std::atomic<int> consecutive_errors_{0};
         int max_consecutive_errors_{10};
-        uint64_t total_reads_{0};
-        uint64_t failed_reads_{0};
+        std::atomic<uint64_t> total_reads_{0};
+        std::atomic<uint64_t> failed_reads_{0};
         SensorData last_valid_data_;
 
         // Diagnostics
