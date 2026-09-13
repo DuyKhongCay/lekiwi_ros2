@@ -13,10 +13,10 @@ twist_mux:
         topic: /cmd_vel_teleop
         timeout: 0.5
         priority: 100
-      calib:
-        topic: /cmd_vel_calib
-        timeout: 0.5
-        priority: 200
+      # calib:
+      #   topic: /cmd_vel_calib
+      #   timeout: 0.5
+      #   priority: 200
     # locks:
     #   estop:
     #     topic: /safety/estop_active

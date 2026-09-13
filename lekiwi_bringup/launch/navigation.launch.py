@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -31,8 +32,8 @@ def generate_launch_description():
 
     declare_autostart = DeclareLaunchArgument(
         "autostart",
-        default_value="true",
-        description="Automatically startup the Nav2 stack",
+        default_value="false",
+        description="Automatically startup the Nav2 stack (set false when gated by tf_gatekeeper)",
     )
 
     # Lifecycle node names for Nav2
@@ -44,9 +45,9 @@ def generate_launch_description():
         "bt_navigator",
     ]
 
-    use_sim_time = LaunchConfiguration("use_sim_time")
+    use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
     map_yaml_file = LaunchConfiguration("map")
-    autostart = LaunchConfiguration("autostart")
+    autostart = ParameterValue(LaunchConfiguration("autostart"), value_type=bool)
 
     # 1. Map Server
     map_server_node = Node(
@@ -106,11 +107,12 @@ def generate_launch_description():
         name="lifecycle_manager_navigation",
         output="screen",
         parameters=[
+            nav2_params,
             {
                 "use_sim_time": use_sim_time,
                 "autostart": autostart,
                 "node_names": lifecycle_nodes,
-            }
+            },
         ],
     )
 

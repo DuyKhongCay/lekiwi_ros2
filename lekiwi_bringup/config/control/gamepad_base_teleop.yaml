@@ -1,9 +1,9 @@
 # Gamepad Teleoperation configuration for LeKiwi Mobile Base (Flydigi / Xbox 360 controller)
 # Standard Button Map:
 # Button 0: A
-# Button 1: B
+# Button 1: B (Reset Global EKF when chessboard moves / drift reset)
 # Button 2: X (E-Stop toggle / lock)
-# Button 3: Y (Lock Chessboard World Anchor / Tag Localization)
+# Button 3: Y (Enable Global EKF)
 # Button 4: LB
 # Button 5: RB (Deadman switch)
 
@@ -73,3 +73,10 @@ joy_teleop:
       interface_type: std_srvs/srv/Empty
       service_name: /ekf_filter_node_map/enable
       buttons: [3]
+
+    # 5. Button B (Index 1): Reset Global EKF when chessboard moves / drift reset (Call /ekf_filter_node_map/reset service)
+    lekiwi_reset_ekf_button:
+      type: service
+      interface_type: std_srvs/srv/Empty
+      service_name: /ekf_filter_node_map/reset
+      buttons: [1]
