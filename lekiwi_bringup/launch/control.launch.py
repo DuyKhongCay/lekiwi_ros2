@@ -26,11 +26,32 @@ def generate_launch_description():
         description="Start LeRobot arm trajectory bridge node",
     )
 
+    start_tf_gatekeeper_arg = DeclareLaunchArgument(
+        "start_tf_gatekeeper",
+        default_value="true",
+        description="Start TF Tree Readiness Gatekeeper node",
+    )
+
+    start_workspace_checker_arg = DeclareLaunchArgument(
+        "start_workspace_checker",
+        default_value="true",
+        description="Start URDF-based Workspace Checker node",
+    )
+
+    use_sim_time_arg = DeclareLaunchArgument(
+        "use_sim_time",
+        default_value="false",
+        description="Use simulation (Gazebo) clock if true",
+    )
+
     orchestrator = Node(
         package="lekiwi_control",
         executable="task_orchestrator",
         name="task_orchestrator",
-        parameters=[orchestrator_params_file],
+        parameters=[
+            orchestrator_params_file,
+            {"use_sim_time": LaunchConfiguration("use_sim_time")},
+        ],
         output="screen",
     )
 
@@ -38,15 +59,43 @@ def generate_launch_description():
         package="lekiwi_control",
         executable="lerobot_arm_bridge",
         name="lerobot_arm_bridge",
-        parameters=[{"joint_config_file": joint_config_file}],
+        parameters=[
+            {
+                "joint_config_file": joint_config_file,
+                "use_sim_time": LaunchConfiguration("use_sim_time"),
+            }
+        ],
         output="screen",
         condition=IfCondition(LaunchConfiguration("start_lerobot_bridge")),
+    )
+
+    tf_gatekeeper = Node(
+        package="lekiwi_control",
+        executable="tf_gatekeeper",
+        name="tf_readiness_gatekeeper",
+        parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("start_tf_gatekeeper")),
+    )
+
+    workspace_checker = Node(
+        package="lekiwi_control",
+        executable="workspace_checker",
+        name="workspace_checker",
+        parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("start_workspace_checker")),
     )
 
     return LaunchDescription(
         [
             start_lerobot_bridge_arg,
+            start_tf_gatekeeper_arg,
+            start_workspace_checker_arg,
+            use_sim_time_arg,
             orchestrator,
             arm_bridge,
+            tf_gatekeeper,
+            workspace_checker,
         ]
     )

@@ -116,6 +116,11 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([bringup_share, "launch", "control.launch.py"])
         ),
+        launch_arguments={
+            "start_tf_gatekeeper": "false",
+            "start_workspace_checker": "false",
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }.items(),
     )
 
     diagnostics = IncludeLaunchDescription(
@@ -152,6 +157,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "autostart": "false",
         }.items(),
         condition=IfCondition(LaunchConfiguration("navigation")),
     )
@@ -175,8 +181,8 @@ def generate_launch_description():
             imu,
             localization,
             cameras,
-            control,
             diagnostics,
+            control,
             teleop_gamepad,
             teleop_uarm,
             navigation,

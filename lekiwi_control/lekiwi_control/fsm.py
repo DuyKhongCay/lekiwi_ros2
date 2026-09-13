@@ -3,9 +3,12 @@
 
 from lekiwi_interfaces.msg import CameraMode
 
-
 ALLOWED_TRANSITIONS = {
-    CameraMode.STANDBY: {CameraMode.STANDBY, CameraMode.NAVIGATING},
+    CameraMode.STANDBY: {
+        CameraMode.STANDBY,
+        CameraMode.NAVIGATING,
+        CameraMode.CHESS_THINKING,
+    },
     CameraMode.NAVIGATING: {
         CameraMode.STANDBY,
         CameraMode.NAVIGATING,
@@ -27,10 +30,10 @@ ALLOWED_TRANSITIONS = {
 }
 
 MODE_NAMES = {
-    CameraMode.STANDBY: 'STANDBY',
-    CameraMode.NAVIGATING: 'NAVIGATING',
-    CameraMode.CHESS_THINKING: 'CHESS_THINKING',
-    CameraMode.MANIPULATION_LEROBOT: 'MANIPULATION_LEROBOT',
+    CameraMode.STANDBY: "STANDBY",
+    CameraMode.NAVIGATING: "NAVIGATING",
+    CameraMode.CHESS_THINKING: "CHESS_THINKING",
+    CameraMode.MANIPULATION_LEROBOT: "MANIPULATION_LEROBOT",
 }
 
 
