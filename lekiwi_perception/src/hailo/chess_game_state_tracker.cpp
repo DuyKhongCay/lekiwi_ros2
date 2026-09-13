@@ -16,7 +16,7 @@ namespace lekiwi_perception::hailo
   ChessGameStateTracker::ChessGameStateTracker(int debounce_frames)
       : board_(),
         debounce_frames_(debounce_frames),
-        last_accepted_placement_("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"),
+        last_accepted_placement_(kStandardStartingPlacement),
         pending_placement_(""),
         consecutive_count_(0)
   {
@@ -25,7 +25,7 @@ namespace lekiwi_perception::hailo
   void ChessGameStateTracker::reset()
   {
     board_ = chess::Board();
-    last_accepted_placement_ = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+    last_accepted_placement_ = kStandardStartingPlacement;
     pending_placement_.clear();
     consecutive_count_ = 0;
   }
@@ -59,7 +59,8 @@ namespace lekiwi_perception::hailo
     return false;
   }
 
-  GameStateResult ChessGameStateTracker::update(const std::string &placement)
+  GameStateResult ChessGameStateTracker::update(
+      const std::string &placement, bool bypass_legal_check)
   {
     GameStateResult res;
     res.is_legal_move = false;
@@ -89,10 +90,9 @@ namespace lekiwi_perception::hailo
     }
 
     // Starting position detected
-    const std::string START_PLACEMENT = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
-    if (placement == START_PLACEMENT)
+    if (placement == kStandardStartingPlacement)
     {
-      if (last_accepted_placement_ != START_PLACEMENT && res.is_board_stable)
+      if (last_accepted_placement_ != kStandardStartingPlacement && res.is_board_stable)
       {
         reset();
       }
@@ -125,6 +125,20 @@ namespace lekiwi_perception::hailo
       board_.makeMove(matched_move);
       last_accepted_placement_ = placement;
       res.full_fen = board_.getFen();
+    }
+    else if (bypass_legal_check)
+    {
+      res.is_legal_move = true;
+      last_accepted_placement_ = placement;
+      std::string candidate_fen = placement + " " + (board_.sideToMove() == chess::Color::WHITE ? "w" : "b") + " - - 0 1";
+      if (board_.setFen(candidate_fen))
+      {
+        res.full_fen = board_.getFen();
+      }
+      else
+      {
+        res.full_fen = candidate_fen;
+      }
     }
     else
     {

@@ -30,6 +30,7 @@
 #include <string>
 #include <vector>
 
+#include "hailo/chess_constants.hpp"
 #include "hailo/chess_game_state_tracker.hpp"
 #include "hailo/chess_vision_mapper.hpp"
 #include "hailo/hailo_gst_pipeline.hpp"
@@ -89,18 +90,22 @@ namespace lekiwi_perception
     std::string fen_topic_{"/chess/fen"};
     std::string detections_topic_{"/chess/detections_2d"};
     std::string tag_centers_topic_{"/chess/tag_centers"};
+    std::string grid_points_topic_{"/chess/grid_points"};
     std::string board_hef_path_;
     std::string pcs_hef_path_;
     std::string vdevice_group_id_{"lekiwi_chess"};
     std::string frame_id_{"stereo_left_optical"};
     double confidence_threshold_{0.35};
+    bool debug_{true};
     std::chrono::milliseconds transition_timeout_{5000};
+    std::map<int, int> tag_offsets_;
 
     std::unique_ptr<HailoGstPipeline> hailo_pipeline_;
     std::unique_ptr<hailo::ChessGameStateTracker> game_tracker_;
 
     rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::String>::SharedPtr fen_pub_;
     rclcpp_lifecycle::LifecyclePublisher<vision_msgs::msg::Detection2DArray>::SharedPtr detections_pub_;
+    rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PolygonStamped>::SharedPtr grid_points_pub_;
 
     rclcpp::Service<lekiwi_interfaces::srv::SetCamMode>::SharedPtr mode_srv_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;

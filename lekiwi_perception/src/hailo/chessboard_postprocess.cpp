@@ -402,27 +402,29 @@ namespace lekiwi_perception::hailo
       polar_pts[i] = {corners[i], angle};
     }
 
+    // In image coords (y down), decreasing polar angle traverses Counter-Clockwise (CCW)
     std::sort(polar_pts.begin(), polar_pts.end(), [](const PolarPoint &a, const PolarPoint &b)
-              { return a.angle < b.angle; });
+              { return a.angle > b.angle; });
 
     std::vector<cv::Point2f> sorted_corners(4);
     for (size_t i = 0; i < 4; ++i)
       sorted_corners[i] = polar_pts[i].pt;
 
-    size_t tl_idx = 0;
-    float min_sum = sorted_corners[0].x + sorted_corners[0].y;
+    // Bottom-Left (BL) in image space maximizes (y - x)
+    size_t bl_idx = 0;
+    float max_bl_score = sorted_corners[0].y - sorted_corners[0].x;
     for (size_t i = 1; i < 4; ++i)
     {
-      float sum = sorted_corners[i].x + sorted_corners[i].y;
-      if (sum < min_sum)
+      float score = sorted_corners[i].y - sorted_corners[i].x;
+      if (score > max_bl_score)
       {
-        min_sum = sum;
-        tl_idx = i;
+        max_bl_score = score;
+        bl_idx = i;
       }
     }
-    if (tl_idx != 0)
+    if (bl_idx != 0)
     {
-      std::rotate(sorted_corners.begin(), sorted_corners.begin() + tl_idx, sorted_corners.end());
+      std::rotate(sorted_corners.begin(), sorted_corners.begin() + bl_idx, sorted_corners.end());
     }
 
     return sorted_corners;
@@ -654,14 +656,14 @@ namespace lekiwi_perception::hailo
     if (!lineIntersection(lines[2], lines[3], c3))
       c3 = init_corners[3];
 
-    std::vector<cv::Point2f> corners_cw = sortCornersByPolarAngle({c0, c1, c2, c3});
-    out_corners = corners_cw;
+    std::vector<cv::Point2f> corners_ccw = sortCornersByPolarAngle({c0, c1, c2, c3});
+    out_corners = corners_ccw;
 
     std::vector<cv::Point2f> dst_pts = {
-        cv::Point2f(0.0f, 0.0f),
-        cv::Point2f(8.0f, 0.0f),
-        cv::Point2f(8.0f, 8.0f),
-        cv::Point2f(0.0f, 8.0f)};
+        cv::Point2f(0.0f, 8.0f),  // 0: BL (A1)
+        cv::Point2f(8.0f, 8.0f),  // 1: BR (H1)
+        cv::Point2f(8.0f, 0.0f),  // 2: TR (H8)
+        cv::Point2f(0.0f, 0.0f)}; // 3: TL (A8)
 
     out_M = cv::getPerspectiveTransform(out_corners, dst_pts);
     cv::invert(out_M, out_M_inv);

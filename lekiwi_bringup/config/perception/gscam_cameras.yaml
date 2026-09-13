@@ -16,15 +16,24 @@
     add_border: true
     active_modes: [0, 2]
     gscam_config: >
-      libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" ! 
+      libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" 
+      sensor-config="sensor/config,width=3280,height=2464,depth=10" sharpness=1.5 ! 
       valve name=gate drop=true ! 
       queue leaky=downstream max-size-buffers=1 ! 
-      video/x-raw,format=NV12,width=3280,height=2464,framerate=20/1 ! 
-      videoscale add-borders=true n-threads=4 !
-      video/x-raw,format=NV12,width=640,height=640,pixel-aspect-ratio=1/1 ! 
-      videoflip method="rotate-180" ! 
-      videoconvert n-threads=4 ! 
-      video/x-raw,format=RGB
+      video/x-raw,format=NV12,width=640,height=480,framerate=20/1 ! 
+      videoflip method="rotate-180" !
+      videoconvert  n-threads=2 ! 
+      videobox top=-80 bottom=-80 !
+      video/x-raw,format=RGB,width=640,height=640
+    # libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" ! 
+    # valve name=gate drop=true ! 
+    # queue leaky=downstream max-size-buffers=1 ! 
+    # video/x-raw,format=NV12,width=3280,height=2464,framerate=20/1 ! 
+    # videoscale add-borders=true n-threads=4 !
+    # video/x-raw,format=NV12,width=640,height=640,pixel-aspect-ratio=1/1 ! 
+    # videoflip method="rotate-180" ! 
+    # videoconvert n-threads=4 ! 
+    # video/x-raw,format=RGB
 
 /cameras/stereo_right/gscam:
   ros__parameters:

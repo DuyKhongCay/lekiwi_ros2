@@ -61,6 +61,11 @@ namespace lekiwi_perception
     void tagCentersCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg);
 
     /**
+     * Receive 81 chessboard grid intersection points.
+     */
+    void gridPointsCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg);
+
+    /**
      * Load transparent piece PNG sprites from resources directory.
      */
     void loadPieceSprites(int cell_size, const std::string &pieces_dir);
@@ -85,6 +90,12 @@ namespace lekiwi_perception
         cv::Mat &frame, const std::vector<geometry_msgs::msg::Point32> &tag_pts);
 
     /**
+     * Draw 81 grid intersections and 8x8 grid lines onto the camera frame.
+     */
+    void drawChessboardGrid(
+        cv::Mat &frame, const std::vector<geometry_msgs::msg::Point32> &grid_pts);
+
+    /**
      * Parse FEN string into square-to-piece character map.
      */
     std::map<std::string, std::string> parseFenToOccupancy(const std::string &fen_str);
@@ -94,6 +105,7 @@ namespace lekiwi_perception
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fen_sub_;
     rclcpp::Subscription<vision_msgs::msg::Detection2DArray>::SharedPtr detections_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr tag_centers_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr grid_points_sub_;
 
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr overlay_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr board_2d_pub_;
@@ -103,13 +115,16 @@ namespace lekiwi_perception
     std::string fen_topic_{"/chess/fen"};
     std::string detections_topic_{"/chess/detections_2d"};
     std::string tag_centers_topic_{"/chess/tag_centers"};
+    std::string grid_points_topic_{"/chess/grid_points"};
     int jpeg_quality_{80};
     int board_panel_size_{480};
+    std::map<int, int> tag_offsets_;
 
     std::string current_fen_;
     std::string last_valid_fen_;
     std::vector<vision_msgs::msg::Detection2D> latest_detections_;
     std::vector<geometry_msgs::msg::Point32> latest_tag_centers_;
+    std::vector<geometry_msgs::msg::Point32> latest_grid_points_;
     std::string pieces_dir_;
     std::map<std::string, cv::Mat> sprite_cache_;
     int cached_cell_size_{0};

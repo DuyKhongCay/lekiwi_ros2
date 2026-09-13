@@ -12,6 +12,7 @@
 
 #include <chess.hpp>
 #include <string>
+#include "hailo/chess_constants.hpp"
 
 namespace lekiwi_perception::hailo
 {
@@ -22,7 +23,7 @@ namespace lekiwi_perception::hailo
     struct GameStateResult
     {
         /// Full standard 6-field FEN string with castling, en-passant, turn, and move counters.
-        std::string full_fen{"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"};
+        std::string full_fen{kStandardStartingFen};
         /// Last detected legal move in UCI format (e.g. "e2e4"). Empty if no new move.
         std::string last_move;
         /// True if detected piece placement matches a legal move or initial setup.
@@ -42,9 +43,10 @@ namespace lekiwi_perception::hailo
         /**
          * @brief Updates game state tracker with new vision piece placement.
          * @param[in] detected_placement 8-rank piece placement string (e.g. "rnbqkbnr/pppppppp/...").
+         * @param[in] bypass_legal_check If true, accepts piece placement even if not matching strict legal move.
          * @return GameStateResult containing full FEN and move validation status.
          */
-        GameStateResult update(const std::string &detected_placement);
+        GameStateResult update(const std::string &detected_placement, bool bypass_legal_check = false);
 
         /**
          * @brief Resets game board to standard starting position.
@@ -66,7 +68,7 @@ namespace lekiwi_perception::hailo
 
         chess::Board board_;
         int debounce_frames_{3};
-        std::string last_accepted_placement_{"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"};
+        std::string last_accepted_placement_{kStandardStartingPlacement};
         std::string pending_placement_;
         int consecutive_count_{0};
     };

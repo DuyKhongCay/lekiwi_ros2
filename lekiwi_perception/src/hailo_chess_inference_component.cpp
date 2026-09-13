@@ -38,11 +38,21 @@ namespace lekiwi_perception
   {
     // Parameters
     board_hef_path_ = declare_parameter<std::string>("board_hef_path", "/resources/model/yolov8n-seg.hef");
-    pcs_hef_path_ = declare_parameter<std::string>("pcs_hef_path", "/resources/model/yolo11n.hef");
+    pcs_hef_path_ = declare_parameter<std::string>("pcs_hef_path", "/resources/model/yolov11n.hef");
     camera_topic_ = declare_parameter<std::string>("camera_topic", "/cameras/stereo_left/image_raw");
     fen_topic_ = declare_parameter<std::string>("fen_topic", "/chess/fen");
     detections_topic_ = declare_parameter<std::string>("detections_topic", "/chess/detections_2d");
     tag_centers_topic_ = declare_parameter<std::string>("tag_centers_topic", "/chess/tag_centers");
+    grid_points_topic_ = declare_parameter<std::string>("grid_points_topic", "/chess/grid_points");
+    debug_ = declare_parameter<bool>("debug", true);
+
+    const auto tag_ids = declare_parameter<std::vector<int64_t>>("tags.ids", {0, 1, 2, 3});
+    tag_offsets_.clear();
+    for (size_t i = 0; i < tag_ids.size() && i < 4; ++i)
+    {
+      tag_offsets_[static_cast<int>(tag_ids[i])] = static_cast<int>(i);
+    }
+    RCLCPP_INFO(get_logger(), "Configured %zu tag offsets from parameter 'tags.ids'", tag_offsets_.size());
 
     frame_id_ = declare_parameter<std::string>("frame_id", "stereo_left_optical");
     vdevice_group_id_ = declare_parameter<std::string>("vdevice_group_id", "lekiwi_chess");
@@ -54,6 +64,7 @@ namespace lekiwi_perception
 
     fen_pub_ = create_publisher<std_msgs::msg::String>(fen_topic_, rclcpp::SensorDataQoS());
     detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>(detections_topic_, rclcpp::SensorDataQoS());
+    grid_points_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(grid_points_topic_, rclcpp::SensorDataQoS());
 
     mode_srv_ = create_service<lekiwi_interfaces::srv::SetCamMode>(
         "~/set_mode",
@@ -95,6 +106,7 @@ namespace lekiwi_perception
   {
     fen_pub_->on_activate();
     detections_pub_->on_activate();
+    grid_points_pub_->on_activate();
 
     pipeline_state_ = "STARTING";
     std::string error;
@@ -138,6 +150,7 @@ namespace lekiwi_perception
 
     fen_pub_->on_deactivate();
     detections_pub_->on_deactivate();
+    grid_points_pub_->on_deactivate();
 
     RCLCPP_INFO(get_logger(), "HailoChessInferenceComponent deactivated");
     return CallbackReturn::SUCCESS;
@@ -306,7 +319,7 @@ namespace lekiwi_perception
       tags_snapshot = latest_tags_;
     }
 
-    const bool valid_metadata = roi && hailo::ChessVisionMapper::decode_hailo_metadata(roi, state, tags_snapshot);
+    const bool valid_metadata = roi && hailo::ChessVisionMapper::decode_hailo_metadata(roi, state, tags_snapshot, tag_offsets_);
     if (valid_metadata)
     {
       a1_corner_idx_.store(state.a1_corner_idx);
@@ -325,8 +338,24 @@ namespace lekiwi_perception
 
     if (valid_metadata)
     {
+      if (state.grid_points_norm.size() == hailo::kGridPointsCount && grid_points_pub_->is_activated())
+      {
+        auto poly_msg = std::make_unique<geometry_msgs::msg::PolygonStamped>();
+        poly_msg->header = header;
+        poly_msg->polygon.points.reserve(hailo::kGridPointsCount);
+        for (const auto &pt : state.grid_points_norm)
+        {
+          geometry_msgs::msg::Point32 p32;
+          p32.x = pt.x;
+          p32.y = pt.y;
+          p32.z = 0.0f;
+          poly_msg->polygon.points.push_back(p32);
+        }
+        grid_points_pub_->publish(std::move(poly_msg));
+      }
+
       // Process game rules, debounce, and generate full FEN
-      const hailo::GameStateResult game_res = game_tracker_->update(state.piece_placement);
+      const hailo::GameStateResult game_res = game_tracker_->update(state.piece_placement, debug_);
 
       if (!game_res.full_fen.empty() && fen_pub_->is_activated())
       {

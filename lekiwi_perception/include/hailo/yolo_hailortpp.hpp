@@ -41,6 +41,7 @@
 #include "hailo_tensors.hpp"
 #include "common/nms.hpp"
 #include "common/structures.hpp"
+#include "hailo/chess_constants.hpp"
 
 /**
  * @brief Decoder class for parsing HailoRT hardware NMS tensor payloads.
@@ -91,7 +92,7 @@ public:
       {
         const auto *bbox = reinterpret_cast<const common::hailo_bbox_float32_t *>(
             buffer + buffer_offset);
-        add_detection(*bbox, class_id + 1U, detections);
+        add_detection(*bbox, class_id, detections);
         buffer_offset += sizeof(common::hailo_bbox_float32_t);
       }
     }
@@ -99,10 +100,8 @@ public:
   }
 
 private:
-  static constexpr float kDetectionThreshold = 0.3F;
-  static constexpr std::size_t kMaxBoxes = 100U;
-  inline static constexpr std::array<const char *, 12U> kLabels = {
-      "B", "K", "N", "P", "Q", "R", "b", "k", "n", "p", "q", "r"};
+  static constexpr float kDetectionThreshold = lekiwi_perception::hailo::kPieceDetectionThreshold;
+  static constexpr std::size_t kMaxBoxes = lekiwi_perception::hailo::kPieceMaxBoxes;
 
   static void add_detection(
       const common::hailo_bbox_float32_t &bbox, uint32_t class_id,
@@ -116,7 +115,7 @@ private:
     const float confidence = std::clamp(bbox.score, 0.0F, 1.0F);
     const float width = bbox.x_max - bbox.x_min;
     const float height = bbox.y_max - bbox.y_min;
-    const std::string label = class_id <= kLabels.size() ? kLabels[class_id - 1U] : std::to_string(class_id);
+    const std::string label = lekiwi_perception::hailo::piece_label_from_class_id(class_id);
     detections.emplace_back(
         HailoBBox(bbox.x_min, bbox.y_min, width, height), class_id, label, confidence);
   }
