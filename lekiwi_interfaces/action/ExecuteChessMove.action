@@ -1,0 +1,37 @@
+# ================= Goal =================
+# Human readable instruction, e.g. "Pick e2, place e4" or "Capture d5"
+string instruction
+
+# Piece designation, e.g. "pawn", "knight", "bishop", "rook", "queen", "king"
+string piece_type
+
+# Algebraic notation for source and destination squares
+string from_square
+string to_square
+
+# 3D coordinates in target_frame
+geometry_msgs/Point pick_point
+geometry_msgs/Point place_point
+
+# True if this move removes an opponent piece
+bool is_capture
+
+# Reference frame for pick_point and place_point (default: "chessboard_frame")
+string target_frame
+
+# Optional kinematic hints from workspace reachability checker
+sensor_msgs/JointState pick_ik_hint
+sensor_msgs/JointState place_ik_hint
+
+---
+# ================= Result =================
+bool success
+string message
+float32 execution_time_sec
+
+---
+# ================= Feedback =================
+# Operational phase: "APPROACH_PICK", "GRASP", "LIFT", "APPROACH_PLACE", "RELEASE", "RETRACT"
+string current_phase
+float32 progress_percent
+
