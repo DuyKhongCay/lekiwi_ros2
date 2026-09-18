@@ -1,0 +1,22 @@
+mock_policy_server:
+  ros__parameters:
+    phase_duration_sec: 0.6
+    simulate_delay: true
+    action_name: "/manipulation/execute_chess_move"
+
+lerobot_arm_bridge:
+  ros__parameters:
+    action_units: "raw"
+    trajectory_duration_sec: 0.25
+    action_topic: "/lerobot/arm_action"
+    observation_topic: "/lerobot/arm_observation"
+    joint_states_topic: "/joint_states"
+
+smolvla_policy_server:
+  ros__parameters:
+    checkpoint_path: ""
+    device: "cpu"
+    action_name: "/manipulation/execute_chess_move"
+    arm_action_topic: "/lerobot/arm_action"
+    wrist_camera_topic: "/cameras/usb_wrist/image_raw"
+
