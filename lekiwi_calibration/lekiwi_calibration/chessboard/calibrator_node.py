@@ -6,29 +6,14 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from apriltag_msgs.msg import AprilTagDetectionArray
+from cv_bridge import CvBridge
 import cv2
 import numpy as np
-
-try:
-    from apriltag_msgs.msg import AprilTagDetectionArray
-    import rclpy
-    from rclpy.node import Node
-    from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-    from sensor_msgs.msg import CameraInfo, Image
-except ImportError:
-    AprilTagDetectionArray = None
-    CameraInfo = None
-    Image = None
-    HistoryPolicy = None
-    QoSProfile = None
-    ReliabilityPolicy = None
-    rclpy = None
-    Node = object
-
-try:
-    from cv_bridge import CvBridge
-except ImportError:
-    CvBridge = None
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CameraInfo, Image
 
 from lekiwi_calibration.chessboard.solver import (
     ChessboardTagCalibSolver,
@@ -40,6 +25,53 @@ from lekiwi_calibration.chessboard.visualizer import (
     CalibState,
     Notification,
 )
+
+
+def format_calibration_report(res: Dict[str, Any], tag_ids: List[int]) -> str:
+    """Formats planar Bundle Adjustment results into a readable terminal report."""
+    lines = [
+        "\n" + "=" * 64,
+        "          CALIBRATION RESULTS REPORT (PLANAR)",
+        "=" * 64,
+        (
+            f"Frames: {res['num_frames']} | "
+            f"Mean Error: {res['mean_err']:.4f}px | "
+            f"RMS Error: {res['rms_err']:.4f}px\n"
+        ),
+        "ID | Name |    X (m)   |    Y (m)   |    Z (m)   |  Yaw (deg)",
+        "-" * 64,
+    ]
+
+    tags = res.get("tags", {})
+    for tid in tag_ids:
+        if tid in tags:
+            t = tags[tid]
+            lines.append(
+                f"{tid:2d} | {t['name']:4s} | "
+                f"{t['x']:10.4f} | {t['y']:10.4f} | {t['z']:10.4f} | "
+                f"{math.degrees(t['yaw']):9.2f}"
+            )
+
+    coords = {
+        tid: np.array([tags[tid]["x"], tags[tid]["y"], tags[tid]["z"]])
+        for tid in tag_ids
+        if tid in tags
+    }
+    if len(tag_ids) >= 4:
+        edges = [
+            ("A1->H1", tag_ids[0], tag_ids[1]),
+            ("H1->H8", tag_ids[1], tag_ids[2]),
+            ("H8->A8", tag_ids[2], tag_ids[3]),
+            ("A8->A1", tag_ids[3], tag_ids[0]),
+        ]
+        lines.append("\nCorner Distances:")
+        for label, u, v in edges:
+            if u in coords and v in coords:
+                dist = float(np.linalg.norm(coords[u] - coords[v]))
+                lines.append(f"  - {label:6s}: {dist * 1000.0:6.2f} mm ({dist:.4f} m)")
+
+    lines.append("=" * 64 + "\n")
+    return "\n".join(lines)
 
 
 class ChessboardTagCalibratorNode(Node):
@@ -55,7 +87,7 @@ class ChessboardTagCalibratorNode(Node):
             "cam_info_topic": "/cameras/stereo_left/camera_info",
             "tag_dets_topic": "/tag_detections",
             "cam_info_path": "package://lekiwi_bringup/config/perception/camera_info/stereo_left.yaml",
-            "output_yaml_path": "package://lekiwi_bringup/config/calibration/chessboard_tags.yaml",
+            "output_yaml_path": "package://lekiwi_calibration/config/calib_result.yaml",
             "tag_ids": [0, 1, 2, 3],
             "tag_names": ["A1", "H1", "H8", "A8"],
             "tag_sz": 0.022,
@@ -66,7 +98,6 @@ class ChessboardTagCalibratorNode(Node):
             "auto_cap_interval_sec": 1.0,
             "window_name": "LeKiwi Chessboard Tag Calibrator",
             "disp_scale": 1.0,
-            "headless": False,
         }
         for name, val in defaults.items():
             self.declare_parameter(name, val)
@@ -84,11 +115,12 @@ class ChessboardTagCalibratorNode(Node):
             )
             self.cam_mat, self.dist_coeffs = None, None
 
-        self.cam_info_received = False
-        self.bridge = CvBridge() if CvBridge is not None else None
+        self.cam_info_received: bool = False
+        self.bridge: Optional[CvBridge] = CvBridge()
 
         # 3. Concurrency Lock & Shared State
-        self._data_lock = threading.Lock()
+        self._data_lock = threading.RLock()
+        self._solve_epoch: int = 0
         self.latest_img: Optional[np.ndarray] = None
         self.latest_dets: Dict[int, np.ndarray] = {}
         self.captured_frames: List[Dict[int, np.ndarray]] = []
@@ -133,12 +165,14 @@ class ChessboardTagCalibratorNode(Node):
         # 6. Main Loop Timer (~30 Hz)
         self.gui_timer = self.create_timer(0.033, self._gui_timer_cb)
         self.get_logger().info(
-            f"Calibrator initialized (Headless: {self.headless}). "
-            f"Topics: {self.img_topic}, {self.tag_dets_topic}"
+            f"Calibrator initialized. Topics: {self.img_topic}, {self.tag_dets_topic}"
         )
 
     def _set_notification(
-        self, msg: str, color: Tuple[int, int, int] = (0, 255, 0), duration: float = 1.0
+        self,
+        msg: str,
+        color: Tuple[int, int, int] = (0, 255, 0),
+        duration_sec: float = 1.0,
     ) -> None:
         """Helper to post thread-safe temporary notification messages."""
         with self._data_lock:
@@ -146,21 +180,27 @@ class ChessboardTagCalibratorNode(Node):
                 message=msg,
                 color=color,
                 timestamp=time.time(),
-                duration=duration,
+                duration=duration_sec,
             )
 
     def _cam_info_cb(self, msg: CameraInfo) -> None:
         """Callback to update camera matrix and distortion from live ROS topic."""
+        cam_mat = np.array(msg.k, dtype=np.float64).reshape((3, 3))
+        dist_coeffs = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
+
         with self._data_lock:
-            self.cam_mat = np.array(msg.k, dtype=np.float64).reshape((3, 3))
-            self.dist_coeffs = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
-            if not self.cam_info_received:
+            self.cam_mat = cam_mat
+            self.dist_coeffs = dist_coeffs
+            is_first = not self.cam_info_received
+            if is_first:
                 self.cam_info_received = True
-                self.get_logger().info(
-                    f"Received live CameraInfo from {self.cam_info_topic}: "
-                    f"fx={self.cam_mat[0, 0]:.1f}, fy={self.cam_mat[1, 1]:.1f} "
-                    f"({msg.width}x{msg.height})"
-                )
+
+        if is_first:
+            self.get_logger().info(
+                f"Received live CameraInfo from {self.cam_info_topic}: "
+                f"fx={cam_mat[0, 0]:.1f}, fy={cam_mat[1, 1]:.1f} "
+                f"({msg.width}x{msg.height})"
+            )
 
     def _img_cb(self, msg: Image) -> None:
         """Callback to convert and update latest camera frame."""
@@ -188,13 +228,14 @@ class ChessboardTagCalibratorNode(Node):
 
     def _tag_dets_cb(self, msg: AprilTagDetectionArray) -> None:
         """Callback to parse incoming AprilTag 2D detections and trigger auto-cap."""
-        tag_map = {}
-        for det in msg.detections:
-            tag_map[det.id] = np.array(
-                [[pt.x, pt.y] for pt in det.corners], dtype=np.float64
-            )
+        tag_map = {
+            det.id: np.array([[pt.x, pt.y] for pt in det.corners], dtype=np.float64)
+            for det in msg.detections
+        }
 
         trigger_cap = False
+        auto_cap_completed = False
+
         with self._data_lock:
             self.latest_dets = tag_map
             if self.auto_cap_enabled:
@@ -202,10 +243,7 @@ class ChessboardTagCalibratorNode(Node):
                 if now - self.last_auto_cap_time >= self.auto_cap_interval_sec:
                     if len(self.captured_frames) >= self.target_caps_cnt:
                         self.auto_cap_enabled = False
-                        self._set_notification(
-                            f"Auto-cap done: {self.target_caps_cnt} frames",
-                            (0, 255, 255),
-                        )
+                        auto_cap_completed = True
                     elif (
                         sum(1 for tid in self.tag_ids if tid in tag_map)
                         >= self.min_tags_cnt
@@ -213,7 +251,12 @@ class ChessboardTagCalibratorNode(Node):
                         trigger_cap = True
                         self.last_auto_cap_time = now
 
-        if trigger_cap:
+        if auto_cap_completed:
+            self._set_notification(
+                f"Auto-cap done: {self.target_caps_cnt} frames",
+                (0, 255, 255),
+            )
+        elif trigger_cap:
             self.capture_current_frame()
 
     def capture_current_frame(self) -> bool:
@@ -224,51 +267,70 @@ class ChessboardTagCalibratorNode(Node):
                 for tid, pts in self.latest_dets.items()
                 if tid in self.tag_ids
             }
-            if len(valid) >= self.min_tags_cnt:
+            valid_cnt = len(valid)
+            success = valid_cnt >= self.min_tags_cnt
+            if success:
                 self.captured_frames.append(valid)
-                cnt = len(self.captured_frames)
-                self.get_logger().info(f"[CAPTURE] Frame #{cnt} ({len(valid)} tags)")
-                self._set_notification(
-                    f"Captured #{cnt} ({len(valid)} tags)", (0, 255, 0)
-                )
-                return True
+                captured_cnt = len(self.captured_frames)
 
-            needed = self.min_tags_cnt
-            have = len(valid)
+        if success:
+            self.get_logger().info(
+                f"[CAPTURE] Frame #{captured_cnt} ({valid_cnt} tags)"
+            )
+            self._set_notification(
+                f"Captured #{captured_cnt} ({valid_cnt} tags)", (0, 255, 0)
+            )
+            return True
 
         self._set_notification(
-            f"Failed: need >={needed} tags (have {have})", (0, 100, 255)
+            f"Failed: need >={self.min_tags_cnt} tags (have {valid_cnt})",
+            (0, 100, 255),
         )
         return False
 
+    def _check_prerequisites(self) -> Optional[Tuple[str, bool]]:
+        """Validates prerequisites under lock. Returns (message, is_warning) or None."""
+        if self.calib_state == CalibState.OPTIMIZING:
+            return "Optimization already in progress.", True
+        if len(self.captured_frames) < 3:
+            return (
+                f"Need >= 3 captured frames (have {len(self.captured_frames)})",
+                False,
+            )
+        if self.cam_mat is None or self.dist_coeffs is None:
+            return "Camera intrinsics missing", False
+        return None
+
     def run_calibration_async(self) -> None:
         """Spawns non-blocking worker thread to run Bundle Adjustment solver."""
+        err_msg: Optional[Tuple[str, bool]] = None
+        frames_snapshot = None
+        cam_mat_snapshot = None
+        dist_snapshot = None
+        epoch = 0
+
         with self._data_lock:
-            if self.calib_state == CalibState.OPTIMIZING:
-                self.get_logger().warn("Optimization already in progress.")
-                return
+            err_msg = self._check_prerequisites()
+            if err_msg is None:
+                frames_snapshot = [f.copy() for f in self.captured_frames]
+                cam_mat_snapshot = self.cam_mat.copy()
+                dist_snapshot = self.dist_coeffs.copy()
+                self.calib_state = CalibState.OPTIMIZING
+                self._solve_epoch += 1
+                epoch = self._solve_epoch
 
-            if len(self.captured_frames) < 3:
-                self._set_notification("Need >= 3 captured frames", (0, 100, 255))
-                self.get_logger().error(
-                    f"Need >= 3 frames, have {len(self.captured_frames)}"
-                )
-                return
-
-            if self.cam_mat is None or self.dist_coeffs is None:
-                self._set_notification("Camera intrinsics missing", (0, 100, 255))
-                self.get_logger().error(
-                    "Camera matrix or distortion coefficients missing."
-                )
-                return
-
-            frames_snapshot = [f.copy() for f in self.captured_frames]
-            cam_mat_snapshot = self.cam_mat.copy()
-            dist_snapshot = self.dist_coeffs.copy()
-            self.calib_state = CalibState.OPTIMIZING
+        if err_msg is not None:
+            text, is_warn = err_msg
+            color = (0, 255, 255) if is_warn else (0, 100, 255)
+            self._set_notification(text, color)
+            if is_warn:
+                self.get_logger().warn(text)
+            else:
+                self.get_logger().error(text)
+            return
 
         self._set_notification(
-            "Optimizing Bundle Adjustment...", (0, 255, 255), duration=5.0
+            "Optimizing Bundle Adjustment...", (0, 255, 255), duration_sec=5.0
         )
         self.get_logger().info(
             f"Solving Planar Bundle Adjustment on {len(frames_snapshot)} frames in background..."
@@ -276,83 +338,60 @@ class ChessboardTagCalibratorNode(Node):
 
         worker = threading.Thread(
             target=self._solve_worker,
-            args=(frames_snapshot, cam_mat_snapshot, dist_snapshot),
+            kwargs={
+                "frames": frames_snapshot,
+                "cam_mat": cam_mat_snapshot,
+                "dist_coeffs": dist_snapshot,
+                "epoch": epoch,
+            },
             daemon=True,
         )
         worker.start()
 
     def _solve_worker(
         self,
+        *,
         frames: List[Dict[int, np.ndarray]],
         cam_mat: np.ndarray,
         dist_coeffs: np.ndarray,
+        epoch: int,
     ) -> None:
         """Worker thread executing Bundle Adjustment without blocking ROS or GUI."""
         try:
             res = self.solver.solve(frames, cam_mat, dist_coeffs)
             with self._data_lock:
+                if epoch != self._solve_epoch:
+                    return
                 self.calib_res = res
                 self.calib_state = CalibState.OPTIMIZED
-            self._print_calib_report(res)
+
+            print(format_calibration_report(res, self.tag_ids))
             self._set_notification(
-                f"Solved! RMS Error: {res['rms_err']:.3f}px", (0, 255, 0), duration=3.0
+                f"Solved! RMS Error: {res['rms_err']:.3f}px",
+                (0, 255, 0),
+                duration_sec=3.0,
             )
         except Exception as err:
             with self._data_lock:
+                if epoch != self._solve_epoch:
+                    return
                 self.calib_state = CalibState.ERROR
-            self.get_logger().error(f"Optimization failed: {err}")
+
+            if rclpy is not None and rclpy.ok():
+                self.get_logger().error(f"Optimization failed: {err}")
             self._set_notification(
-                f"Optimization error: {err}", (0, 0, 255), duration=3.0
+                f"Optimization error: {err}", (0, 0, 255), duration_sec=3.0
             )
-
-    def _print_calib_report(self, res: Dict[str, Any]) -> None:
-        """Prints formatted terminal report of calibration results."""
-        print("\n" + "=" * 64)
-        print("          CALIBRATION RESULTS REPORT (PLANAR)")
-        print("=" * 64)
-        print(
-            f"Frames: {res['num_frames']} | "
-            f"Mean Error: {res['mean_err']:.4f}px | "
-            f"RMS Error: {res['rms_err']:.4f}px\n"
-        )
-        tags = res["tags"]
-        print("ID | Name |    X (m)   |    Y (m)   |    Z (m)   |  Yaw (deg)")
-        print("-" * 64)
-        for tid in self.tag_ids:
-            if tid in tags:
-                t = tags[tid]
-                print(
-                    f"{tid:2d} | {t['name']:4s} | "
-                    f"{t['x']:10.4f} | {t['y']:10.4f} | {t['z']:10.4f} | "
-                    f"{math.degrees(t['yaw']):9.2f}"
-                )
-
-        coords = {
-            tid: np.array([tags[tid]["x"], tags[tid]["y"], tags[tid]["z"]])
-            for tid in self.tag_ids
-            if tid in tags
-        }
-        edges = [
-            ("A1->H1", self.tag_ids[0], self.tag_ids[1]),
-            ("H1->H8", self.tag_ids[1], self.tag_ids[2]),
-            ("H8->A8", self.tag_ids[2], self.tag_ids[3]),
-            ("A8->A1", self.tag_ids[3], self.tag_ids[0]),
-        ]
-        print("\nCorner Distances:")
-        for label, u, v in edges:
-            if u in coords and v in coords:
-                dist = np.linalg.norm(coords[u] - coords[v])
-                print(f"  - {label:6s}: {dist * 1000.0:6.2f} mm ({dist:.4f} m)")
-        print("=" * 64 + "\n")
 
     def save_calibration(self) -> None:
         """Saves active calibration parameters to the target YAML file."""
         with self._data_lock:
-            if self.calib_res is None:
-                self._set_notification("Calibrate before saving", (0, 100, 255))
-                self.get_logger().warn("Run calibration before saving.")
-                return
             res_snapshot = self.calib_res
+
+        if res_snapshot is None:
+            self._set_notification("Calibrate before saving", (0, 100, 255))
+            self.get_logger().warn("Run calibration before saving.")
+            return
 
         try:
             save_to_chessboard_yaml(
@@ -380,10 +419,6 @@ class ChessboardTagCalibratorNode(Node):
                 duration=self.notification.duration,
             )
 
-        # In headless mode, skip OpenCV GUI calls entirely
-        if self.headless:
-            return
-
         canvas = self.visualizer.draw(
             base_img=img,
             detections=dets,
@@ -395,6 +430,31 @@ class ChessboardTagCalibratorNode(Node):
         )
 
         key = self.visualizer.show(canvas)
+        self._handle_key_event(key)
+
+    def _reset_captured_samples(self) -> None:
+        """Resets all captured frames and calibration state."""
+        with self._data_lock:
+            self.captured_frames.clear()
+            self.calib_res = None
+            self.calib_state = CalibState.IDLE
+            self._solve_epoch += 1
+        self._set_notification("Samples reset", (0, 200, 255))
+        self.get_logger().info("Reset all captured frames.")
+
+    def _toggle_auto_capture(self) -> None:
+        """Toggles periodic auto-capture mode."""
+        with self._data_lock:
+            self.auto_cap_enabled = not self.auto_cap_enabled
+            enabled = self.auto_cap_enabled
+        self._set_notification(
+            f"Auto-cap: {'ON' if enabled else 'OFF'}",
+            (0, 255, 255) if enabled else (180, 180, 180),
+        )
+        self.get_logger().info(f"Auto-capture toggled: {enabled}")
+
+    def _handle_key_event(self, key: int) -> None:
+        """Dispatches actions corresponding to keyboard inputs in visualizer."""
         if key == 32:  # SPACE
             self.capture_current_frame()
         elif key in (ord("c"), ord("C")):
@@ -402,21 +462,9 @@ class ChessboardTagCalibratorNode(Node):
         elif key in (ord("s"), ord("S")):
             self.save_calibration()
         elif key in (ord("r"), ord("R")):
-            with self._data_lock:
-                self.captured_frames.clear()
-                self.calib_res = None
-                self.calib_state = CalibState.IDLE
-            self._set_notification("Samples reset", (0, 200, 255))
-            self.get_logger().info("Reset all captured frames.")
+            self._reset_captured_samples()
         elif key in (ord("a"), ord("A")):
-            with self._data_lock:
-                self.auto_cap_enabled = not self.auto_cap_enabled
-                enabled = self.auto_cap_enabled
-            self._set_notification(
-                f"Auto-cap: {'ON' if enabled else 'OFF'}",
-                (0, 255, 255) if enabled else (180, 180, 180),
-            )
-            self.get_logger().info(f"Auto-capture toggled: {enabled}")
+            self._toggle_auto_capture()
         elif key in (ord("q"), ord("Q"), 27):  # Q or ESC
             cv2.destroyAllWindows()
             rclpy.shutdown()

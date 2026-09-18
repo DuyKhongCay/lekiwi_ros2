@@ -103,29 +103,63 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
             res["rms_err"], 1.0, "RMS reprojection error should be under 1.0 px"
         )
 
-        recovered_h1 = res["tags"][4]
+        tags = res["tags"]
+
+        # 1. Verify geometric center of the 4 tags is exactly at (0.0, 0.0)
+        mean_x = float(np.mean([tags[tid]["x"] for tid in (1, 4, 3, 6)]))
+        mean_y = float(np.mean([tags[tid]["y"] for tid in (1, 4, 3, 6)]))
+        self.assertAlmostEqual(mean_x, 0.0, delta=0.001, msg="Center X should be 0.0")
+        self.assertAlmostEqual(mean_y, 0.0, delta=0.001, msg="Center Y should be 0.0")
+
+        # 2. Verify recovered centered coordinates match ground truth minus center offset
+        # Ground truth center: cx = 0.1921m, cy = 0.1924m
+        recovered_a1 = tags[1]
         self.assertAlmostEqual(
-            recovered_h1["x"], 0.3842, delta=0.002, msg="H1 X recovered within 2mm"
+            recovered_a1["x"], -0.1921, delta=0.002, msg="A1 X recovered around -0.192m"
         )
         self.assertAlmostEqual(
-            recovered_h1["y"], 0.0012, delta=0.002, msg="H1 Y recovered within 2mm"
+            recovered_a1["y"], -0.1924, delta=0.002, msg="A1 Y recovered around -0.192m"
         )
 
-        recovered_h8 = res["tags"][3]
+        recovered_h1 = tags[4]
         self.assertAlmostEqual(
-            recovered_h8["x"], 0.3838, delta=0.002, msg="H8 X recovered within 2mm"
+            recovered_h1["x"], 0.1921, delta=0.002, msg="H1 X recovered around +0.192m"
         )
         self.assertAlmostEqual(
-            recovered_h8["y"], 0.3845, delta=0.002, msg="H8 Y recovered within 2mm"
+            recovered_h1["y"], -0.1912, delta=0.002, msg="H1 Y recovered around -0.191m"
+        )
+
+        recovered_h8 = tags[3]
+        self.assertAlmostEqual(
+            recovered_h8["x"], 0.1917, delta=0.002, msg="H8 X recovered around +0.192m"
+        )
+        self.assertAlmostEqual(
+            recovered_h8["y"], 0.1921, delta=0.002, msg="H8 Y recovered around +0.192m"
+        )
+
+        recovered_a8 = tags[6]
+        self.assertAlmostEqual(
+            recovered_a8["x"], -0.1916, delta=0.002, msg="A8 X recovered around -0.192m"
+        )
+        self.assertAlmostEqual(
+            recovered_a8["y"], 0.1916, delta=0.002, msg="A8 Y recovered around +0.192m"
+        )
+
+        # 3. Verify side length distance preservation (~0.384m between corners)
+        dist_a1_h1 = math.hypot(
+            recovered_h1["x"] - recovered_a1["x"], recovered_h1["y"] - recovered_a1["y"]
+        )
+        self.assertAlmostEqual(
+            dist_a1_h1, 0.3842, delta=0.002, msg="A1-H1 distance preserved"
         )
 
     def test_save_to_chessboard_yaml(self):
         calib_res = {
             "tags": {
-                0: {"name": "A1", "x": 0.0, "y": 0.0, "z": 0.004, "yaw": 0.0},
-                1: {"name": "H1", "x": 0.39, "y": 0.0, "z": 0.004, "yaw": 0.0},
-                2: {"name": "H8", "x": 0.39, "y": 0.39, "z": 0.004, "yaw": 0.0},
-                3: {"name": "A8", "x": 0.0, "y": 0.39, "z": 0.004, "yaw": 0.0},
+                0: {"name": "A1", "x": -0.195, "y": -0.195, "z": 0.004, "yaw": 0.0},
+                1: {"name": "H1", "x": 0.195, "y": -0.195, "z": 0.004, "yaw": 0.0},
+                2: {"name": "H8", "x": 0.195, "y": 0.195, "z": 0.004, "yaw": 0.0},
+                3: {"name": "A8", "x": -0.195, "y": 0.195, "z": 0.004, "yaw": 0.0},
             }
         }
         with tempfile.NamedTemporaryFile("w+", suffix=".yaml", delete=False) as tf:
@@ -136,8 +170,8 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
             with open(temp_path, "r", encoding="utf-8") as f:
                 saved = yaml.safe_load(f)
             self.assertEqual(saved["ids"], [0, 1, 2, 3])
-            self.assertEqual(saved["positions_x"], [0.0, 0.39, 0.39, 0.0])
-            self.assertEqual(saved["positions_y"], [0.0, 0.0, 0.39, 0.39])
+            self.assertEqual(saved["positions_x"], [-0.195, 0.195, 0.195, -0.195])
+            self.assertEqual(saved["positions_y"], [-0.195, -0.195, 0.195, 0.195])
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)

@@ -184,21 +184,17 @@ class ChessboardTagCalibSolver:
             )
         return corners_3d
 
-    def solve(
+    def _init_frame_poses(
         self,
         frames_dets: List[Dict[int, np.ndarray]],
+        init_3d: Dict[int, np.ndarray],
         cam_mat: np.ndarray,
         dist_coeffs: np.ndarray,
-    ) -> Dict[str, Any]:
-        """Runs non-linear least squares Bundle Adjustment over captured frames."""
-        if len(frames_dets) < 3:
-            raise ValueError(f"Need at least 3 valid frames, got {len(frames_dets)}")
-
-        init_tags, (lb, ub) = self.init_params()
-        init_3d = self.build_3d_corners(init_tags)
-
-        cam_poses_init = []
-        valid_frames = []
+        max_frames: int = 50,
+    ) -> Tuple[List[Dict[int, np.ndarray]], List[float]]:
+        """Initializes camera extrinsic poses via PnP on frames with sufficient tags."""
+        cam_poses_init: List[float] = []
+        valid_frames: List[Dict[int, np.ndarray]] = []
 
         for dets in frames_dets:
             obj_pts, img_pts = [], []
@@ -230,18 +226,18 @@ class ChessboardTagCalibSolver:
                 )
                 valid_frames.append(dets)
 
-            if len(valid_frames) >= 50:
+            if len(valid_frames) >= max_frames:
                 break
 
-        if len(valid_frames) < 3:
-            raise ValueError(
-                f"Too few frames with good PnP initialization: {len(valid_frames)}"
-            )
+        return valid_frames, cam_poses_init
 
-        x0 = np.concatenate([init_tags, np.array(cam_poses_init, dtype=np.float64)])
-        num_cams = len(valid_frames)
-        lower_bnds = np.concatenate([lb, np.full(num_cams * 6, -np.inf)])
-        upper_bnds = np.concatenate([ub, np.full(num_cams * 6, np.inf)])
+    def _build_residual_func(
+        self,
+        valid_frames: List[Dict[int, np.ndarray]],
+        cam_mat: np.ndarray,
+        dist_coeffs: np.ndarray,
+    ):
+        """Constructs reprojection residual callable for least_squares optimizer."""
 
         def reproj_residual_func(param_vec: np.ndarray) -> np.ndarray:
             current_3d = self.build_3d_corners(param_vec[:9])
@@ -260,20 +256,12 @@ class ChessboardTagCalibSolver:
                         )
             return np.array(residuals, dtype=np.float64)
 
-        res = least_squares(
-            reproj_residual_func,
-            x0,
-            bounds=(lower_bnds, upper_bnds),
-            method="trf",
-            ftol=1e-6,
-            xtol=1e-6,
-            loss="soft_l1",
-            verbose=0,
-        )
+        return reproj_residual_func
 
-        opt_tags = res.x[:9]
-        residuals = reproj_residual_func(res.x)
-
+    def _extract_raw_tag_results(
+        self, opt_tags: np.ndarray
+    ) -> Dict[int, Dict[str, Any]]:
+        """Extracts planar tag coordinates relative to A1 tag origin."""
         tag_results = {
             self.tag_ids[0]: {
                 "name": "A1",
@@ -293,9 +281,76 @@ class ChessboardTagCalibSolver:
                 "z": float(self.z_height),
                 "yaw": float(opt_tags[b + 2]),
             }
+        return tag_results
+
+    def _shift_to_center(
+        self, tags: Dict[int, Dict[str, Any]]
+    ) -> Dict[int, Dict[str, Any]]:
+        """Translates tag coordinates so that origin is at the geometric center of the board."""
+        if not tags:
+            return {}
+
+        cx = float(np.mean([tags[tid]["x"] for tid in tags]))
+        cy = float(np.mean([tags[tid]["y"] for tid in tags]))
+
+        centered_tags = {}
+        for tid, data in tags.items():
+            centered_tags[tid] = {
+                "name": data["name"],
+                "x": float(data["x"] - cx),
+                "y": float(data["y"] - cy),
+                "z": float(data["z"]),
+                "yaw": float(data["yaw"]),
+            }
+        return centered_tags
+
+    def solve(
+        self,
+        frames_dets: List[Dict[int, np.ndarray]],
+        cam_mat: np.ndarray,
+        dist_coeffs: np.ndarray,
+    ) -> Dict[str, Any]:
+        """Runs non-linear least squares Bundle Adjustment over captured frames."""
+        if len(frames_dets) < 3:
+            raise ValueError(f"Need at least 3 valid frames, got {len(frames_dets)}")
+
+        init_tags, (lb, ub) = self.init_params()
+        init_3d = self.build_3d_corners(init_tags)
+
+        valid_frames, cam_poses_init = self._init_frame_poses(
+            frames_dets, init_3d, cam_mat, dist_coeffs
+        )
+        if len(valid_frames) < 3:
+            raise ValueError(
+                f"Too few frames with good PnP initialization: {len(valid_frames)}"
+            )
+
+        x0 = np.concatenate([init_tags, np.array(cam_poses_init, dtype=np.float64)])
+        num_cams = len(valid_frames)
+        lower_bnds = np.concatenate([lb, np.full(num_cams * 6, -np.inf)])
+        upper_bnds = np.concatenate([ub, np.full(num_cams * 6, np.inf)])
+
+        reproj_residual_func = self._build_residual_func(
+            valid_frames, cam_mat, dist_coeffs
+        )
+
+        res = least_squares(
+            reproj_residual_func,
+            x0,
+            bounds=(lower_bnds, upper_bnds),
+            method="trf",
+            ftol=1e-6,
+            xtol=1e-6,
+            loss="soft_l1",
+            verbose=0,
+        )
+
+        raw_tags = self._extract_raw_tag_results(res.x[:9])
+        centered_tags = self._shift_to_center(raw_tags)
+        residuals = reproj_residual_func(res.x)
 
         return {
-            "tags": tag_results,
+            "tags": centered_tags,
             "mean_err": float(np.mean(np.abs(residuals))),
             "rms_err": float(np.sqrt(np.mean(residuals**2))),
             "num_frames": len(valid_frames),

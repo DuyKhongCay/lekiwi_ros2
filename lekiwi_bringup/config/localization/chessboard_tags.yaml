@@ -11,12 +11,14 @@
     # +Y: Rank 1 -> 8 (Bottom -> Top)
     # +Z: Normal pointing up perpendicular to the board
     tags:
+      # Calibration Date & Time: 2026-09-19 00:23:32
       ids: [0, 1, 2, 3]
-      names: ['A1', 'H1', 'H8', 'A8']
-      positions_x: [-0.1950, 0.1950, 0.1950, -0.1950]
-      positions_y: [-0.1950, -0.1950, 0.1950, 0.1950]
-      positions_z: [0.0040, 0.0040, 0.0040, 0.0040]
-      yaws: [0.0000, 0.0000, 0.0000, 0.0000]
+      names: [A1, H1, H8, A8]
+      positions_x: [-0.1926, 0.1938, 0.1912, -0.1924]
+      positions_y: [-0.1932, -0.1928, 0.1934, 0.1926]
+      positions_z: [0.004, 0.004, 0.004, 0.004]
+      yaws: [0.0, 0.0203, -0.0095, 0.0051]
+
 
 
     # Frame IDs
