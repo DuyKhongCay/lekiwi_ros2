@@ -105,12 +105,12 @@ def test_standoff_pose_south_edge():
     board_h = 0.390
     robot_r = 0.1437
     clearance = 0.03
-    d_margin = robot_r + clearance
+    d_margin_y = board_h / 2.0 + robot_r + clearance
 
-    # Piece at e2 (x ~ 0.195, y ~ 0.05)
+    # Piece at e2 in centered frame (x ~ 0.0, y ~ -0.145)
     x_st, y_st, th_st, edge = compute_standoff_pose(
-        target_x=0.195,
-        target_y=0.05,
+        target_x=0.0,
+        target_y=-0.145,
         board_w=board_w,
         board_h=board_h,
         robot_radius=robot_r,
@@ -118,8 +118,8 @@ def test_standoff_pose_south_edge():
     )
 
     assert edge == "SOUTH"
-    assert math.isclose(y_st, -d_margin, abs_tol=1e-4)
-    assert math.isclose(x_st, 0.195, abs_tol=1e-4)
+    assert math.isclose(y_st, -d_margin_y, abs_tol=1e-4)
+    assert math.isclose(x_st, 0.0, abs_tol=1e-4)
     assert math.isclose(th_st, math.pi / 2.0, abs_tol=1e-4)  # +90 deg
 
 
@@ -129,12 +129,12 @@ def test_standoff_pose_north_edge():
     board_h = 0.390
     robot_r = 0.1437
     clearance = 0.03
-    d_margin = robot_r + clearance
+    d_margin_y = board_h / 2.0 + robot_r + clearance
 
-    # Piece at e7 (x ~ 0.195, y ~ 0.34)
+    # Piece at e7 in centered frame (x ~ 0.0, y ~ 0.145)
     x_st, y_st, th_st, edge = compute_standoff_pose(
-        target_x=0.195,
-        target_y=0.34,
+        target_x=0.0,
+        target_y=0.145,
         board_w=board_w,
         board_h=board_h,
         robot_radius=robot_r,
@@ -142,8 +142,8 @@ def test_standoff_pose_north_edge():
     )
 
     assert edge == "NORTH"
-    assert math.isclose(y_st, board_h + d_margin, abs_tol=1e-4)
-    assert math.isclose(x_st, 0.195, abs_tol=1e-4)
+    assert math.isclose(y_st, d_margin_y, abs_tol=1e-4)
+    assert math.isclose(x_st, 0.0, abs_tol=1e-4)
     assert math.isclose(th_st, -math.pi / 2.0, abs_tol=1e-4)  # -90 deg
 
 
@@ -153,12 +153,12 @@ def test_standoff_pose_west_edge():
     board_h = 0.390
     robot_r = 0.1437
     clearance = 0.03
-    d_margin = robot_r + clearance
+    d_margin_x = board_w / 2.0 + robot_r + clearance
 
-    # Piece at a4 (x ~ 0.03, y ~ 0.195)
+    # Piece at a4 in centered frame (x ~ -0.165, y ~ 0.0)
     x_st, y_st, th_st, edge = compute_standoff_pose(
-        target_x=0.03,
-        target_y=0.195,
+        target_x=-0.165,
+        target_y=0.0,
         board_w=board_w,
         board_h=board_h,
         robot_radius=robot_r,
@@ -166,8 +166,8 @@ def test_standoff_pose_west_edge():
     )
 
     assert edge == "WEST"
-    assert math.isclose(x_st, -d_margin, abs_tol=1e-4)
-    assert math.isclose(y_st, 0.195, abs_tol=1e-4)
+    assert math.isclose(x_st, -d_margin_x, abs_tol=1e-4)
+    assert math.isclose(y_st, 0.0, abs_tol=1e-4)
     assert math.isclose(th_st, 0.0, abs_tol=1e-4)
 
 
@@ -177,12 +177,12 @@ def test_standoff_pose_east_edge():
     board_h = 0.390
     robot_r = 0.1437
     clearance = 0.03
-    d_margin = robot_r + clearance
+    d_margin_x = board_w / 2.0 + robot_r + clearance
 
-    # Piece at h4 (x ~ 0.36, y ~ 0.195)
+    # Piece at h4 in centered frame (x ~ 0.165, y ~ 0.0)
     x_st, y_st, th_st, edge = compute_standoff_pose(
-        target_x=0.36,
-        target_y=0.195,
+        target_x=0.165,
+        target_y=0.0,
         board_w=board_w,
         board_h=board_h,
         robot_radius=robot_r,
@@ -190,9 +190,20 @@ def test_standoff_pose_east_edge():
     )
 
     assert edge == "EAST"
-    assert math.isclose(x_st, board_w + d_margin, abs_tol=1e-4)
-    assert math.isclose(y_st, 0.195, abs_tol=1e-4)
+    assert math.isclose(x_st, d_margin_x, abs_tol=1e-4)
+    assert math.isclose(y_st, 0.0, abs_tol=1e-4)
     assert math.isclose(th_st, math.pi, abs_tol=1e-4)
+
+
+def test_early_geometry_pruning():
+    """Verify early pruning identifies impossible single-base reach."""
+    from lekiwi_control.kinematics_engine import is_single_base_geometrically_possible
+
+    # Two points close to each other (e2 to e4 -> dist ~ 0.097m)
+    assert is_single_base_geometrically_possible(0.0, -0.145, 0.0, -0.048)
+
+    # Two opposite corners (a1 to h8 -> dist ~ 0.48m, far exceeds 2 * reach)
+    assert not is_single_base_geometrically_possible(-0.17, -0.17, 0.17, 0.17)
 
 
 # ================= Strict Failsafe Node Integration Tests =================
@@ -203,7 +214,7 @@ def test_failsafe_rejection_when_unconfigured():
     import rclpy
     from geometry_msgs.msg import Point
     from lekiwi_control.workspace_checker import WorkspaceCheckerNode
-    from lekiwi_interfaces.srv import CheckReachability
+    from lekiwi_interfaces.srv import CheckMoveFeasibility
 
     rclpy.init()
     try:
@@ -211,12 +222,14 @@ def test_failsafe_rejection_when_unconfigured():
         # Node starts unconfigured
         assert not node._is_configured
 
-        req = CheckReachability.Request()
-        req.target_point = Point(x=0.20, y=0.0, z=0.04)
-        res = CheckReachability.Response()
+        req = CheckMoveFeasibility.Request()
+        req.pick_point = Point(x=0.0, y=-0.145, z=0.04)
+        req.place_point = Point(x=0.0, y=-0.048, z=0.04)
+        req.is_capture = False
+        res = CheckMoveFeasibility.Response()
 
-        handled_res = node.handle_check_reachability(req, res)
-        assert not handled_res.reachable
+        handled_res = node.handle_check_move_feasibility(req, res)
+        assert not handled_res.feasible
         assert "FAILSAFE" in handled_res.message
         assert "Service rejected for safety" in handled_res.message
 

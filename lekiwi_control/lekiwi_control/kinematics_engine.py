@@ -189,27 +189,27 @@ def compute_standoff_pose(
     d_clearance: float = DEFAULT_CLEARANCE_PADDING,
 ) -> Tuple[float, float, float, str]:
     """
-    Compute optimal mobile base parking pose in chessboard_frame.
+    Compute optimal mobile base parking pose in chessboard_frame (ORIGIN AT CENTER).
     Selects the closest board perimeter edge (South, North, West, East) to target.
 
-    Parameters:
-        target_x, target_y: Target chess piece location in chessboard_frame (m).
-        board_w: Board width along X (A1 -> H1) in m.
-        board_h: Board height along Y (A1 -> A8) in m.
-        robot_radius: Calibrated robot chassis radius in m.
-        d_clearance: Safety padding beyond robot radius in m.
+    In centered chessboard_frame:
+        x in [-board_w/2, +board_w/2]
+        y in [-board_h/2, +board_h/2]
 
     Returns:
         (x_standoff, y_standoff, theta_standoff, chosen_edge)
         where theta_standoff is the Yaw heading of the robot base in chessboard_frame.
     """
-    d_margin = robot_radius + d_clearance
+    half_w = board_w / 2.0
+    half_h = board_h / 2.0
+    d_margin_x = half_w + robot_radius + d_clearance
+    d_margin_y = half_h + robot_radius + d_clearance
 
     # Distance to each edge from (target_x, target_y)
-    d_south = target_y  # Y = 0 (Rank 1)
-    d_north = board_h - target_y  # Y = board_h (Rank 8)
-    d_west = target_x  # X = 0 (File A)
-    d_east = board_w - target_x  # X = board_w (File H)
+    d_south = target_y - (-half_h)  # distance to Y = -half_h
+    d_north = half_h - target_y  # distance to Y = +half_h
+    d_west = target_x - (-half_w)  # distance to X = -half_w
+    d_east = half_w - target_x  # distance to X = +half_w
 
     edges = {
         "SOUTH": d_south,
@@ -220,24 +220,145 @@ def compute_standoff_pose(
 
     closest_edge = min(edges, key=edges.get)
 
+    # Clamping range along the edge to keep base centered within board bounds
+    max_span_x = max(0.0, half_w - robot_radius)
+    max_span_y = max(0.0, half_h - robot_radius)
+
     if closest_edge == "SOUTH":
-        x_standoff = max(robot_radius, min(target_x, board_w - robot_radius))
-        y_standoff = -d_margin
-        theta_standoff = math.pi / 2.0  # +90 deg (facing +Y towards board)
+        x_standoff = max(-max_span_x, min(target_x, max_span_x))
+        y_standoff = -d_margin_y
+        theta_standoff = math.pi / 2.0  # +90 deg (facing +Y towards center)
 
     elif closest_edge == "NORTH":
-        x_standoff = max(robot_radius, min(target_x, board_w - robot_radius))
-        y_standoff = board_h + d_margin
-        theta_standoff = -math.pi / 2.0  # -90 deg (facing -Y towards board)
+        x_standoff = max(-max_span_x, min(target_x, max_span_x))
+        y_standoff = d_margin_y
+        theta_standoff = -math.pi / 2.0  # -90 deg (facing -Y towards center)
 
     elif closest_edge == "WEST":
-        x_standoff = -d_margin
-        y_standoff = max(robot_radius, min(target_y, board_h - robot_radius))
-        theta_standoff = 0.0  # 0 deg (facing +X towards board)
+        x_standoff = -d_margin_x
+        y_standoff = max(-max_span_y, min(target_y, max_span_y))
+        theta_standoff = 0.0  # 0 deg (facing +X towards center)
 
     else:  # EAST
-        x_standoff = board_w + d_margin
-        y_standoff = max(robot_radius, min(target_y, board_h - robot_radius))
-        theta_standoff = math.pi  # 180 deg (facing -X towards board)
+        x_standoff = d_margin_x
+        y_standoff = max(-max_span_y, min(target_y, max_span_y))
+        theta_standoff = math.pi  # 180 deg (facing -X towards center)
 
     return x_standoff, y_standoff, theta_standoff, closest_edge
+
+
+def is_single_base_geometrically_possible(
+    p1_x: float,
+    p1_y: float,
+    p2_x: float,
+    p2_y: float,
+    max_reach: float = 0.22,  # Effective top-down horizontal reach (~0.20-0.22m)
+    max_pan_angle: float = 1.74,  # ~100 deg
+) -> bool:
+    """
+    Tier 1 Early-Exit Geometry Pruning:
+    Check if distance between pick and place allows both to be reached from a single shoulder point.
+    """
+    dist = math.hypot(p1_x - p2_x, p1_y - p2_y)
+    # Theoretical maximum chord length within arm reach sector
+    max_chord = 2.0 * max_reach * math.sin(min(max_pan_angle, math.pi / 2.0))
+    return dist <= max_chord
+
+
+def transform_point_to_base_frame(
+    px: float, py: float, pz: float, base_x: float, base_y: float, base_theta: float
+) -> Tuple[float, float, float]:
+    """Transform point (px, py, pz) from chessboard_frame to base_footprint frame."""
+    dx = px - base_x
+    dy = py - base_y
+    c = math.cos(base_theta)
+    s = math.sin(base_theta)
+    bx = c * dx + s * dy
+    by = -s * dx + c * dy
+    bz = pz
+    return bx, by, bz
+
+
+def find_common_standoff_pose(
+    pick_x: float,
+    pick_y: float,
+    pick_z: float,
+    place_x: float,
+    place_y: float,
+    place_z: float,
+    board_w: float,
+    board_h: float,
+    robot_radius: float,
+    d_clearance: float = DEFAULT_CLEARANCE_PADDING,
+    required_pitch: float = DEFAULT_PITCH_ANGLE,
+    max_samples: int = 25,
+) -> Optional[Tuple[float, float, float, Dict[str, float], Dict[str, float], str]]:
+    """
+    Tier 2 Fast 1D Perimeter Sampling (≤ 15ms):
+    Find a single standoff base pose (x, y, theta) where BOTH pick and place are reachable.
+
+    Returns:
+        (base_x, base_y, base_theta, pick_ik, place_ik, edge) or None if no common pose found.
+    """
+    # 1. Start from candidate edges near mid-point
+    mid_x = (pick_x + place_x) / 2.0
+    mid_y = (pick_y + place_y) / 2.0
+
+    # Test closest standoff pose to midpoint
+    base_x, base_y, base_theta, edge = compute_standoff_pose(
+        mid_x, mid_y, board_w, board_h, robot_radius, d_clearance
+    )
+
+    half_w = board_w / 2.0
+    half_h = board_h / 2.0
+    d_margin_x = half_w + robot_radius + d_clearance
+    d_margin_y = half_h + robot_radius + d_clearance
+
+    # Determine 1D sampling direction along the chosen edge
+    is_horizontal = edge in ("SOUTH", "NORTH")
+    span = board_w if is_horizontal else board_h
+    center_val = mid_x if is_horizontal else mid_y
+
+    # Generate samples around midpoint
+    sample_offsets = [0.0]
+    step = 0.025  # 2.5 cm steps
+    for i in range(1, max_samples // 2 + 1):
+        sample_offsets.append(i * step)
+        sample_offsets.append(-i * step)
+
+    for offset in sample_offsets:
+        cur_pos = center_val + offset
+        if is_horizontal:
+            cur_clamped = max(-half_w, min(cur_pos, half_w))
+            cand_x = cur_clamped
+            cand_y = -d_margin_y if edge == "SOUTH" else d_margin_y
+            cand_th = math.pi / 2.0 if edge == "SOUTH" else -math.pi / 2.0
+        else:
+            cur_clamped = max(-half_h, min(cur_pos, half_h))
+            cand_x = -d_margin_x if edge == "WEST" else d_margin_x
+            cand_y = cur_clamped
+            cand_th = 0.0 if edge == "WEST" else math.pi
+
+        # Transform both points to this candidate base frame
+        b_pick_x, b_pick_y, b_pick_z = transform_point_to_base_frame(
+            pick_x, pick_y, pick_z, cand_x, cand_y, cand_th
+        )
+        b_place_x, b_place_y, b_place_z = transform_point_to_base_frame(
+            place_x, place_y, place_z, cand_x, cand_y, cand_th
+        )
+
+        # Check IK for pick
+        ok_pick, sol_pick, _, _ = solve_analytical_ik(
+            b_pick_x, b_pick_y, b_pick_z, required_pitch=required_pitch
+        )
+        if not ok_pick:
+            continue
+
+        # Check IK for place
+        ok_place, sol_place, _, _ = solve_analytical_ik(
+            b_place_x, b_place_y, b_place_z, required_pitch=required_pitch
+        )
+        if ok_place:
+            return cand_x, cand_y, cand_th, sol_pick, sol_place, edge
+
+    return None

@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 from typing import Sequence, Set, Tuple
 
-from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import TransformStamped
 from nav2_msgs.srv import ManageLifecycleNodes
 from nav_msgs.msg import Odometry
@@ -196,8 +196,8 @@ class TfReadinessGatekeeper(Node):
         self._tf_ready_pub = self.create_publisher(
             Bool, "/system/tf_ready", latched_qos
         )
-        self._status_pub = self.create_publisher(
-            DiagnosticStatus, "/system/localization_status", 10
+        self._diagnostics_pub = self.create_publisher(
+            DiagnosticArray, "/diagnostics", 10
         )
 
         # Service
@@ -467,7 +467,11 @@ class TfReadinessGatekeeper(Node):
             KeyValue(key="tf_base_ee", value=str(base_ee_ok)),
             KeyValue(key="tf_map_board", value=str(map_board_ok)),
         ]
-        self._status_pub.publish(diag)
+
+        diag_array = DiagnosticArray()
+        diag_array.header.stamp = self.get_clock().now().to_msg()
+        diag_array.status.append(diag)
+        self._diagnostics_pub.publish(diag_array)
 
     def _handle_trigger_query(
         self, request: Trigger.Request, response: Trigger.Response

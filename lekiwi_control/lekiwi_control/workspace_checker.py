@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import Point, PointStamped, PoseStamped, Quaternion
-from lekiwi_interfaces.srv import CheckReachability
+from lekiwi_interfaces.srv import CheckMoveFeasibility
 import numpy as np
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -34,6 +34,8 @@ from lekiwi_control.kinematics_engine import (
     DEFAULT_CLEARANCE_PADDING,
     DEFAULT_PITCH_ANGLE,
     compute_standoff_pose,
+    find_common_standoff_pose,
+    is_single_base_geometrically_possible,
     solve_analytical_ik,
 )
 
@@ -101,9 +103,9 @@ class WorkspaceCheckerNode(Node):
 
         # Service Server
         self._service = self.create_service(
-            CheckReachability,
-            "/workspace/check_reachability",
-            self.handle_check_reachability,
+            CheckMoveFeasibility,
+            "/workspace/check_move_feasibility",
+            self.handle_check_move_feasibility,
             callback_group=self._srv_cbg,
         )
 
@@ -281,18 +283,56 @@ class WorkspaceCheckerNode(Node):
 
     # ================= Service Handler =================
 
-    def handle_check_reachability(
+    # ================= Service Handler =================
+    def _create_base_pose_stamped(
+        self, x_board: float, y_board: float, yaw_board: float
+    ) -> Optional[PoseStamped]:
+        """Convert a (x, y, yaw) standoff pose in chessboard_frame to PoseStamped in map_frame."""
+        st_pose_board = PoseStamped()
+        st_pose_board.header.stamp = self.get_clock().now().to_msg()
+        st_pose_board.header.frame_id = self._board_frame
+        st_pose_board.pose.position.x = x_board
+        st_pose_board.pose.position.y = y_board
+        st_pose_board.pose.position.z = 0.0
+        st_pose_board.pose.orientation = yaw_to_quaternion(yaw_board)
+
+        try:
+            tf_board_to_map = self._tf_buffer.lookup_transform(
+                self._map_frame,
+                self._board_frame,
+                Time(),
+                timeout=Duration(seconds=0.15),
+            )
+            return tf2_geometry_msgs.do_transform_pose_stamped(
+                st_pose_board, tf_board_to_map
+            )
+        except TransformException as ex:
+            self.get_logger().error(f"Failed to transform base pose to map frame: {ex}")
+            return None
+
+    def _dict_to_joint_state(self, joint_dict: Dict[str, float]) -> JointState:
+        """Convert joint dictionary into sensor_msgs/JointState."""
+        js = JointState()
+        js.header.stamp = self.get_clock().now().to_msg()
+        js.header.frame_id = self._base_frame
+        js.name = list(joint_dict.keys())
+        js.position = list(joint_dict.values())
+        return js
+
+    def handle_check_move_feasibility(
         self,
-        request: CheckReachability.Request,
-        response: CheckReachability.Response,
-    ) -> CheckReachability.Response:
-        """Handle reachability queries and base standoff calculation."""
+        request: CheckMoveFeasibility.Request,
+        response: CheckMoveFeasibility.Response,
+    ) -> CheckMoveFeasibility.Response:
+        """Handle move feasibility queries using Tiered Cost-Based Decision Strategy."""
         # 1. Strict Failsafe check
         if not self._is_configured:
-            response.reachable = False
-            response.distance_to_target = 0.0
+            response.feasible = False
+            response.plan_type = CheckMoveFeasibility.Response.PLAN_DUAL_BASE
             response.message = f"{self._failsafe_reason}. Service rejected for safety."
-            self.get_logger().warn(f"Reachability check rejected: {response.message}")
+            self.get_logger().warn(
+                f"Move feasibility check rejected: {response.message}"
+            )
             return response
 
         target_frame = (
@@ -304,98 +344,222 @@ class WorkspaceCheckerNode(Node):
             else DEFAULT_PITCH_ANGLE
         )
 
-        # 2. TF2 Coordinate Transformation to base_footprint
-        try:
-            transform_to_base = self._tf_buffer.lookup_transform(
-                self._base_frame,
-                target_frame,
-                Time(),  # Latest available
-                timeout=Duration(seconds=0.15),
-            )
-            point_in_base = transform_point_by_tf(
-                request.target_point, transform_to_base
-            )
-        except TransformException as ex:
-            response.reachable = False
-            response.distance_to_target = 0.0
-            response.message = f"TF transform failed from '{target_frame}' to '{self._base_frame}': {ex}"
-            self.get_logger().error(response.message)
-            return response
-
-        # 3. Closed-Form Analytical IK Check
-        is_reachable, joint_dict, dist_to_target, ik_msg = solve_analytical_ik(
-            target_x=point_in_base.x,
-            target_y=point_in_base.y,
-            target_z=point_in_base.z,
-            required_pitch=required_pitch,
-        )
-
-        response.reachable = is_reachable
-        response.distance_to_target = dist_to_target
-        response.message = ik_msg
-
-        # Fill joint state if reachable
-        if is_reachable and joint_dict is not None:
-            js = JointState()
-            js.header.stamp = self.get_clock().now().to_msg()
-            js.header.frame_id = self._base_frame
-            js.name = list(joint_dict.keys())
-            js.position = list(joint_dict.values())
-            response.ik_solution = js
-
-        # 4. If NOT reachable, compute suggested base standoff pose
-        if not is_reachable and request.compute_suggested_pose:
-            # First ensure we have target in chessboard_frame
-            target_pt_board = request.target_point
-            if target_frame != self._board_frame:
-                try:
-                    tf_to_board = self._tf_buffer.lookup_transform(
-                        self._board_frame,
-                        target_frame,
-                        Time(),
-                        timeout=Duration(seconds=0.15),
+        # 2. Transform target points to chessboard_frame
+        pick_pt_board = request.pick_point
+        place_pt_board = request.place_point
+        if target_frame != self._board_frame:
+            try:
+                tf_to_board = self._tf_buffer.lookup_transform(
+                    self._board_frame,
+                    target_frame,
+                    Time(),
+                    timeout=Duration(seconds=0.15),
+                )
+                pick_pt_board = transform_point_by_tf(request.pick_point, tf_to_board)
+                if not request.is_capture:
+                    place_pt_board = transform_point_by_tf(
+                        request.place_point, tf_to_board
                     )
-                    target_pt_board = transform_point_by_tf(
-                        request.target_point, tf_to_board
-                    )
-                except TransformException as ex:
-                    response.message += f" (Standoff TF error: {ex})"
-                    return response
+            except TransformException as ex:
+                response.feasible = False
+                response.message = f"TF transform to '{self._board_frame}' failed: {ex}"
+                self.get_logger().error(response.message)
+                return response
 
-            x_st_board, y_st_board, th_st_board, edge = compute_standoff_pose(
-                target_x=target_pt_board.x,
-                target_y=target_pt_board.y,
+        # =========================================================================
+        # Case A: Piece Capture Move (is_capture == True)
+        # Dedicated PLAN_SINGLE_BASE: Only pick victim piece, arm drops it into
+        # the onboard chassis bin (zero base navigation for drop).
+        # =========================================================================
+        if request.is_capture:
+            # Compute optimal standoff for pick_point
+            x_st, y_st, th_st, edge = compute_standoff_pose(
+                target_x=pick_pt_board.x,
+                target_y=pick_pt_board.y,
                 board_w=self._board_width,
                 board_h=self._board_height,
                 robot_radius=self._robot_radius,
                 d_clearance=self._clearance_padding,
             )
 
-            # Create Standoff Pose in chessboard_frame
-            st_pose_board = PoseStamped()
-            st_pose_board.header.stamp = self.get_clock().now().to_msg()
-            st_pose_board.header.frame_id = self._board_frame
-            st_pose_board.pose.position.x = x_st_board
-            st_pose_board.pose.position.y = y_st_board
-            st_pose_board.pose.position.z = 0.0
-            st_pose_board.pose.orientation = yaw_to_quaternion(th_st_board)
+            # Solve IK at this standoff
+            b_pick_x, b_pick_y, b_pick_z = transform_point_to_base_frame(
+                pick_pt_board.x, pick_pt_board.y, pick_pt_board.z, x_st, y_st, th_st
+            )
+            ok_pick, sol_pick, _, ik_msg = solve_analytical_ik(
+                b_pick_x, b_pick_y, b_pick_z, required_pitch=required_pitch
+            )
 
-            # Transform into map frame for Nav2
-            try:
-                tf_board_to_map = self._tf_buffer.lookup_transform(
+            base_pose_map = self._create_base_pose_stamped(x_st, y_st, th_st)
+            if not base_pose_map:
+                response.feasible = False
+                response.message = "Failed to transform victim base pose to map frame."
+                return response
+
+            response.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
+            response.feasible = ok_pick
+            response.pick_base_pose = base_pose_map
+            response.place_base_pose = base_pose_map
+            if ok_pick and sol_pick:
+                response.pick_ik_solution = self._dict_to_joint_state(sol_pick)
+            response.message = (
+                f"CAPTURE MOVE: PLAN_SINGLE_BASE to edge {edge}. "
+                f"Pick victim piece and deposit into onboard bin. IK: {ik_msg}"
+            )
+            return response
+
+        # =========================================================================
+        # Case B: Standard Chess Move (Pick & Place)
+        # 4-Tier Cost-Based Execution Strategy
+        # =========================================================================
+
+        # ---------------- Tier 0: Zero-Nav Check (Current robot pose) ----------------
+        try:
+            tf_to_base = self._tf_buffer.lookup_transform(
+                self._base_frame,
+                self._board_frame,
+                Time(),
+                timeout=Duration(seconds=0.10),
+            )
+            curr_pick_base = transform_point_by_tf(pick_pt_board, tf_to_base)
+            curr_place_base = transform_point_by_tf(place_pt_board, tf_to_base)
+
+            ok_p0, sol_p0, _, _ = solve_analytical_ik(
+                curr_pick_base.x,
+                curr_pick_base.y,
+                curr_pick_base.z,
+                required_pitch=required_pitch,
+            )
+            ok_d0, sol_d0, _, _ = solve_analytical_ik(
+                curr_place_base.x,
+                curr_place_base.y,
+                curr_place_base.z,
+                required_pitch=required_pitch,
+            )
+
+            if ok_p0 and ok_d0 and sol_p0 and sol_d0:
+                # Get current robot pose in map
+                tf_base_in_map = self._tf_buffer.lookup_transform(
                     self._map_frame,
-                    self._board_frame,
+                    self._base_frame,
                     Time(),
-                    timeout=Duration(seconds=0.15),
+                    timeout=Duration(seconds=0.10),
                 )
-                p_map = tf2_geometry_msgs.do_transform_pose_stamped(
-                    st_pose_board, tf_board_to_map
-                )
-                response.suggested_base_pose = p_map
-                response.message += f" | Suggested standoff on {edge} edge: ({p_map.pose.position.x:.3f}, {p_map.pose.position.y:.3f})"
-            except TransformException as ex:
-                response.message += f" | Standoff TF to map failed: {ex}"
+                curr_map_pose = PoseStamped()
+                curr_map_pose.header.stamp = self.get_clock().now().to_msg()
+                curr_map_pose.header.frame_id = self._map_frame
+                curr_map_pose.pose.position.x = tf_base_in_map.transform.translation.x
+                curr_map_pose.pose.position.y = tf_base_in_map.transform.translation.y
+                curr_map_pose.pose.position.z = tf_base_in_map.transform.translation.z
+                curr_map_pose.pose.orientation = tf_base_in_map.transform.rotation
 
+                response.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
+                response.feasible = True
+                response.pick_base_pose = curr_map_pose
+                response.place_base_pose = curr_map_pose
+                response.pick_ik_solution = self._dict_to_joint_state(sol_p0)
+                response.place_ik_solution = self._dict_to_joint_state(sol_d0)
+                response.message = "PLAN_ZERO_NAV: Current base pose satisfies both pick and place! (0s Nav2)"
+                return response
+        except TransformException:
+            # Non-fatal: if current base pose lookup fails, proceed to Tier 1
+            pass
+
+        # ---------- Tier 1: Early Geometric Pruning (O(1) chord check) -----------
+        possible_single = is_single_base_geometrically_possible(
+            pick_pt_board.x,
+            pick_pt_board.y,
+            place_pt_board.x,
+            place_pt_board.y,
+        )
+
+        # --------- Tier 2: 1D Perimeter Fast Sampling (Single-Base Search) --------
+        if possible_single:
+            common_sol = find_common_standoff_pose(
+                pick_x=pick_pt_board.x,
+                pick_y=pick_pt_board.y,
+                pick_z=pick_pt_board.z,
+                place_x=place_pt_board.x,
+                place_y=place_pt_board.y,
+                place_z=place_pt_board.z,
+                board_w=self._board_width,
+                board_h=self._board_height,
+                robot_radius=self._robot_radius,
+                d_clearance=self._clearance_padding,
+                required_pitch=required_pitch,
+            )
+
+            if common_sol is not None:
+                c_x, c_y, c_th, sol_pick, sol_place, edge = common_sol
+                c_pose_map = self._create_base_pose_stamped(c_x, c_y, c_th)
+                if c_pose_map:
+                    response.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
+                    response.feasible = True
+                    response.pick_base_pose = c_pose_map
+                    response.place_base_pose = c_pose_map
+                    response.pick_ik_solution = self._dict_to_joint_state(sol_pick)
+                    response.place_ik_solution = self._dict_to_joint_state(sol_place)
+                    response.message = f"PLAN_SINGLE_BASE: Common standoff found on edge {edge} (1x Nav2)"
+                    return response
+
+        # -------- Tier 3: Dual-Base Generation (Safe Nav2-Interleaved Fallback) --------
+        x_st1, y_st1, th_st1, edge1 = compute_standoff_pose(
+            target_x=pick_pt_board.x,
+            target_y=pick_pt_board.y,
+            board_w=self._board_width,
+            board_h=self._board_height,
+            robot_radius=self._robot_radius,
+            d_clearance=self._clearance_padding,
+        )
+        x_st2, y_st2, th_st2, edge2 = compute_standoff_pose(
+            target_x=place_pt_board.x,
+            target_y=place_pt_board.y,
+            board_w=self._board_width,
+            board_h=self._board_height,
+            robot_radius=self._robot_radius,
+            d_clearance=self._clearance_padding,
+        )
+
+        b_pick_x, b_pick_y, b_pick_z = transform_point_to_base_frame(
+            pick_pt_board.x, pick_pt_board.y, pick_pt_board.z, x_st1, y_st1, th_st1
+        )
+        b_place_x, b_place_y, b_place_z = transform_point_to_base_frame(
+            place_pt_board.x, place_pt_board.y, place_pt_board.z, x_st2, y_st2, th_st2
+        )
+
+        ok_pick, sol_pick, _, msg_p = solve_analytical_ik(
+            b_pick_x, b_pick_y, b_pick_z, required_pitch=required_pitch
+        )
+        ok_place, sol_place, _, msg_d = solve_analytical_ik(
+            b_place_x, b_place_y, b_place_z, required_pitch=required_pitch
+        )
+
+        pose1_map = self._create_base_pose_stamped(x_st1, y_st1, th_st1)
+        pose2_map = self._create_base_pose_stamped(x_st2, y_st2, th_st2)
+
+        if not pose1_map or not pose2_map:
+            response.feasible = False
+            response.message = "Failed to transform dual base poses to map frame."
+            return response
+
+        response.plan_type = CheckMoveFeasibility.Response.PLAN_DUAL_BASE
+        response.feasible = ok_pick and ok_place
+        response.pick_base_pose = pose1_map
+        response.place_base_pose = pose2_map
+        if ok_pick and sol_pick:
+            response.pick_ik_solution = self._dict_to_joint_state(sol_pick)
+        if ok_place and sol_place:
+            response.place_ik_solution = self._dict_to_joint_state(sol_place)
+
+        reason = (
+            "Distance exceeded reach"
+            if not possible_single
+            else "No perimeter overlap found"
+        )
+        response.message = (
+            f"PLAN_DUAL_BASE ({reason}): Move to {edge1} for Pick -> Stow Arm -> Move to {edge2} for Place. "
+            f"IK: pick={'OK' if ok_pick else msg_p}, place={'OK' if ok_place else msg_d}"
+        )
         return response
 
     # ================= Diagnostics =================
