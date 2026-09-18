@@ -32,6 +32,9 @@ namespace lekiwi_perception::hailo
   /// Maximum number of bounding boxes allocated per frame
   inline constexpr std::size_t kPieceMaxBoxes = 100U;
 
+  /// Bounding box vertical ratio for piece ground contact point (0.88 compensates for ~47 deg camera tilt)
+  inline constexpr float kPieceBaseYRatio = 0.88F;
+
   // ---------------------------------------------------------------------------
   // Piece Classifications & Neural Network Labels
   // ---------------------------------------------------------------------------

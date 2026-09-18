@@ -185,7 +185,9 @@ namespace lekiwi_perception::hailo
       piece.class_id = class_id;
       piece.confidence = det->get_confidence();
       piece.bbox = cv::Rect2f(bbox.xmin(), bbox.ymin(), bbox.width(), bbox.height());
-      piece.base_pt = cv::Point2f(bbox.xmin() + bbox.width() / 2.0F, bbox.ymin() + bbox.height());
+      piece.base_pt = cv::Point2f(
+          bbox.xmin() + bbox.width() / 2.0F,
+          bbox.ymin() + bbox.height() * kPieceBaseYRatio);
 
       if (!state.homography_matrix.empty())
       {

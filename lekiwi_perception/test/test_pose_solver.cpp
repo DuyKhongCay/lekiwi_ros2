@@ -16,9 +16,9 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
-#include "apriltag_localizer/pose_solver.hpp"
+#include "apriltag/pose_solver.hpp"
 
-using namespace apriltag_localizer;
+using namespace lekiwi_perception;
 
 TEST(PoseSolverTest, TagCornersComputation)
 {

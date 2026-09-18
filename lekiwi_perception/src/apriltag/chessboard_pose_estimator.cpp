@@ -1,107 +1,242 @@
 /**
  * @file chessboard_pose_estimator.cpp
- * @brief Implementation of AprilTag chessboard pose estimation and robot pose publisher.
+ * @brief Implementation of AprilTag chessboard pose estimation as a Lifecycle Component.
  *
  * Clean Code refactor: Pure vision component with no EKF coupling or intermediate anchor services.
+ * Integrates PerceptionLifecycleHelper for camera mode gating, autostart, and diagnostics.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
  */
 
-#include "apriltag_localizer/chessboard_pose_estimator.hpp"
+#include "apriltag/chessboard_pose_estimator.hpp"
 
 #include <cmath>
 #include <limits>
 #include <sstream>
 #include <utility>
 
+#include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-namespace apriltag_localizer
+namespace lekiwi_perception
 {
 
   ChessboardPoseEstimator::ChessboardPoseEstimator(const rclcpp::NodeOptions &options)
-      : rclcpp::Node("chessboard_pose_estimator", options)
+      : rclcpp_lifecycle::LifecycleNode("chessboard_pose_estimator", options)
   {
-    load_parameters();
-    init_detector();
+    declare_parameter<bool>("autostart", true);
+    declare_parameter<bool>("calib", false);
+    declare_parameter<std::string>("tag_family", "16h5");
+    declare_parameter<double>("tag_size", 0.029);
+    declare_parameter<double>("detection_rate_hz", 5.0);
+    declare_parameter<int>("min_tags_cnt", 2);
 
-    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
-    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    declare_parameter<std::string>("map_frame", "map");
+    declare_parameter<std::string>("odom_frame", "odom");
+    declare_parameter<std::string>("chessboard_frame", "chessboard_frame");
+    declare_parameter<std::string>("camera_frame", "stereo_left_optical");
+    declare_parameter<std::string>("base_frame", "base_footprint");
 
-    if (calib_)
+    declare_parameter<std::vector<double>>(
+        "chessboard_pose_in_map", {0.0, 0.0, 0.004, 0.0, 0.0, 0.0});
+
+    declare_parameter<bool>("publish_tf", true);
+
+    declare_parameter<std::vector<int64_t>>("tags.ids", {0, 1, 2, 3});
+    declare_parameter<std::vector<std::string>>("tags.names", {"A1", "H1", "H8", "A8"});
+    declare_parameter<std::vector<double>>("tags.positions_x", {0.0, 0.38, 0.38, 0.0});
+    declare_parameter<std::vector<double>>("tags.positions_y", {0.0, 0.0, 0.38, 0.38});
+    declare_parameter<std::vector<double>>("tags.positions_z", {0.004, 0.004, 0.004, 0.004});
+    declare_parameter<std::vector<double>>("tags.yaws", {0.0, 0.0, 0.0, 0.0});
+
+    autostart_ = get_parameter("autostart").as_bool();
+    if (autostart_)
     {
-      // Calibration mode: ONLY publish detected tags to /tag_detections
-      tag_detections_pub_ = create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>(
-          "/tag_detections", rclcpp::SensorDataQoS());
-      RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator running in CALIBRATION MODE (only /tag_detections active)");
+      lifecycle_helper_ = std::make_unique<utils::PerceptionLifecycleHelper>(
+          this, "ChessboardPoseEstimator", "Chessboard Tracker Status");
+      lifecycle_helper_->setup_autostart(true);
     }
-    else
+  }
+
+  ChessboardPoseEstimator::CallbackReturn ChessboardPoseEstimator::on_configure(
+      const rclcpp_lifecycle::State & /*state*/)
+  {
+    try
     {
-      static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+      load_parameters();
+      init_detector();
 
-      // Vision Output Publishers
-      robot_pose_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-          "/chessboard/robot_pose", rclcpp::QoS(10));
-      tag_centers_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
-          "/chess/tag_centers", rclcpp::QoS(1).transient_local().reliable());
+      tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
+      tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-      // Broadcast static transform map -> chessboard_frame once at startup
+      if (calib_)
+      {
+        tag_detections_pub_ = create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>(
+            "/tag_detections", rclcpp::SensorDataQoS());
+        RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator running in CALIBRATION MODE (only /tag_detections active)");
+      }
+      else
+      {
+        static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+
+        robot_pose_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            "/chessboard/robot_pose", rclcpp::QoS(10));
+        tag_centers_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
+            "/chess/tag_centers", rclcpp::QoS(1).transient_local().reliable());
+      }
+
+      camera_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
+          "~/camera_info",
+          rclcpp::SensorDataQoS(),
+          std::bind(&ChessboardPoseEstimator::on_camera_info, this, std::placeholders::_1));
+
+      image_sub_ = create_subscription<sensor_msgs::msg::Image>(
+          "~/image_raw",
+          rclcpp::SensorDataQoS(),
+          std::bind(&ChessboardPoseEstimator::on_image, this, std::placeholders::_1));
+
+      if (!lifecycle_helper_)
+      {
+        lifecycle_helper_ = std::make_unique<utils::PerceptionLifecycleHelper>(
+            this, "ChessboardPoseEstimator", "Chessboard Tracker Status");
+      }
+
+      const std::vector<uint8_t> allowed_modes = {
+          lekiwi_interfaces::msg::CameraMode::STANDBY,
+          lekiwi_interfaces::msg::CameraMode::CHESS_THINKING};
+      lifecycle_helper_->setup_camera_mode_sub(allowed_modes);
+
+      lifecycle_helper_->diagnostics().updater().add(
+          "Chessboard Tracker Status", this, &ChessboardPoseEstimator::produce_diagnostics);
+
+      RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator configured successfully.");
+      return CallbackReturn::SUCCESS;
+    }
+    catch (const std::exception &e)
+    {
+      RCLCPP_ERROR(get_logger(), "Exception during on_configure: %s", e.what());
+      reset_state();
+      return CallbackReturn::FAILURE;
+    }
+  }
+
+  ChessboardPoseEstimator::CallbackReturn ChessboardPoseEstimator::on_activate(
+      const rclcpp_lifecycle::State & /*state*/)
+  {
+    if (tag_detections_pub_)
+    {
+      tag_detections_pub_->on_activate();
+    }
+    if (robot_pose_pub_)
+    {
+      robot_pose_pub_->on_activate();
+    }
+    if (tag_centers_pub_)
+    {
+      tag_centers_pub_->on_activate();
+    }
+
+    if (!calib_)
+    {
       publish_static_transforms();
     }
 
-    // Subscriptions
-    camera_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
-        "~/camera_info",
-        rclcpp::SensorDataQoS(),
-        std::bind(&ChessboardPoseEstimator::on_camera_info, this, std::placeholders::_1));
+    if (lifecycle_helper_)
+    {
+      lifecycle_helper_->perf_tracker().reset();
+    }
 
-    image_sub_ = create_subscription<sensor_msgs::msg::Image>(
-        "~/image_raw",
-        rclcpp::SensorDataQoS(),
-        std::bind(&ChessboardPoseEstimator::on_image, this, std::placeholders::_1));
+    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator activated.");
+    return CallbackReturn::SUCCESS;
+  }
 
-    camera_mode_sub_ = create_subscription<lekiwi_interfaces::msg::CameraMode>(
-        "/system/camera_mode",
-        rclcpp::QoS(1).transient_local().reliable(),
-        std::bind(&ChessboardPoseEstimator::on_camera_mode, this, std::placeholders::_1));
+  ChessboardPoseEstimator::CallbackReturn ChessboardPoseEstimator::on_deactivate(
+      const rclcpp_lifecycle::State & /*state*/)
+  {
+    if (tag_detections_pub_)
+    {
+      tag_detections_pub_->on_deactivate();
+    }
+    if (robot_pose_pub_)
+    {
+      robot_pose_pub_->on_deactivate();
+    }
+    if (tag_centers_pub_)
+    {
+      tag_centers_pub_->on_deactivate();
+    }
 
-    // Diagnostics updater
-    diagnostic_updater_.setHardwareID("ChessboardPoseEstimator");
-    diagnostic_updater_.add("Chessboard Tracker Status", this, &ChessboardPoseEstimator::produce_diagnostics);
+    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator deactivated.");
+    return CallbackReturn::SUCCESS;
+  }
 
-    last_fps_time_ = std::chrono::steady_clock::now();
+  ChessboardPoseEstimator::CallbackReturn ChessboardPoseEstimator::on_cleanup(
+      const rclcpp_lifecycle::State & /*state*/)
+  {
+    reset_state();
+    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator cleaned up.");
+    return CallbackReturn::SUCCESS;
+  }
 
-    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator pure vision node initialized successfully.");
+  ChessboardPoseEstimator::CallbackReturn ChessboardPoseEstimator::on_shutdown(
+      const rclcpp_lifecycle::State & /*state*/)
+  {
+    reset_state();
+    RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator shut down.");
+    return CallbackReturn::SUCCESS;
+  }
+
+  ChessboardPoseEstimator::CallbackReturn ChessboardPoseEstimator::on_error(
+      const rclcpp_lifecycle::State & /*state*/)
+  {
+    reset_state();
+    return CallbackReturn::SUCCESS;
+  }
+
+  void ChessboardPoseEstimator::reset_state()
+  {
+    if (lifecycle_helper_)
+    {
+      lifecycle_helper_->reset();
+      lifecycle_helper_.reset();
+    }
+    tag_detections_pub_.reset();
+    robot_pose_pub_.reset();
+    tag_centers_pub_.reset();
+    camera_info_sub_.reset();
+    image_sub_.reset();
+    tf_listener_.reset();
+    tf_buffer_.reset();
+    static_tf_broadcaster_.reset();
+    has_camera_info_ = false;
+    last_used_tags_.store(0);
   }
 
   void ChessboardPoseEstimator::load_parameters()
   {
-    calib_ = declare_parameter<bool>("calib", false);
-    tag_family_ = declare_parameter<std::string>("tag_family", "16h5");
-    tag_size_ = declare_parameter<double>("tag_size", 0.029);
-    detection_rate_hz_ = declare_parameter<double>("detection_rate_hz", 5.0);
-    min_tags_cnt_ = declare_parameter<int>("min_tags_cnt", 2);
+    calib_ = get_parameter("calib").as_bool();
+    tag_family_ = get_parameter("tag_family").as_string();
+    tag_size_ = get_parameter("tag_size").as_double();
+    detection_rate_hz_ = get_parameter("detection_rate_hz").as_double();
+    min_tags_cnt_ = get_parameter("min_tags_cnt").as_int();
 
-    map_frame_ = declare_parameter<std::string>("map_frame", "map");
-    odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
-    chessboard_frame_ = declare_parameter<std::string>("chessboard_frame", "chessboard_frame");
-    camera_frame_ = declare_parameter<std::string>("camera_frame", "stereo_left_optical");
-    base_frame_ = declare_parameter<std::string>("base_frame", "base_footprint");
+    map_frame_ = get_parameter("map_frame").as_string();
+    odom_frame_ = get_parameter("odom_frame").as_string();
+    chessboard_frame_ = get_parameter("chessboard_frame").as_string();
+    camera_frame_ = get_parameter("camera_frame").as_string();
+    base_frame_ = get_parameter("base_frame").as_string();
 
-    chessboard_pose_in_map_ = declare_parameter<std::vector<double>>(
-        "chessboard_pose_in_map", {0.0, 0.0, 0.004, 0.0, 0.0, 0.0});
+    chessboard_pose_in_map_ = get_parameter("chessboard_pose_in_map").as_double_array();
+    publish_static_tf_ = get_parameter("publish_tf").as_bool();
 
-    publish_static_tf_ = declare_parameter<bool>("publish_tf", true);
-
-    // Tag layout parameters
-    const auto tag_ids = declare_parameter<std::vector<int64_t>>("tags.ids", {0, 1, 2, 3});
-    const auto tag_names = declare_parameter<std::vector<std::string>>("tags.names", {"A1", "H1", "H8", "A8"});
-    const auto positions_x = declare_parameter<std::vector<double>>("tags.positions_x", {0.0, 0.38, 0.38, 0.0});
-    const auto positions_y = declare_parameter<std::vector<double>>("tags.positions_y", {0.0, 0.0, 0.38, 0.38});
-    const auto positions_z = declare_parameter<std::vector<double>>("tags.positions_z", {0.004, 0.004, 0.004, 0.004});
-    const auto yaws = declare_parameter<std::vector<double>>("tags.yaws", {0.0, 0.0, 0.0, 0.0});
+    const auto tag_ids = get_parameter("tags.ids").as_integer_array();
+    const auto tag_names = get_parameter("tags.names").as_string_array();
+    const auto positions_x = get_parameter("tags.positions_x").as_double_array();
+    const auto positions_y = get_parameter("tags.positions_y").as_double_array();
+    const auto positions_z = get_parameter("tags.positions_z").as_double_array();
+    const auto yaws = get_parameter("tags.yaws").as_double_array();
 
     const size_t n = tag_ids.size();
     if (tag_names.size() != n || positions_x.size() != n ||
@@ -111,6 +246,7 @@ namespace apriltag_localizer
       throw std::runtime_error("Tags configuration array sizes mismatch");
     }
 
+    tag_configs_.clear();
     for (size_t i = 0; i < n; ++i)
     {
       TagConfig cfg;
@@ -209,28 +345,17 @@ namespace apriltag_localizer
                 camera_matrix_.at<double>(0, 2), camera_matrix_.at<double>(1, 2));
   }
 
-  void ChessboardPoseEstimator::on_camera_mode(
-      const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg)
-  {
-    if (current_camera_mode_ != msg->value)
-    {
-      current_camera_mode_ = msg->value;
-      RCLCPP_INFO(get_logger(), "Camera mode updated to: %u", current_camera_mode_);
-    }
-  }
-
   bool ChessboardPoseEstimator::should_process_image(
       const sensor_msgs::msg::Image::ConstSharedPtr &msg)
   {
-    const bool allow_detection = calib_ ||
-                                 (current_camera_mode_ == lekiwi_interfaces::msg::CameraMode::CHESS_THINKING) ||
-                                 (current_camera_mode_ == lekiwi_interfaces::msg::CameraMode::STANDBY);
-    if (!allow_detection || !has_camera_info_)
+    const bool is_active = (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+    const bool allow_detection = calib_ || (lifecycle_helper_ && lifecycle_helper_->is_mode_allowed());
+
+    if (!is_active || !allow_detection || !has_camera_info_)
     {
       return false;
     }
 
-    // Rate limiting: enforce configured detection_rate_hz_
     const auto current_stamp = rclcpp::Time(msg->header.stamp);
     if (detection_rate_hz_ > 0.0 && last_detection_stamp_.nanoseconds() > 0)
     {
@@ -299,7 +424,7 @@ namespace apriltag_localizer
       const std::vector<std::vector<cv::Point2f>> &marker_corners,
       const std::vector<int> &marker_ids)
   {
-    if (!tag_detections_pub_)
+    if (!tag_detections_pub_ || !tag_detections_pub_->is_activated())
     {
       return;
     }
@@ -337,7 +462,7 @@ namespace apriltag_localizer
       const std::vector<std::vector<cv::Point2f>> &marker_corners,
       const std::vector<int> &marker_ids)
   {
-    if (!tag_centers_pub_ || img_size.width <= 0 || img_size.height <= 0)
+    if (!tag_centers_pub_ || !tag_centers_pub_->is_activated() || img_size.width <= 0 || img_size.height <= 0)
     {
       return;
     }
@@ -376,6 +501,11 @@ namespace apriltag_localizer
       const std::vector<std::vector<cv::Point2f>> &marker_corners,
       const std::vector<int> &marker_ids)
   {
+    if (!robot_pose_pub_ || !robot_pose_pub_->is_activated())
+    {
+      return;
+    }
+
     if (static_cast<int>(marker_ids.size()) < min_tags_cnt_)
     {
       last_used_tags_.store(0);
@@ -395,7 +525,6 @@ namespace apriltag_localizer
       return;
     }
 
-    // Convert OpenCV Rodrigues rvec -> tf2::Quaternion
     cv::Mat R_cam_board;
     cv::Rodrigues(rvec, R_cam_board);
 
@@ -414,7 +543,6 @@ namespace apriltag_localizer
     const tf2::Transform T_cam_board(q_cam_board, t_cam_board);
     const std::string cam_frame = header.frame_id.empty() ? camera_frame_ : header.frame_id;
 
-    // Robot pose estimation: T_map^base = T_map^board * T_board^cam * T_cam^base
     try
     {
       const auto transform_cam_base = tf_buffer_->lookupTransform(
@@ -442,7 +570,6 @@ namespace apriltag_localizer
 
       const tf2::Transform T_map_base = T_map_board * T_board_base;
 
-      // Publish /chessboard/robot_pose with high-confidence fixed covariance (N >= 2)
       auto robot_pose_msg = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
       robot_pose_msg->header.stamp = header.stamp;
       robot_pose_msg->header.frame_id = map_frame_;
@@ -488,88 +615,57 @@ namespace apriltag_localizer
     if (calib_)
     {
       publish_tag_detections_for_calib(msg->header, marker_corners, marker_ids);
-      const auto proc_end = std::chrono::steady_clock::now();
-      last_proc_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
-      frame_counter_.fetch_add(1, std::memory_order_relaxed);
-      return;
+    }
+    else
+    {
+      publish_tag_centers(msg->header, cv_ptr->image.size(), marker_corners, marker_ids);
+      estimate_and_publish_robot_pose(msg->header, marker_corners, marker_ids);
     }
 
-    publish_tag_centers(msg->header, cv_ptr->image.size(), marker_corners, marker_ids);
-    estimate_and_publish_robot_pose(msg->header, marker_corners, marker_ids);
-
     const auto proc_end = std::chrono::steady_clock::now();
-    last_proc_time_ms_.store(std::chrono::duration<double, std::milli>(proc_end - proc_start).count());
-    frame_counter_.fetch_add(1, std::memory_order_relaxed);
+    const double proc_ms = std::chrono::duration<double, std::milli>(proc_end - proc_start).count();
+
+    if (lifecycle_helper_)
+    {
+      lifecycle_helper_->perf_tracker().record_frame(proc_ms);
+    }
   }
 
   void ChessboardPoseEstimator::produce_diagnostics(
       diagnostic_updater::DiagnosticStatusWrapper &stat)
   {
-    const auto now_tp = std::chrono::steady_clock::now();
-    const auto elapsed_sec = std::chrono::duration<float>(now_tp - last_fps_time_).count();
-    const uint64_t current_count = frame_counter_.load(std::memory_order_relaxed);
-
-    if (elapsed_sec >= 0.5F)
+    if (!lifecycle_helper_)
     {
-      const uint64_t delta_frames = current_count - last_fps_frame_count_;
-      current_fps_.store(static_cast<float>(delta_frames) / elapsed_sec);
-      last_fps_time_ = now_tp;
-      last_fps_frame_count_ = current_count;
+      return;
     }
 
-    const float fps = current_fps_.load();
-    const double proc_time_ms = last_proc_time_ms_.load();
     const int used_tags = last_used_tags_.load();
+    const bool is_busy = (used_tags >= min_tags_cnt_);
+
     std::string tag_ids_str;
     {
       std::lock_guard<std::mutex> lock(diag_mutex_);
       tag_ids_str = last_detected_tag_ids_str_;
     }
 
-    // Status Summary
+    std::string err_msg;
     if (!has_camera_info_)
     {
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Waiting for CameraInfo");
-    }
-    else if (calib_)
-    {
-      stat.summary(
-          diagnostic_msgs::msg::DiagnosticStatus::OK,
-          "Calibration Mode (streaming to /tag_detections)");
-    }
-    else if (current_camera_mode_ != lekiwi_interfaces::msg::CameraMode::CHESS_THINKING &&
-             current_camera_mode_ != lekiwi_interfaces::msg::CameraMode::STANDBY)
-    {
-      stat.summary(
-          diagnostic_msgs::msg::DiagnosticStatus::OK,
-          "Standby (Camera mode inactive for localization)");
-    }
-    else if (used_tags >= min_tags_cnt_)
-    {
-      stat.summaryf(
-          diagnostic_msgs::msg::DiagnosticStatus::OK,
-          "Tracking Chessboard (%d tags used, %.1f FPS, %.1f ms proc)",
-          used_tags, fps, proc_time_ms);
-    }
-    else
-    {
-      stat.summaryf(
-          diagnostic_msgs::msg::DiagnosticStatus::WARN,
-          "Insufficient chessboard tags in view (< %d tags)", min_tags_cnt_);
+      err_msg = "Waiting for CameraInfo";
     }
 
-    // Telemetry & Metrics
-    stat.add("Calibration Mode", calib_ ? "true" : "false");
-    stat.addf("Processing FPS", "%.1f", fps);
-    stat.addf("Target Detection Rate (Hz)", "%.1f", detection_rate_hz_);
-    stat.addf("Algorithm Processing Time (ms)", "%.2f", proc_time_ms);
-    stat.add("Used Board Tags Count", used_tags);
-    stat.add("Detected Tag IDs", tag_ids_str);
-    stat.add("Camera Info Received", has_camera_info_ ? "true" : "false");
-    stat.add("Total Frames Processed", current_count);
+    lifecycle_helper_->update_diagnostics(
+        stat, is_busy, err_msg, static_cast<float>(detection_rate_hz_ * 0.5),
+        [&](diagnostic_updater::DiagnosticStatusWrapper &s)
+        {
+          s.add("Calibration Mode", calib_ ? "true" : "false");
+          s.addf("Target Detection Rate (Hz)", "%.1f", detection_rate_hz_);
+          s.add("Used Board Tags Count", used_tags);
+          s.add("Detected Tag IDs", tag_ids_str);
+          s.add("Camera Info Received", has_camera_info_ ? "true" : "false");
+        });
   }
 
-} // namespace apriltag_localizer
+} // namespace lekiwi_perception
 
-#include "rclcpp_components/register_node_macro.hpp"
-RCLCPP_COMPONENTS_REGISTER_NODE(apriltag_localizer::ChessboardPoseEstimator)
+RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_perception::ChessboardPoseEstimator)

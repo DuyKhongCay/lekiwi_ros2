@@ -6,12 +6,12 @@
  * @copyright Apache-2.0
  */
 
-#include "apriltag_localizer/pose_solver.hpp"
+#include "apriltag/pose_solver.hpp"
 
 #include <cmath>
 #include <utility>
 
-namespace apriltag_localizer
+namespace lekiwi_perception
 {
 
   std::vector<cv::Point3d> PoseSolver::compute_tag_corners(
@@ -104,4 +104,4 @@ namespace apriltag_localizer
     return (tvec.at<double>(2) > 0.0);
   }
 
-} // namespace apriltag_localizer
+} // namespace lekiwi_perception

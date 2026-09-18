@@ -42,24 +42,9 @@ namespace lekiwi_perception
     autostart_ = get_parameter("autostart").as_bool();
     if (autostart_)
     {
-      autostart_timer_ = create_wall_timer(
-          std::chrono::milliseconds(1),
-          [this]()
-          {
-            if (autostart_timer_)
-            {
-              autostart_timer_->cancel();
-              autostart_timer_.reset();
-            }
-            if (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED)
-            {
-              this->configure();
-            }
-            if (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE)
-            {
-              this->activate();
-            }
-          });
+      lifecycle_helper_ = std::make_unique<utils::PerceptionLifecycleHelper>(
+          this, camera_name_, camera_name_ + "_stream_status");
+      lifecycle_helper_->setup_autostart(true);
     }
   }
 
@@ -125,12 +110,25 @@ namespace lekiwi_perception
       }
       info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>("camera/camera_info", qos);
 
-      rclcpp::QoS mode_qos(1);
-      mode_qos.reliable();
-      mode_qos.transient_local();
-      mode_sub_ = create_subscription<lekiwi_interfaces::msg::CameraMode>(
-          "/camera_mode", mode_qos,
-          std::bind(&CameraStreamerComponent::on_camera_mode, this, std::placeholders::_1));
+      if (!lifecycle_helper_)
+      {
+        lifecycle_helper_ = std::make_unique<utils::PerceptionLifecycleHelper>(
+            this, camera_name_, camera_name_ + "_stream_status");
+      }
+
+      std::vector<uint8_t> active_u8;
+      active_u8.reserve(active_modes_.size());
+      for (int64_t m : active_modes_)
+      {
+        active_u8.push_back(static_cast<uint8_t>(m));
+      }
+
+      lifecycle_helper_->setup_camera_mode_sub(
+          active_u8,
+          [this](uint8_t /*new_mode*/)
+          {
+            this->update_valve_state();
+          });
 
       std::string full_pipeline = gscam_config_;
       if (full_pipeline.find("appsink") == std::string::npos)
@@ -201,14 +199,9 @@ namespace lekiwi_perception
             camera_name_.c_str());
       }
 
-      updater_ = std::make_shared<diagnostic_updater::Updater>(this);
-      updater_->setHardwareID(camera_name_);
-      updater_->add(
+      lifecycle_helper_->diagnostics().updater().add(
           camera_name_ + "_stream_status", this,
           &CameraStreamerComponent::produce_diagnostics);
-
-      last_fps_time_ = std::chrono::steady_clock::now();
-      last_fps_frame_count_ = 0;
 
       RCLCPP_INFO(
           get_logger(), "CameraStreamerComponent configured successfully for camera '%s'",
@@ -269,7 +262,11 @@ namespace lekiwi_perception
         }
       }
 
-      frame_counter_.store(0);
+      if (lifecycle_helper_)
+      {
+        lifecycle_helper_->perf_tracker().reset();
+      }
+
       monitor_timer_ = create_wall_timer(
           std::chrono::milliseconds(100),
           std::bind(&CameraStreamerComponent::monitor_tick, this));
@@ -373,13 +370,10 @@ namespace lekiwi_perception
 
   void CameraStreamerComponent::reset_pipeline()
   {
+    is_streaming_.store(false);
+
     std::lock_guard<std::mutex> lock(gst_mutex_);
 
-    if (autostart_timer_)
-    {
-      autostart_timer_->cancel();
-      autostart_timer_.reset();
-    }
     if (monitor_timer_)
     {
       monitor_timer_->cancel();
@@ -414,23 +408,16 @@ namespace lekiwi_perception
       pipeline_ = nullptr;
     }
 
-    mode_sub_.reset();
+    if (lifecycle_helper_)
+    {
+      lifecycle_helper_->reset();
+      lifecycle_helper_.reset();
+    }
+
     image_pub_.reset();
     compressed_image_pub_.reset();
     info_pub_.reset();
     camera_info_manager_.reset();
-    is_streaming_.store(false);
-  }
-
-  void CameraStreamerComponent::on_camera_mode(
-      const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg)
-  {
-    if (!msg)
-    {
-      return;
-    }
-    current_camera_mode_.store(msg->value);
-    update_valve_state();
   }
 
   void CameraStreamerComponent::monitor_tick()
@@ -444,10 +431,8 @@ namespace lekiwi_perception
     const uint8_t state_id = get_current_state().id();
     const bool is_active = (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE ||
                             state_id == lifecycle_msgs::msg::State::TRANSITION_STATE_ACTIVATING);
-    const uint8_t mode = current_camera_mode_.load();
-
-    const bool mode_allowed = active_modes_.empty() ||
-                              (std::find(active_modes_.begin(), active_modes_.end(), static_cast<int64_t>(mode)) != active_modes_.end());
+    const bool mode_allowed = !lifecycle_helper_ || lifecycle_helper_->is_mode_allowed();
+    const uint8_t mode = lifecycle_helper_ ? lifecycle_helper_->get_current_mode() : 0;
 
     const bool should_stream = calib_mode_ || (is_active && mode_allowed);
     const bool prev_streaming = is_streaming_.exchange(should_stream);
@@ -488,7 +473,10 @@ namespace lekiwi_perception
       {
         gst_message_parse_error(msg, &err, &dbg);
         std::string err_text = err ? err->message : "unknown error";
-        last_gst_error_ = err_text;
+        {
+          std::lock_guard<std::mutex> lock(error_mutex_);
+          last_gst_error_ = err_text;
+        }
         RCLCPP_ERROR(
             get_logger(), "[%s] GStreamer bus error from %s: %s%s%s",
             camera_name_.c_str(),
@@ -505,7 +493,10 @@ namespace lekiwi_perception
       {
         gst_message_parse_warning(msg, &err, &dbg);
         std::string warn_text = err ? err->message : "unknown warning";
-        last_gst_error_ = "Warning: " + warn_text;
+        {
+          std::lock_guard<std::mutex> lock(error_mutex_);
+          last_gst_error_ = "Warning: " + warn_text;
+        }
         RCLCPP_WARN(
             get_logger(), "[%s] GStreamer bus warning from %s: %s%s%s",
             camera_name_.c_str(),
@@ -637,18 +628,13 @@ namespace lekiwi_perception
       {
         header.stamp = now_time;
       }
-      // In use_gst_timestamps mode, latency is embedded into header.stamp
-      current_latency_ms_.store(0.0);
     }
     else
     {
       header.stamp = now_time;
-      // In decoupled mode, measure and store GStreamer pipeline latency separately
-      current_latency_ms_.store(has_valid_pipeline_lat ? gst_pipeline_lat_ms : 0.0);
     }
 
     GstStructure *structure = gst_caps_get_structure(caps, 0);
-
     const gchar *media_type = structure ? gst_structure_get_name(structure) : "";
     const bool is_jpeg = (g_strcmp0(media_type, "image/jpeg") == 0);
 
@@ -677,7 +663,6 @@ namespace lekiwi_perception
       }
       else if (raw_active)
       {
-        // Fallback: publish JPEG payload into Image message data if only raw_active
         auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
         img_msg->header = header;
         img_msg->width = frame_width;
@@ -781,12 +766,21 @@ namespace lekiwi_perception
     }
     info_msg->header = header;
 
+    if (!is_streaming_.load())
+    {
+      return;
+    }
+
     if (info_pub_ && info_pub_->is_activated())
     {
       info_pub_->publish(std::move(info_msg));
     }
 
-    frame_counter_.fetch_add(1, std::memory_order_relaxed);
+    if (lifecycle_helper_ && is_streaming_.load())
+    {
+      const double lat_record = (use_gst_timestamps_ || !has_valid_pipeline_lat) ? 0.0 : gst_pipeline_lat_ms;
+      lifecycle_helper_->perf_tracker().record_frame(lat_record);
+    }
   }
 
   bool CameraStreamerComponent::is_streaming() const noexcept
@@ -796,7 +790,7 @@ namespace lekiwi_perception
 
   uint8_t CameraStreamerComponent::current_camera_mode() const noexcept
   {
-    return current_camera_mode_.load();
+    return lifecycle_helper_ ? lifecycle_helper_->get_current_mode() : 0;
   }
 
   bool CameraStreamerComponent::is_valve_open() const
@@ -813,196 +807,36 @@ namespace lekiwi_perception
   void CameraStreamerComponent::produce_diagnostics(
       diagnostic_updater::DiagnosticStatusWrapper &stat)
   {
-    const auto now_tp = std::chrono::steady_clock::now();
-    const auto elapsed_sec = std::chrono::duration<float>(now_tp - last_fps_time_).count();
-    const uint64_t current_count = frame_counter_.load(std::memory_order_relaxed);
-
-    if (elapsed_sec >= 0.5F)
+    if (!lifecycle_helper_)
     {
-      const uint64_t delta_frames = current_count - last_fps_frame_count_;
-      current_fps_.store(static_cast<float>(delta_frames) / elapsed_sec);
-      last_fps_time_ = now_tp;
-      last_fps_frame_count_ = current_count;
+      return;
     }
 
-    const float fps = current_fps_.load();
-    const double latency_ms = current_latency_ms_.load();
     const bool streaming = is_streaming_.load();
-    const bool valve_open = is_valve_open();
-    const bool is_active = (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
-
-    // 1. Overall Status
-    if (!last_gst_error_.empty() && last_gst_error_.rfind("Warning:", 0) != 0)
+    std::string err_msg;
     {
-      stat.summaryf(
-          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
-          "GStreamer pipeline error: %s", last_gst_error_.c_str());
-    }
-    else if (!is_active)
-    {
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Camera streamer node inactive");
-    }
-    else if (streaming && fps < 5.0F && current_count > 10)
-    {
-      stat.summaryf(
-          diagnostic_msgs::msg::DiagnosticStatus::WARN,
-          "Low camera frame rate (%.1f FPS)", fps);
-    }
-    else if (streaming)
-    {
-      if (use_gst_timestamps_)
-      {
-        stat.summaryf(
-            diagnostic_msgs::msg::DiagnosticStatus::OK,
-            "Streaming active (%.1f FPS, use_gst_timestamps=true)", fps);
-      }
-      else
-      {
-        stat.summaryf(
-            diagnostic_msgs::msg::DiagnosticStatus::OK,
-            "Streaming active (%.1f FPS, %.1f ms latency)", fps, latency_ms);
-      }
-    }
-    else
-    {
-      stat.summary(
-          diagnostic_msgs::msg::DiagnosticStatus::OK,
-          "Gated / Standby (No active stream requested)");
+      std::lock_guard<std::mutex> lock(error_mutex_);
+      err_msg = last_gst_error_;
     }
 
-    // 2. Metrics
-    stat.add("Camera Name", camera_name_);
-    stat.add("Frame ID", frame_id_);
-    stat.add("Stream State", streaming ? "Streaming" : (valve_open ? "Valve Open (Idle)" : "Gated (Dropping)"));
-    stat.addf("Framerate (FPS)", "%.1f", fps);
-    stat.add("Use GST Timestamps", use_gst_timestamps_ ? "true" : "false");
-    if (use_gst_timestamps_)
-    {
-      stat.add("Gst to ROS Latency", "N/A (use_gst_timestamps=true)");
-    }
-    else
-    {
-      stat.addf("Gst to ROS Latency (ms)", "%.2f", latency_ms);
-    }
-    stat.add("Total Frames Published", current_count);
-    stat.add("Publish Raw", publish_raw_ ? "true" : "false");
-    stat.add("Publish Compressed", publish_compressed_ ? "true" : "false");
-
-    if (!last_gst_error_.empty())
-    {
-      stat.add("Last Gst Status", last_gst_error_);
-    }
+    lifecycle_helper_->update_diagnostics(
+        stat, streaming, err_msg, 5.0F,
+        [&](diagnostic_updater::DiagnosticStatusWrapper &s)
+        {
+          s.add("Camera Name", camera_name_);
+          s.add("Frame ID", frame_id_);
+          s.add("Stream State", streaming ? "Streaming" : (is_valve_open() ? "Valve Open (Idle)" : "Gated (Dropping)"));
+          s.add("Use GST Timestamps", use_gst_timestamps_ ? "true" : "false");
+          s.add("Publish Raw", publish_raw_ ? "true" : "false");
+          s.add("Publish Compressed", publish_compressed_ ? "true" : "false");
+        });
   }
 
   sensor_msgs::msg::CameraInfo CameraStreamerComponent::scale_camera_info(
       const sensor_msgs::msg::CameraInfo &orig_info,
       uint32_t target_w, uint32_t target_h) const
   {
-    // Rescales camera intrinsic matrix K and projection matrix P based on output resolution.
-    auto scaled_info = orig_info;
-    const uint32_t orig_w = orig_info.width;
-    const uint32_t orig_h = orig_info.height;
-
-    scaled_info.width = target_w;
-    scaled_info.height = target_h;
-
-    if (orig_w == 0 || orig_h == 0 || target_w == 0 || target_h == 0)
-    {
-      return scaled_info;
-    }
-
-    if (orig_w == target_w && orig_h == target_h)
-    {
-      return scaled_info;
-    }
-
-    const double orig_ar = static_cast<double>(orig_w) / static_cast<double>(orig_h);
-    const double target_ar = static_cast<double>(target_w) / static_cast<double>(target_h);
-
-    double sx = 1.0;
-    double sy = 1.0;
-    double offset_x = 0.0;
-    double offset_y = 0.0;
-
-    if (add_border_)
-    {
-      // Aspect-ratio-preserving scale with letterbox padding (e.g. videoscale add-borders=true)
-      if (orig_ar >= target_ar)
-      {
-        const double s = static_cast<double>(target_w) / static_cast<double>(orig_w);
-        sx = s;
-        sy = s;
-        offset_x = 0.0;
-        const double active_h = static_cast<double>(orig_h) * s;
-        offset_y = (static_cast<double>(target_h) - active_h) / 2.0;
-      }
-      else
-      {
-        const double s = static_cast<double>(target_h) / static_cast<double>(orig_h);
-        sx = s;
-        sy = s;
-        const double active_w = static_cast<double>(orig_w) * s;
-        offset_x = (static_cast<double>(target_w) - active_w) / 2.0;
-        offset_y = 0.0;
-      }
-
-      // Scale Camera Matrix K (3x3 row-major)
-      scaled_info.k[0] = orig_info.k[0] * sx;
-      scaled_info.k[2] = orig_info.k[2] * sx + offset_x;
-      scaled_info.k[4] = orig_info.k[4] * sy;
-      scaled_info.k[5] = orig_info.k[5] * sy + offset_y;
-
-      // Scale Projection Matrix P (3x4 row-major)
-      scaled_info.p[0] = orig_info.p[0] * sx;
-      scaled_info.p[2] = orig_info.p[2] * sx + offset_x;
-      scaled_info.p[3] = orig_info.p[3] * sx;
-      scaled_info.p[5] = orig_info.p[5] * sy;
-      scaled_info.p[6] = orig_info.p[6] * sy + offset_y;
-      scaled_info.p[7] = orig_info.p[7] * sy;
-    }
-    else
-    {
-      // Aspect-ratio-preserving scale with center cropping (e.g. videocrop left/right or top/bottom)
-      double crop_x = 0.0;
-      double crop_y = 0.0;
-      double s = 1.0;
-
-      if (orig_ar > target_ar)
-      {
-        const double cropped_w = static_cast<double>(orig_h) * target_ar;
-        crop_x = (static_cast<double>(orig_w) - cropped_w) / 2.0;
-        s = static_cast<double>(target_w) / cropped_w;
-      }
-      else if (orig_ar < target_ar)
-      {
-        const double cropped_h = static_cast<double>(orig_w) / target_ar;
-        crop_y = (static_cast<double>(orig_h) - cropped_h) / 2.0;
-        s = static_cast<double>(target_h) / cropped_h;
-      }
-      else
-      {
-        s = static_cast<double>(target_w) / static_cast<double>(orig_w);
-      }
-
-      sx = s;
-      sy = s;
-
-      // Scale Camera Matrix K (3x3 row-major)
-      scaled_info.k[0] = orig_info.k[0] * sx;
-      scaled_info.k[2] = (orig_info.k[2] - crop_x) * sx;
-      scaled_info.k[4] = orig_info.k[4] * sy;
-      scaled_info.k[5] = (orig_info.k[5] - crop_y) * sy;
-
-      // Scale Projection Matrix P (3x4 row-major)
-      scaled_info.p[0] = orig_info.p[0] * sx;
-      scaled_info.p[2] = (orig_info.p[2] - crop_x) * sx;
-      scaled_info.p[3] = orig_info.p[3] * sx;
-      scaled_info.p[5] = orig_info.p[5] * sy;
-      scaled_info.p[6] = (orig_info.p[6] - crop_y) * sy;
-      scaled_info.p[7] = orig_info.p[7] * sy;
-    }
-
-    return scaled_info;
+    return utils::CameraInfoScaler::scale(orig_info, target_w, target_h, add_border_);
   }
 
 } // namespace lekiwi_perception

@@ -12,6 +12,8 @@
 #include <map>
 #include <memory>
 #include <random>
+#include <opencv2/dnn.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace lekiwi_perception::hailo
 {
@@ -802,10 +804,17 @@ extern "C"
 
   void filter_chessboard(HailoROIPtr roi, void *params_void_ptr)
   {
-    auto *postprocess = static_cast<ChessboardPostprocess *>(params_void_ptr);
-    if (postprocess)
+    try
     {
-      postprocess->filter(roi);
+      auto *postprocess = static_cast<ChessboardPostprocess *>(params_void_ptr);
+      if (postprocess)
+      {
+        postprocess->filter(roi);
+      }
+    }
+    catch (...)
+    {
+      // Prevent exceptions from crossing C-ABI boundary into GStreamer
     }
   }
 

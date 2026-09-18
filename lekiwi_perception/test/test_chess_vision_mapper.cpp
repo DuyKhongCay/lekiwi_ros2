@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "hailo/chess_vision_mapper.hpp"
-#include "hailo/chess_game_state_tracker.hpp"
+#include "hailo/chess_constants.hpp"
 
 using namespace lekiwi_perception::hailo;
 
@@ -180,53 +180,6 @@ TEST(ChessVisionMapperTest, GeneratePiecePlacementPure)
   EXPECT_EQ(fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR");
 }
 
-TEST(ChessGameStateTrackerTest, ValidMoveDebounceAndFullFen)
-{
-  ChessGameStateTracker tracker(2); // Debounce window = 2 frames
-
-  std::string white_e4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR"; // White e4
-
-  // Frame 1: unstable debounce
-  GameStateResult res1 = tracker.update(white_e4);
-  EXPECT_FALSE(res1.is_board_stable);
-  EXPECT_FALSE(res1.is_legal_move);
-
-  // Frame 2: stable debounce -> transition accepted
-  GameStateResult res2 = tracker.update(white_e4);
-  EXPECT_TRUE(res2.is_board_stable);
-  EXPECT_TRUE(res2.is_legal_move);
-  EXPECT_EQ(res2.last_move, "e2e4");
-  EXPECT_EQ(res2.full_fen, "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
-}
-
-TEST(ChessGameStateTrackerTest, RejectIllegalMove)
-{
-  ChessGameStateTracker tracker(1); // Debounce window = 1 frame
-
-  // White king suddenly leaps to e4 (illegal opening)
-  std::string illegal_king = "rnbqkbnr/pppppppp/8/8/4K3/8/PPPPPPPP/RNBQ1BNR";
-
-  GameStateResult res = tracker.update(illegal_king);
-  EXPECT_TRUE(res.is_board_stable);
-  EXPECT_FALSE(res.is_legal_move);
-  // Full FEN remains at starting position
-  EXPECT_EQ(res.full_fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-}
-
-TEST(ChessGameStateTrackerTest, BypassLegalMoveInDebugMode)
-{
-  ChessGameStateTracker tracker(1); // Debounce window = 1 frame
-
-  // White king suddenly leaps to e4 (illegal opening)
-  std::string illegal_king = "rnbqkbnr/pppppppp/8/8/4K3/8/PPPPPPPP/RNBQ1BNR";
-
-  // With bypass_legal_check = true (debug mode)
-  GameStateResult res = tracker.update(illegal_king, true);
-  EXPECT_TRUE(res.is_board_stable);
-  EXPECT_TRUE(res.is_legal_move);
-  EXPECT_NE(res.full_fen.find("4K3"), std::string::npos);
-}
-
 TEST(ChessVisionMapperTest, MapPixelToSquareCanonical)
 {
   // Identity matrix mapping canonical board [0, 8] x [0, 8] directly
@@ -242,4 +195,17 @@ TEST(ChessVisionMapperTest, MapPixelToSquareCanonical)
   // Rotated 180 (Black perspective): a1_corner_idx = 2 (TR)
   EXPECT_EQ(ChessVisionMapper::map_pixel_to_square(7.5f, 0.5f, H, 2), "a1");
   EXPECT_EQ(ChessVisionMapper::map_pixel_to_square(0.5f, 7.5f, H, 2), "h8");
+}
+
+TEST(ChessVisionMapperTest, PieceBasePointRatioCalculations)
+{
+  EXPECT_FLOAT_EQ(kPieceBaseYRatio, 0.88F);
+
+  // For a bounding box from (x=100, y=200) with (width=50, height=100):
+  cv::Rect2f bbox(100.0F, 200.0F, 50.0F, 100.0F);
+  float base_x = bbox.x + bbox.width / 2.0F;
+  float base_y = bbox.y + bbox.height * kPieceBaseYRatio;
+
+  EXPECT_FLOAT_EQ(base_x, 125.0F);
+  EXPECT_FLOAT_EQ(base_y, 288.0F); // 200 + 88 = 288 (elevated 12% above bottom 300)
 }

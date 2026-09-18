@@ -16,6 +16,8 @@ find_package(apriltag_msgs REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(diagnostic_updater REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(lekiwi_interfaces REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -23,25 +25,12 @@ find_package(rclcpp_components REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(vision_msgs REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn highgui)
-find_package(Boost REQUIRED COMPONENTS system filesystem)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn highgui calib3d aruco)
 find_package(PkgConfig REQUIRED)
-
-include(FetchContent)
-if(EXISTS "/root/docker_ws/chess-library")
-  FetchContent_Declare(
-    chess_library
-    SOURCE_DIR /root/docker_ws/chess-library
-  )
-else()
-  FetchContent_Declare(
-    chess_library
-    GIT_REPOSITORY https://github.com/Disservin/chess-library.git
-    GIT_TAG        master
-  )
-endif()
-FetchContent_MakeAvailable(chess_library)
 
 pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET
   gstreamer-1.0
@@ -53,10 +42,20 @@ pkg_check_modules(HAILO_TAPPAS REQUIRED IMPORTED_TARGET
   gsthailometa
 )
 
-set(HAILO_EXTRA_INCLUDES
-  /usr/include/hailo
-  /usr/include/hailo/tappas
-)
+set(HAILO_EXTRA_INCLUDES)
+find_path(HAILO_INCLUDE_DIR NAMES hailo/hailort.h PATHS /usr/include/hailo /usr/local/include/hailo)
+if(HAILO_INCLUDE_DIR)
+  list(APPEND HAILO_EXTRA_INCLUDES ${HAILO_INCLUDE_DIR})
+elseif(EXISTS "/usr/include/hailo")
+  list(APPEND HAILO_EXTRA_INCLUDES "/usr/include/hailo")
+endif()
+
+find_path(HAILO_TAPPAS_INCLUDE_DIR NAMES hailo_objects.hpp PATHS /usr/include/hailo/tappas /usr/local/include/hailo/tappas)
+if(HAILO_TAPPAS_INCLUDE_DIR)
+  list(APPEND HAILO_EXTRA_INCLUDES ${HAILO_TAPPAS_INCLUDE_DIR})
+elseif(EXISTS "/usr/include/hailo/tappas")
+  list(APPEND HAILO_EXTRA_INCLUDES "/usr/include/hailo/tappas")
+endif()
 
 add_library(lekiwi_chessboard_postprocess MODULE
   src/hailo/chessboard_postprocess.cpp
@@ -87,17 +86,17 @@ target_link_libraries(lekiwi_pieces_postprocess PRIVATE
 add_library(lekiwi_perception_component SHARED
   src/hailo/hailo_gst_pipeline.cpp
   src/hailo/chess_vision_mapper.cpp
-  src/hailo/chess_game_state_tracker.cpp
-  src/chess_visualizer_component.cpp
+  src/chess_overlay_component.cpp
   src/hailo_chess_inference_component.cpp
   src/camera_streamer_component.cpp
-  src/chess_engine_component.cpp
+  src/apriltag/pose_solver.cpp
+  src/apriltag/chessboard_pose_estimator.cpp
+  src/perception_utils.cpp
 )
 target_include_directories(lekiwi_perception_component PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
-  ${chess_library_SOURCE_DIR}/include
-  ${Boost_INCLUDE_DIRS}
+  ${EIGEN3_INCLUDE_DIRS}
   PRIVATE
   ${HAILO_EXTRA_INCLUDES}
   ${OpenCV_INCLUDE_DIRS}
@@ -106,7 +105,7 @@ target_link_libraries(lekiwi_perception_component
   PkgConfig::GSTREAMER
   PkgConfig::HAILO_TAPPAS
   ${OpenCV_LIBRARIES}
-  ${Boost_LIBRARIES}
+  Eigen3::Eigen
 )
 ament_target_dependencies(lekiwi_perception_component
   ament_index_cpp
@@ -114,6 +113,7 @@ ament_target_dependencies(lekiwi_perception_component
   camera_info_manager
   cv_bridge
   diagnostic_updater
+  geometry_msgs
   lekiwi_interfaces
   lifecycle_msgs
   rclcpp
@@ -121,6 +121,9 @@ ament_target_dependencies(lekiwi_perception_component
   rclcpp_lifecycle
   sensor_msgs
   std_msgs
+  tf2
+  tf2_geometry_msgs
+  tf2_ros
   vision_msgs
 )
 
@@ -130,8 +133,8 @@ rclcpp_components_register_node(lekiwi_perception_component
 )
 
 rclcpp_components_register_node(lekiwi_perception_component
-  PLUGIN "lekiwi_perception::ChessVisualizerComponent"
-  EXECUTABLE chess_visualizer_node
+  PLUGIN "lekiwi_perception::ChessOverlayComponent"
+  EXECUTABLE chess_overlay_node
 )
 
 rclcpp_components_register_node(lekiwi_perception_component
@@ -140,8 +143,8 @@ rclcpp_components_register_node(lekiwi_perception_component
 )
 
 rclcpp_components_register_node(lekiwi_perception_component
-  PLUGIN "lekiwi_perception::ChessEngineComponent"
-  EXECUTABLE chess_engine_node
+  PLUGIN "lekiwi_perception::ChessboardPoseEstimator"
+  EXECUTABLE chessboard_pose_estimator_node
 )
 
 install(TARGETS
@@ -154,9 +157,9 @@ install(TARGETS
 )
 install(TARGETS
   hailo_chess_inference_node
-  chess_visualizer_node
+  chess_overlay_node
   camera_streamer_node
-  chess_engine_node
+  chessboard_pose_estimator_node
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/
@@ -183,13 +186,39 @@ if(BUILD_TESTING)
     target_link_libraries(test_chess_vision_mapper lekiwi_perception_component)
   endif()
 
-  ament_add_gtest(test_chess_engine_component test/test_chess_engine_component.cpp)
-  if(TARGET test_chess_engine_component)
-    target_include_directories(test_chess_engine_component PRIVATE ${chess_library_SOURCE_DIR}/include)
-    target_link_libraries(test_chess_engine_component lekiwi_perception_component)
+  ament_add_gtest(test_pose_solver test/test_pose_solver.cpp)
+  if(TARGET test_pose_solver)
+    target_link_libraries(test_pose_solver lekiwi_perception_component ${OpenCV_LIBRARIES} Eigen3::Eigen)
+    ament_target_dependencies(test_pose_solver
+      rclcpp
+      diagnostic_updater
+      sensor_msgs
+      geometry_msgs
+      std_msgs
+      lekiwi_interfaces
+      tf2
+      tf2_ros
+      tf2_geometry_msgs
+      cv_bridge
+    )
+  endif()
+
+  ament_add_gtest(test_perception_utils test/test_perception_utils.cpp)
+  if(TARGET test_perception_utils)
+    target_link_libraries(test_perception_utils lekiwi_perception_component)
   endif()
 endif()
 
 ament_export_include_directories(include)
-ament_export_dependencies(cv_bridge lekiwi_interfaces sensor_msgs vision_msgs)
+ament_export_dependencies(
+  cv_bridge
+  geometry_msgs
+  lekiwi_interfaces
+  sensor_msgs
+  tf2
+  tf2_geometry_msgs
+  tf2_ros
+  vision_msgs
+  Eigen3
+)
 ament_package()

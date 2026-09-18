@@ -6,8 +6,8 @@
  * @copyright Apache-2.0
  */
 
-#ifndef APRILTAG_LOCALIZER__POSE_SOLVER_HPP_
-#define APRILTAG_LOCALIZER__POSE_SOLVER_HPP_
+#ifndef LEKIWI_PERCEPTION__APRILTAG__POSE_SOLVER_HPP_
+#define LEKIWI_PERCEPTION__APRILTAG__POSE_SOLVER_HPP_
 
 #include <map>
 #include <string>
@@ -16,7 +16,7 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 
-namespace apriltag_localizer
+namespace lekiwi_perception
 {
 
   /**
@@ -77,6 +77,6 @@ namespace apriltag_localizer
         int &used_tags_cnt);
   };
 
-} // namespace apriltag_localizer
+} // namespace lekiwi_perception
 
-#endif // APRILTAG_LOCALIZER__POSE_SOLVER_HPP_
+#endif // LEKIWI_PERCEPTION__APRILTAG__POSE_SOLVER_HPP_

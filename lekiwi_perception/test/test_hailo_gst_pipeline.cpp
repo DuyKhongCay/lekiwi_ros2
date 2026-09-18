@@ -14,8 +14,23 @@
 #include <string>
 
 #include "hailo/hailo_gst_pipeline.hpp"
+#include "hailo_chess_inference_component.hpp"
+#include "lekiwi_interfaces/msg/camera_mode.hpp"
+#include "lekiwi_interfaces/srv/set_cam_mode.hpp"
 
-TEST(HailoGstPipelineTest, BasicLifecycle)
+class HailoGstPipelineTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    if (!rclcpp::ok())
+    {
+      rclcpp::init(0, nullptr);
+    }
+  }
+};
+
+TEST_F(HailoGstPipelineTest, BasicLifecycle)
 {
   gst_init(nullptr, nullptr);
 
@@ -29,16 +44,8 @@ TEST(HailoGstPipelineTest, BasicLifecycle)
   EXPECT_TRUE(pipeline.stop(std::chrono::milliseconds(100), error));
 }
 
-#include "hailo_chess_inference_component.hpp"
-#include "lekiwi_interfaces/msg/camera_mode.hpp"
-#include "lekiwi_interfaces/srv/set_cam_mode.hpp"
-
-TEST(HailoChessInferenceComponentTest, ModeTransitionGating)
+TEST_F(HailoGstPipelineTest, ModeTransitionGating)
 {
-  if (!rclcpp::ok())
-  {
-    rclcpp::init(0, nullptr);
-  }
   rclcpp::NodeOptions options;
   auto node = std::make_shared<lekiwi_perception::HailoChessInferenceComponent>(options);
 
@@ -48,13 +55,26 @@ TEST(HailoChessInferenceComponentTest, ModeTransitionGating)
   auto request = std::make_shared<lekiwi_interfaces::srv::SetCamMode::Request>();
   auto response = std::make_shared<lekiwi_interfaces::srv::SetCamMode::Response>();
 
-  // Request invalid mode
+  // 1. Request invalid mode (e.g. 99)
   request->requested_mode.value = 99;
-  // Use ChangeState/SetMode logic directly
-  auto req_client = std::make_shared<lekiwi_interfaces::srv::SetCamMode::Request>();
-  req_client->requested_mode.value = lekiwi_interfaces::msg::CameraMode::CHESS_THINKING;
+  node->handle_set_mode(request, response);
+  EXPECT_FALSE(response->success);
+  EXPECT_EQ(response->message, "Invalid camera mode requested");
 
-  // Cleanup
+  // 2. Request valid mode (CHESS_THINKING = 1)
+  request->requested_mode.value = lekiwi_interfaces::msg::CameraMode::CHESS_THINKING;
+  node->handle_set_mode(request, response);
+  EXPECT_TRUE(response->success);
+  EXPECT_EQ(response->applied_mode.value, lekiwi_interfaces::msg::CameraMode::CHESS_THINKING);
+  EXPECT_EQ(node->current_camera_mode(), lekiwi_interfaces::msg::CameraMode::CHESS_THINKING);
+
+  // 3. Request STANDBY mode (0)
+  request->requested_mode.value = lekiwi_interfaces::msg::CameraMode::STANDBY;
+  node->handle_set_mode(request, response);
+  EXPECT_TRUE(response->success);
+  EXPECT_EQ(response->applied_mode.value, lekiwi_interfaces::msg::CameraMode::STANDBY);
+  EXPECT_EQ(node->current_camera_mode(), lekiwi_interfaces::msg::CameraMode::STANDBY);
+
+  // Cleanup without rclcpp::shutdown() to avoid side effects on other tests
   node->cleanup();
-  rclcpp::shutdown();
 }

@@ -12,7 +12,7 @@
 #ifndef LEKIWI_PERCEPTION__HAILO__CHESS_VISION_MAPPER_HPP_
 #define LEKIWI_PERCEPTION__HAILO__CHESS_VISION_MAPPER_HPP_
 
-#include <opencv2/opencv.hpp>
+#include <opencv2/core.hpp>
 #include "hailo_objects.hpp"
 
 #include <map>
