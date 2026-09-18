@@ -16,6 +16,8 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>lekiwi_control</exec_depend>
+  <exec_depend>lekiwi_manipulation</exec_depend>
+  <exec_depend>lekiwi_orchestrator</exec_depend>
   <exec_depend>lekiwi_description</exec_depend>
   <exec_depend>diagnostic_aggregator</exec_depend>
   <exec_depend>diagnostic_common_diagnostics</exec_depend>

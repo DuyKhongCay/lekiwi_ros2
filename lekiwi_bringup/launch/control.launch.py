@@ -45,7 +45,7 @@ def generate_launch_description():
     )
 
     orchestrator = Node(
-        package="lekiwi_control",
+        package="lekiwi_orchestrator",
         executable="task_orchestrator",
         name="task_orchestrator",
         parameters=[
@@ -56,7 +56,7 @@ def generate_launch_description():
     )
 
     arm_bridge = Node(
-        package="lekiwi_control",
+        package="lekiwi_manipulation",
         executable="lerobot_arm_bridge",
         name="lerobot_arm_bridge",
         parameters=[
@@ -70,7 +70,7 @@ def generate_launch_description():
     )
 
     tf_gatekeeper = Node(
-        package="lekiwi_control",
+        package="lekiwi_orchestrator",
         executable="tf_gatekeeper",
         name="tf_readiness_gatekeeper",
         parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],

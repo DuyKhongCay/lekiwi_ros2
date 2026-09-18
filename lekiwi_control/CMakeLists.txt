@@ -8,10 +8,6 @@ ament_python_install_package(${PROJECT_NAME})
 
 install(
   PROGRAMS
-    scripts/camera_mode_demo
-    scripts/task_orchestrator
-    scripts/lerobot_arm_bridge
-    scripts/tf_gatekeeper
     scripts/workspace_checker
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -23,9 +19,6 @@ install(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(test_fsm test/test_fsm.py)
-  ament_add_pytest_test(test_task_orchestrator test/test_task_orchestrator.py)
-  ament_add_pytest_test(test_tf_gatekeeper test/test_tf_gatekeeper.py)
   ament_add_pytest_test(test_workspace_checker test/test_workspace_checker.py)
 endif()
 

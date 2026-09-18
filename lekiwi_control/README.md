@@ -1,78 +1,51 @@
 # `lekiwi_control`
 
-Python control package providing lifecycle boot orchestration, finite-state machine (FSM) mode transitions, and LeRobot robotic arm imitation learning policy bridging.
+Kinematics engine, workspace reachability checking, and base standoff calculation package for LeKiwi.
 
 ---
 
 ## 🧩 Modules & Executables
 
-### 1. `task_orchestrator` (`TaskOrchestratorNode`)
-Central coordinator managing startup and subsystem modes:
-- Automatically bootstraps lifecycle nodes (`lekiwi_perception` components) from `unconfigured` -> `inactive` -> `active`.
-- Hosts the `/orchestrator/set_mode` service to safely handle mode switching requests.
-- Validates transitions against the 4-mode FSM rule matrix.
-- Publishes the system-wide latched topic `/camera_mode` (`transient_local` QoS).
+### 1. `kinematics_engine.py`
+Pure Python closed-form analytical kinematics and reachability math:
+- Forward kinematics (FK) and 3-DOF planar arm inverse kinematics (IK).
+- Joint angle limit checking against hardware constraints.
+- Base standoff pose calculation (`compute_standoff_pose`, `find_common_standoff_pose`) for mobile repositioning when a chess target square is out of manipulator reach.
 
-### 2. `lerobot_arm_bridge` (`LeRobotArmBridge`)
-Translates LeRobot named arm joint observations and actions without requiring direct hardware device ownership:
-- Listens for LeRobot actions on `/lerobot/arm_action` (supports `raw`, `radians`, or `degrees`).
-- Computes goal points using calibration midpoints from `lekiwi_arm_calib.yaml` and sends action goals to `/arm_controller/follow_joint_trajectory`.
-- Listens to `/joint_states` and publishes calibrated raw observations on `/lerobot/arm_observation`.
-
-### 3. `fsm.py` (Finite State Machine)
-Defines legal operational state transitions:
-
-```text
-       +------------+
-       |  STANDBY   | <----------+
-       +-----+------+            |
-             |                   |
-             v                   |
-       +------------+            |
-+----> | NAVIGATING | -----------+
-|      +-----+------+            |
-|            |                   |
-|            v                   |
-|      +----------------+        |
-+----> | CHESS_THINKING | -------+
-|      +-----+----------+        |
-|            |                   |
-|            v                   |
-|      +------------------------+|
-+----> | MANIPULATION_LEROBOT   |+
-       +------------------------+
-```
+### 2. `workspace_checker` (`WorkspaceCheckerNode`)
+ROS 2 service node providing workspace feasibility evaluation:
+- Service `/workspace/check_reachability` (`lekiwi_interfaces/srv/CheckMoveFeasibility`):
+  - Validates pick and place target reachability via TF2 and analytical IK.
+  - Generates recommended base repositioning poses (`recommended_base_pose`, `secondary_base_pose`) if targets are unreachable from current base pose.
+  - Returns joint position hints (`pick_ik_hint`, `place_ik_hint`) for policy servers.
+- Dynamic parameter re-synchronization with URDF and TF transforms.
+- Diagnostic reporting on `/diagnostics`.
 
 ---
 
 ## 📡 Topics & Services
 
-### Published Topics
-| Topic | Type | Description |
-|---|---|---|
-| `/camera_mode` | `lekiwi_interfaces/msg/CameraMode` | Latched current system camera mode. |
-| `/lerobot/arm_observation` | `sensor_msgs/msg/JointState` | Calibrated raw arm joint feedback for LeRobot policies. |
-
 ### Subscribed Topics
 | Topic | Type | Description |
 |---|---|---|
-| `/lerobot/arm_action` | `sensor_msgs/msg/JointState` | Action trajectory target from LeRobot. |
-| `/joint_states` | `sensor_msgs/msg/JointState` | Real-time joint positions from `joint_state_broadcaster`. |
+| `/tf`, `/tf_static` | `tf2_msgs/msg/TFMessage` | Frame transforms for base and manipulator links. |
+| `/joint_states` | `sensor_msgs/msg/JointState` | Arm joint states for current position feedback. |
 
-### Services & Actions
+### Published Topics
+| Topic | Type | Description |
+|---|---|---|
+| `/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | System diagnostics on kinematics engine readiness. |
+
+### Services
 | Name | Type | Description |
 |---|---|---|
-| `/orchestrator/set_mode` | `lekiwi_interfaces/srv/SetCamMode` | Service endpoint to trigger mode transitions. |
-| `/arm_controller/follow_joint_trajectory` | `control_msgs/action/FollowJointTrajectory` | Action client executing arm trajectories on ros2_control. |
+| `/workspace/check_reachability` | `lekiwi_interfaces/srv/CheckMoveFeasibility` | Feasibility check and IK hints / base standoff calculation. |
 
 ---
 
 ## 🧪 Testing
 
-Run Python pytest unit tests for the FSM and orchestrator:
-
 ```bash
-colcon test --packages-select lekiwi_control --event-handlers console_direct+
-colcon test-result --verbose
+colcon test --packages-select lekiwi_control --event-handlers console_cohesion+
+colcon test-result --test-result-base build/lekiwi_control --verbose
 ```
-
