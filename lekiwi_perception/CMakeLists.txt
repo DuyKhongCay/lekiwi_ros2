@@ -90,7 +90,7 @@ add_library(lekiwi_perception_component SHARED
   src/hailo_chess_inference_component.cpp
   src/camera_streamer_component.cpp
   src/apriltag/pose_solver.cpp
-  src/apriltag/chessboard_pose_estimator.cpp
+  src/chessboard_pose_estimator.cpp
   src/perception_utils.cpp
 )
 target_include_directories(lekiwi_perception_component PUBLIC
@@ -206,6 +206,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_perception_utils test/test_perception_utils.cpp)
   if(TARGET test_perception_utils)
     target_link_libraries(test_perception_utils lekiwi_perception_component)
+  endif()
+
+  ament_add_gtest(test_chess_overlay_component test/test_chess_overlay_component.cpp)
+  if(TARGET test_chess_overlay_component)
+    target_link_libraries(test_chess_overlay_component lekiwi_perception_component ${OpenCV_LIBRARIES})
   endif()
 endif()
 

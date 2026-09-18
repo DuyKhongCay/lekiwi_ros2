@@ -58,6 +58,15 @@ namespace lekiwi_perception
     void drawChessboardGrid(
         cv::Mat &frame, const std::vector<geometry_msgs::msg::Point32> &grid_pts);
 
+    void drawTextBadge(
+        cv::Mat &frame,
+        const std::string &text,
+        const cv::Point &pos,
+        const cv::Scalar &text_color,
+        const cv::Scalar &bg_color = cv::Scalar(0, 0, 0),
+        double font_scale = 0.45,
+        int baseline_pad = 2);
+
     // ROS 2 Communications
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
     rclcpp::Subscription<vision_msgs::msg::Detection2DArray>::SharedPtr detections_sub_;
@@ -74,11 +83,15 @@ namespace lekiwi_perception
     std::string overlay_topic_{"/chess/overlay_image/compressed"};
     int jpeg_quality_{80};
     bool debug_{false};
+    double stale_timeout_sec_{0.5};
     std::map<int, int> tag_offsets_;
 
     std::vector<vision_msgs::msg::Detection2D> latest_detections_;
     std::vector<geometry_msgs::msg::Point32> latest_tag_centers_;
     std::vector<geometry_msgs::msg::Point32> latest_grid_points_;
+    rclcpp::Time last_detections_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time last_tag_centers_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time last_grid_points_time_{0, 0, RCL_ROS_TIME};
     std::mutex state_mutex_;
 
     // FPS & Performance tracking

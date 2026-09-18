@@ -9,7 +9,7 @@
  * @copyright Apache-2.0
  */
 
-#include "apriltag/chessboard_pose_estimator.hpp"
+#include "chessboard_pose_estimator.hpp"
 
 #include <cmath>
 #include <limits>

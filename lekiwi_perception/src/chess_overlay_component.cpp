@@ -27,6 +27,7 @@ namespace lekiwi_perception
     overlay_topic_ = declare_parameter<std::string>("overlay_topic", "/chess/overlay_image/compressed");
     jpeg_quality_ = declare_parameter<int>("jpeg_quality", 80);
     debug_ = declare_parameter<bool>("debug", false);
+    stale_timeout_sec_ = declare_parameter<double>("stale_timeout_sec", 0.5);
 
     const auto tag_ids = declare_parameter<std::vector<int64_t>>("tags.ids", {0, 1, 2, 3});
     tag_offsets_.clear();
@@ -36,8 +37,8 @@ namespace lekiwi_perception
     }
 
     RCLCPP_INFO(get_logger(),
-                "Starting ChessOverlayComponent (Camera: %s, Overlay: %s, JPEG Quality: %d)",
-                camera_topic_.c_str(), overlay_topic_.c_str(), jpeg_quality_);
+                "Starting ChessOverlayComponent (Camera: %s, Overlay: %s, JPEG Quality: %d, TTL: %.2fs)",
+                camera_topic_.c_str(), overlay_topic_.c_str(), jpeg_quality_, stale_timeout_sec_);
 
     camera_sub_ = create_subscription<sensor_msgs::msg::Image>(
         camera_topic_, rclcpp::SensorDataQoS(),
@@ -63,18 +64,56 @@ namespace lekiwi_perception
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     latest_detections_ = msg->detections;
+    last_detections_time_ = now();
   }
 
   void ChessOverlayComponent::tagCentersCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     latest_tag_centers_ = msg->polygon.points;
+    last_tag_centers_time_ = now();
   }
 
   void ChessOverlayComponent::gridPointsCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     latest_grid_points_ = msg->polygon.points;
+    last_grid_points_time_ = now();
+  }
+
+  void ChessOverlayComponent::drawTextBadge(
+      cv::Mat &frame,
+      const std::string &text,
+      const cv::Point &pos,
+      const cv::Scalar &text_color,
+      const cv::Scalar &bg_color,
+      double font_scale,
+      int baseline_pad)
+  {
+    if (frame.empty() || text.empty())
+    {
+      return;
+    }
+
+    int baseline = 0;
+    cv::Size text_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, font_scale, 1, &baseline);
+
+    int box_w = text_size.width + 4;
+    int box_h = text_size.height + baseline_pad * 2;
+
+    int box_x = std::clamp(pos.x - 2, 0, std::max(0, frame.cols - box_w));
+    int box_y = std::clamp(pos.y - text_size.height - baseline_pad, 0, std::max(0, frame.rows - box_h));
+
+    cv::rectangle(
+        frame, cv::Rect(box_x, box_y, box_w, box_h),
+        bg_color, -1);
+
+    int text_x = box_x + 2;
+    int text_y = box_y + text_size.height + baseline_pad - 1;
+
+    cv::putText(
+        frame, text, cv::Point(text_x, text_y),
+        cv::FONT_HERSHEY_SIMPLEX, font_scale, text_color, 1, cv::LINE_AA);
   }
 
   void ChessOverlayComponent::drawPieceDetections(
@@ -106,17 +145,7 @@ namespace lekiwi_perception
 
       std::stringstream label_ss;
       label_ss << label << " " << std::fixed << std::setprecision(2) << conf;
-      std::string label_str = label_ss.str();
-
-      int baseline = 0;
-      cv::Size text_size = cv::getTextSize(label_str, cv::FONT_HERSHEY_SIMPLEX, 0.4, 1, &baseline);
-      int label_y1 = std::max(y1 - text_size.height - 4, 0);
-      cv::rectangle(
-          frame, cv::Rect(x1, label_y1, text_size.width + 4, text_size.height + 4),
-          color, -1);
-      cv::putText(
-          frame, label_str, cv::Point(x1 + 2, label_y1 + text_size.height + 1),
-          cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
+      drawTextBadge(frame, label_ss.str(), cv::Point(x1, y1), cv::Scalar(0, 0, 0), color, 0.4, 2);
     }
   }
 
@@ -156,19 +185,7 @@ namespace lekiwi_perception
       }
       std::stringstream tag_text_ss;
       tag_text_ss << tag_name << "(" << u << "," << v << ")";
-      std::string tag_text = tag_text_ss.str();
-
-      int baseline = 0;
-      cv::Size text_size = cv::getTextSize(tag_text, cv::FONT_HERSHEY_SIMPLEX, 0.45, 1, &baseline);
-      int text_x = std::clamp(u + 10, 0, frame.cols - text_size.width - 4);
-      int text_y = std::clamp(v - 8, text_size.height + 4, frame.rows - 4);
-
-      cv::rectangle(
-          frame, cv::Rect(text_x - 2, text_y - text_size.height - 2, text_size.width + 4, text_size.height + 4),
-          cv::Scalar(0, 0, 0), -1);
-      cv::putText(
-          frame, tag_text, cv::Point(text_x, text_y),
-          cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+      drawTextBadge(frame, tag_text_ss.str(), cv::Point(u + 10, v - 8), cv::Scalar(0, 255, 255), cv::Scalar(0, 0, 0), 0.45, 1);
     }
 
     if (corners_px.count(0) && corners_px.count(1) && corners_px.count(2) && corners_px.count(3))
@@ -227,20 +244,18 @@ namespace lekiwi_perception
       cv::circle(frame, pt, 5, cv::Scalar(0, 255, 255), -1, cv::LINE_AA);
       cv::circle(frame, pt, 8, cv::Scalar(0, 140, 255), 2, cv::LINE_AA);
 
-      int baseline = 0;
-      cv::Size text_size = cv::getTextSize(name, cv::FONT_HERSHEY_SIMPLEX, 0.40, 1, &baseline);
-      int tx = std::clamp(pt.x + 8, 0, frame.cols - text_size.width - 4);
-      int ty = std::clamp(pt.y - 6, text_size.height + 4, frame.rows - 4);
-
-      cv::rectangle(frame, cv::Rect(tx - 2, ty - text_size.height - 2, text_size.width + 4, text_size.height + 4),
-                    cv::Scalar(0, 0, 0), -1);
-      cv::putText(frame, name, cv::Point(tx, ty), cv::FONT_HERSHEY_SIMPLEX, 0.40,
-                  cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+      drawTextBadge(frame, name, cv::Point(pt.x + 8, pt.y - 6), cv::Scalar(0, 255, 255), cv::Scalar(0, 0, 0), 0.40, 1);
     }
   }
 
   void ChessOverlayComponent::cameraImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg)
   {
+    // Lazy Evaluation: Don't do heavy cloning, overlay drawing, and JPEG compression if nobody is listening
+    if (overlay_pub_->get_subscription_count() == 0)
+    {
+      return;
+    }
+
     cv_bridge::CvImageConstPtr cv_ptr;
     try
     {
@@ -263,11 +278,25 @@ namespace lekiwi_perception
     std::vector<vision_msgs::msg::Detection2D> dets;
     std::vector<geometry_msgs::msg::Point32> tags;
     std::vector<geometry_msgs::msg::Point32> grid_pts;
+
+    const rclcpp::Time current_time = now();
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      dets = latest_detections_;
-      tags = latest_tag_centers_;
-      grid_pts = latest_grid_points_;
+      if (last_detections_time_.nanoseconds() > 0 &&
+          (current_time - last_detections_time_).seconds() <= stale_timeout_sec_)
+      {
+        dets = latest_detections_;
+      }
+      if (last_tag_centers_time_.nanoseconds() > 0 &&
+          (current_time - last_tag_centers_time_).seconds() <= stale_timeout_sec_)
+      {
+        tags = latest_tag_centers_;
+      }
+      if (last_grid_points_time_.nanoseconds() > 0 &&
+          (current_time - last_grid_points_time_).seconds() <= stale_timeout_sec_)
+      {
+        grid_pts = latest_grid_points_;
+      }
     }
 
     drawChessboardGrid(overlay_img, grid_pts);
@@ -279,8 +308,7 @@ namespace lekiwi_perception
       float fps = perf_tracker_.get_fps();
       std::stringstream fps_ss;
       fps_ss << std::fixed << std::setprecision(1) << "FPS: " << fps;
-      cv::putText(overlay_img, fps_ss.str(), cv::Point(20, 30),
-                  cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
+      drawTextBadge(overlay_img, fps_ss.str(), cv::Point(20, 30), cv::Scalar(0, 255, 0), cv::Scalar(0, 0, 0), 0.6, 2);
     }
 
     const std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};

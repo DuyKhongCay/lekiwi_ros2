@@ -73,33 +73,9 @@ namespace lekiwi_perception::hailo
     return std::to_string(class_id);
   }
 
-  /**
-   * @brief Retrieves 0-based neural network class ID from piece label, or -1 if invalid.
-   */
-  inline int class_id_from_piece_label(const std::string &label)
-  {
-    for (std::size_t i = 0; i < kPieceClassCount; ++i)
-    {
-      if (label == kPieceLabels[i])
-      {
-        return static_cast<int>(i);
-      }
-    }
-    return -1;
-  }
-
   // ---------------------------------------------------------------------------
   // Chessboard Geometry & Grid Constants
   // ---------------------------------------------------------------------------
-
-  /// Number of files (columns) on standard chessboard
-  inline constexpr int kBoardFiles = 8;
-
-  /// Number of ranks (rows) on standard chessboard
-  inline constexpr int kBoardRanks = 8;
-
-  /// Total number of squares on chessboard
-  inline constexpr int kNumSquares = 64;
 
   /// Total number of grid intersection points ($9 \times 9 = 81$)
   inline constexpr std::size_t kGridPointsCount = 81U;
@@ -117,29 +93,10 @@ namespace lekiwi_perception::hailo
   /// Nominal corner algebraic names ordered [BL, BR, TR, TL]
   inline constexpr std::array<const char *, 4> kCornerNames = {"A1", "H1", "H8", "A8"};
 
-  // ---------------------------------------------------------------------------
-  // Canonical FEN (Forsyth-Edwards Notation) Constants
-  // ---------------------------------------------------------------------------
-
-  /// Standard FIDE starting position full FEN string
-  inline constexpr const char *kStandardStartingFen =
-      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-
-  /// Standard FIDE starting position 8-rank piece placement
-  inline constexpr const char *kStandardStartingPlacement =
-      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
-
-  /// Empty chessboard 8-rank piece placement
-  inline constexpr const char *kEmptyBoardPlacement =
-      "8/8/8/8/8/8/8/8";
 
   // ---------------------------------------------------------------------------
-  // Piece Sprite Assets & Visualization Colors
+  // Piece Visualization Colors
   // ---------------------------------------------------------------------------
-
-  /// Mapping from standard piece code to PNG sprite asset filenames in resources/pieces
-  inline const std::map<std::string, std::string> kPiecePngNames = {
-      {"B", "w-bishop.png"}, {"K", "w-king.png"}, {"N", "w-knight.png"}, {"P", "w-pawn.png"}, {"Q", "w-queen.png"}, {"R", "w-rook.png"}, {"b", "b-bishop.png"}, {"k", "b-king.png"}, {"n", "b-knight.png"}, {"p", "b-pawn.png"}, {"q", "b-queen.png"}, {"r", "b-rook.png"}};
 
   /**
    * @brief Returns distinct BGR color for visualizer bounding box overlays.
