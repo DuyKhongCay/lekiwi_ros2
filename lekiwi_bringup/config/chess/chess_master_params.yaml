@@ -19,6 +19,6 @@ chessboard_visualizer:
     board_2d_topic: "/chess/board_2d/compressed"
     jpeg_quality: 85
     board_panel_size: 480
-    debug: false
+    debug: true
     render_rate_hz: 5.0
 

@@ -505,33 +505,27 @@ namespace lekiwi_chess_master
     drawHeaderAndFooter(panel, ctx, piece_count, layout);
   }
 
+  BoardDisplayContext ChessboardVisualizerComponent::buildDisplayContext() const
+  {
+    auto ctx = has_status_ ? BoardDisplayContext::fromGameStatus(latest_status_)
+                           : BoardDisplayContext{};
+
+    // Override board representation with real-time camera vision when debug is active or before status is received
+    if (!latest_raw_fen_.empty() && (debug_ || !has_status_))
+    {
+      ctx.fen = latest_raw_fen_;
+      ctx.is_raw_view = true;
+    }
+
+    return ctx;
+  }
+
   void ChessboardVisualizerComponent::renderAndPublish()
   {
     BoardDisplayContext ctx;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      if (has_status_)
-      {
-        ctx.fen = latest_status_.full_fen;
-        ctx.last_move = latest_status_.last_move;
-        ctx.best_move = latest_status_.best_move;
-        ctx.eval_cp = latest_status_.eval_centipawns;
-        ctx.game_phase = latest_status_.game_phase;
-        ctx.is_check = latest_status_.is_check;
-        ctx.is_checkmate = latest_status_.is_checkmate;
-        ctx.is_draw = latest_status_.is_draw;
-        ctx.is_raw_view = false;
-      }
-      else if (!latest_raw_fen_.empty())
-      {
-        ctx.fen = latest_raw_fen_;
-        ctx.is_raw_view = true;
-      }
-      else
-      {
-        ctx.fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-        ctx.is_raw_view = false;
-      }
+      ctx = buildDisplayContext();
     }
 
     cv::Mat panel;

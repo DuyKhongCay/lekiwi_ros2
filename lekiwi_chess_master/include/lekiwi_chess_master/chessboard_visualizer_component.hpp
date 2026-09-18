@@ -44,7 +44,7 @@ namespace lekiwi_chess_master
 
   struct BoardDisplayContext
   {
-    std::string fen;
+    std::string fen{"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"};
     std::string last_move;
     std::string best_move;
     int32_t eval_cp{0};
@@ -53,6 +53,20 @@ namespace lekiwi_chess_master
     bool is_checkmate{false};
     bool is_draw{false};
     bool is_raw_view{false};
+
+    static BoardDisplayContext fromGameStatus(const lekiwi_interfaces::msg::ChessGameStatus &status)
+    {
+      BoardDisplayContext ctx;
+      ctx.fen = status.full_fen;
+      ctx.last_move = status.last_move;
+      ctx.best_move = status.best_move;
+      ctx.eval_cp = status.eval_centipawns;
+      ctx.game_phase = status.game_phase;
+      ctx.is_check = status.is_check;
+      ctx.is_checkmate = status.is_checkmate;
+      ctx.is_draw = status.is_draw;
+      return ctx;
+    }
   };
 
   /**
@@ -74,6 +88,7 @@ namespace lekiwi_chess_master
 
     // High-level rendering orchestration
     void renderAndPublish();
+    BoardDisplayContext buildDisplayContext() const;
     void render2DBoardPanel(cv::Mat &panel, const BoardDisplayContext &ctx);
 
     // Focused helper methods

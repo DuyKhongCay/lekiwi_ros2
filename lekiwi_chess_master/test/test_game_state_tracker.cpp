@@ -10,6 +10,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
 #include "lekiwi_chess_master/chess_game_state_tracker_component.hpp"
+#include "lekiwi_chess_master/chessboard_visualizer_component.hpp"
 
 using namespace lekiwi_chess_master;
 
@@ -130,4 +131,42 @@ TEST_F(ChessGameStateTrackerTestFixture, InitialGameStatusProperties)
 
   EXPECT_EQ(node->get_game_phase(), lekiwi_interfaces::msg::ChessGameStatus::PHASE_WAITING_PLAYER);
   EXPECT_TRUE(node->get_best_move().empty());
+}
+
+TEST(BoardDisplayContextTest, DefaultInitialization)
+{
+  BoardDisplayContext ctx;
+  EXPECT_EQ(ctx.fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  EXPECT_TRUE(ctx.last_move.empty());
+  EXPECT_TRUE(ctx.best_move.empty());
+  EXPECT_EQ(ctx.eval_cp, 0);
+  EXPECT_EQ(ctx.game_phase, 0);
+  EXPECT_FALSE(ctx.is_check);
+  EXPECT_FALSE(ctx.is_checkmate);
+  EXPECT_FALSE(ctx.is_draw);
+  EXPECT_FALSE(ctx.is_raw_view);
+}
+
+TEST(BoardDisplayContextTest, FromGameStatusFactory)
+{
+  lekiwi_interfaces::msg::ChessGameStatus status;
+  status.full_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+  status.last_move = "e2e4";
+  status.best_move = "e7e5";
+  status.eval_centipawns = 45;
+  status.game_phase = lekiwi_interfaces::msg::ChessGameStatus::PHASE_ROBOT_READY;
+  status.is_check = true;
+  status.is_checkmate = false;
+  status.is_draw = false;
+
+  auto ctx = BoardDisplayContext::fromGameStatus(status);
+  EXPECT_EQ(ctx.fen, status.full_fen);
+  EXPECT_EQ(ctx.last_move, "e2e4");
+  EXPECT_EQ(ctx.best_move, "e7e5");
+  EXPECT_EQ(ctx.eval_cp, 45);
+  EXPECT_EQ(ctx.game_phase, lekiwi_interfaces::msg::ChessGameStatus::PHASE_ROBOT_READY);
+  EXPECT_TRUE(ctx.is_check);
+  EXPECT_FALSE(ctx.is_checkmate);
+  EXPECT_FALSE(ctx.is_draw);
+  EXPECT_FALSE(ctx.is_raw_view);
 }
