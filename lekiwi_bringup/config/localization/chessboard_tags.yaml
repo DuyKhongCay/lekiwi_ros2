@@ -6,18 +6,17 @@
     calib: false
     min_tags_cnt: 2
 
-    # Calibrated tag definitions in chessboard_frame (origin at A1):
-    # +X: A1 -> H1 (File A -> H)
-    # +Y: A1 -> A8 (Rank 1 -> 8)
+    # Calibrated tag definitions in chessboard_frame (origin at CENTER of board):
+    # +X: File A -> H (Left -> Right)
+    # +Y: Rank 1 -> 8 (Bottom -> Top)
     # +Z: Normal pointing up perpendicular to the board
     tags:
-      # Calibration Date & Time: 2026-09-10 23:52:04
       ids: [0, 1, 2, 3]
       names: ['A1', 'H1', 'H8', 'A8']
-      positions_x: [0.0000, 0.3901, 0.3894, 0.0006]
-      positions_y: [0.0000, -0.0015, 0.3900, 0.3910]
+      positions_x: [-0.1950, 0.1950, 0.1950, -0.1950]
+      positions_y: [-0.1950, -0.1950, 0.1950, 0.1950]
       positions_z: [0.0040, 0.0040, 0.0040, 0.0040]
-      yaws: [0.0000, 0.0136, -0.0103, -0.0087]
+      yaws: [0.0000, 0.0000, 0.0000, 0.0000]
 
 
     # Frame IDs

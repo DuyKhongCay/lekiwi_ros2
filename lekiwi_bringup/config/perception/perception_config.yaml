@@ -1,9 +1,13 @@
 /**:
   ros__parameters:
+    # Global Debug Flag for Perception Pipeline
+    debug: false
+
     # Common Topics & Frames
     frame_id: "stereo_left_optical"
     camera_topic: "/cameras/stereo_left/image_raw"
-    fen_topic: "/chess/fen"
+    fen_topic: "/chess/raw_fen"
+    game_state_topic: "/chess/game_state"
     detections_topic: "/chess/detections_2d"
     tag_centers_topic: "/chess/tag_centers"
     grid_points_topic: "/chess/grid_points"
@@ -27,29 +31,20 @@ hailo_chess_inference:
     pcs_hef_path: /root/docker_ws/lekiwi_ros2/install/lekiwi_perception/share/lekiwi_perception/resources/models/yolo11n.hef
 
     # Processing & Game State Parameters
-    debug: true
     transition_timeout_ms: 5000
     history_window_size: 3
     confidence_threshold: 0.35
-    autostart: true
 
+    debug: true
 
-chess_visualizer:
+chess_overlay:
   ros__parameters:
     # camera_topic: "/cameras/stereo_left/image_raw"
-    # fen_topic: "/chess/fen"
     # detections_topic: "/chess/detections_2d"
     # tag_centers_topic: "/chess/tag_centers"
     # grid_points_topic: "/chess/grid_points"
     overlay_topic: "/chess/overlay_image/compressed"
-    board_2d_topic: "/chess/board_2d/compressed"
     jpeg_quality: 85
-    board_panel_size: 480
-
-chess_engine:
-  ros__parameters:
-    stockfish_path: "/usr/games/stockfish"
-    think_time_ms: 1000
-    robot_color: "black"
-    auto_play: true
+    debug: true
+    
 

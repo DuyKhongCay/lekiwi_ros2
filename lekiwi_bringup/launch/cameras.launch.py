@@ -59,31 +59,23 @@ def generate_launch_description():
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
-    chess_visualizer_component = ComposableNode(
+    chess_overlay_component = ComposableNode(
         package="lekiwi_perception",
-        plugin="lekiwi_perception::ChessVisualizerComponent",
-        name="chess_visualizer",
-        parameters=[perception_params_file],
-        extra_arguments=[{"use_intra_process_comms": True}],
-    )
-
-    chess_engine_component = ComposableNode(
-        package="lekiwi_perception",
-        plugin="lekiwi_perception::ChessEngineComponent",
-        name="chess_engine",
+        plugin="lekiwi_perception::ChessOverlayComponent",
+        name="chess_overlay",
         parameters=[perception_params_file],
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
     chessboard_estimator_component = ComposableNode(
-        package="apriltag_localizer",
-        plugin="apriltag_localizer::ChessboardPoseEstimator",
+        package="lekiwi_perception",
+        plugin="lekiwi_perception::ChessboardPoseEstimator",
         name="chessboard_pose_estimator",
         namespace="",
         remappings=[
             ("~/image_raw", "/cameras/stereo_left/image_raw"),
             ("~/camera_info", "/cameras/stereo_left/camera_info"),
-            ("~/camera_mode", "/system/camera_mode"),
+            ("~/camera_mode", "/camera_mode"),
         ],
         parameters=[chessboard_params_file],
         extra_arguments=[{"use_intra_process_comms": True}],
@@ -92,8 +84,7 @@ def generate_launch_description():
     all_components = [
         *camera_components,
         inference_component,
-        chess_visualizer_component,
-        chess_engine_component,
+        chess_overlay_component,
         chessboard_estimator_component,
     ]
 

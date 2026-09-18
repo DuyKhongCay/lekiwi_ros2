@@ -32,7 +32,7 @@
   <exec_depend>teleop_zhongli_servo_hw</exec_depend>
   <exec_depend>lekiwi_ftservo_hardware</exec_depend>
   <exec_depend>lekiwi_perception</exec_depend>
-  <exec_depend>apriltag_localizer</exec_depend>
+  <exec_depend>lekiwi_chess_master</exec_depend>
 
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>

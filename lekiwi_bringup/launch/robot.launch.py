@@ -117,7 +117,7 @@ def generate_launch_description():
             PathJoinSubstitution([bringup_share, "launch", "control.launch.py"])
         ),
         launch_arguments={
-            "start_tf_gatekeeper": "false",
+            "start_tf_gatekeeper": "true",
             "start_workspace_checker": "false",
             "use_sim_time": LaunchConfiguration("use_sim_time"),
         }.items(),
