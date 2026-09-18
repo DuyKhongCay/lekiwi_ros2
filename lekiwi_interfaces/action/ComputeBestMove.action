@@ -1,0 +1,21 @@
+# ====== GOAL ======
+string fen                  # Standard 6-field FEN or piece placement
+uint32 think_time_ms        # Thinking time in milliseconds (0 = engine default)
+uint32 depth                # Max search depth (0 = unlimited by depth)
+---
+# ====== RESULT ======
+bool success                # True if a valid move was found
+string best_move            # Best move in UCI format (e.g. "e2e4")
+string ponder_move          # Expected response move (if available)
+int32 eval_centipawns       # Evaluation score in centipawns (positive = white advantage)
+bool is_mate                # True if mate is detected
+int32 mate_in_moves         # Moves until mate (+ = robot wins, - = robot loses)
+string message              # Error or status description
+---
+# ====== FEEDBACK ======
+uint32 current_depth        # Current search depth
+int32 current_eval          # Intermediate score in centipawns
+uint64 nodes_per_second     # Engine speed (NPS)
+uint32 elapsed_time_ms      # Elapsed thinking time
+string current_pv           # Current principal variation line
+

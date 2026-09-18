@@ -15,10 +15,12 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CameraMode.msg"
   "msg/ServoTelemetry.msg"
   "msg/DriveStatus.msg"
+  "msg/ChessGameStatus.msg"
   "srv/SetCamMode.srv"
   "srv/SetTorqueEnabled.srv"
   "srv/ResetMotorBus.srv"
-  "srv/CheckReachability.srv"
+  "srv/CheckMoveFeasibility.srv"
+  "action/ComputeBestMove.action"
   DEPENDENCIES std_msgs geometry_msgs sensor_msgs
 )
 
