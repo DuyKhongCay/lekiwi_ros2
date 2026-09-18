@@ -1,12 +1,5 @@
-# Copyright 2026 LeKiwi Labs
-# Licensed under the Apache License, Version 2.0.
+"""Omni-Wheel Base Kinematic Calibration Sub-module."""
 
-"""Backward compatibility shim for omni base calibrator.
-
-All calibration logic has moved to `lekiwi_calibration.omni`.
-"""
-
-import warnings
 from lekiwi_calibration.omni.kinematics_calib import (
     compute_robot_radius_calib,
     compute_square_umbmark,
@@ -22,13 +15,6 @@ try:
 except ImportError:
     OmniBaseCalibratorNode = None
     main = None
-
-warnings.warn(
-    "lekiwi_control.omni_base_calibrator is deprecated. "
-    "Please use lekiwi_calibration.omni instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
 
 __all__ = [
     "OmniBaseCalibratorNode",

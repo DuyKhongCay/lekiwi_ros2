@@ -2,7 +2,7 @@ import os
 from glob import glob
 from setuptools import find_packages, setup
 
-package_name = "handeye_calibration"
+package_name = "lekiwi_calibration"
 
 setup(
     name=package_name,
@@ -18,13 +18,15 @@ setup(
     zip_safe=True,
     maintainer="duykhongcay",
     maintainer_email="duykhongcay@todo.todo",
-    description="Lightweight Hand-Eye calibration for LeKiwi robot with native GUI.",
+    description="Unified calibration suite for LeKiwi robot",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "handeye_calibration_node = handeye_calibration.handeye_calibration_node:main",
-            "generate_charuco = handeye_calibration.generate_charuco:main",
+            "calibrate_chessboard = lekiwi_calibration.chessboard.calibrator_node:main",
+            "calibrate_omni_base = lekiwi_calibration.omni.omni_base_calibrator_node:main",
+            "calibrate_handeye = lekiwi_calibration.handeye.handeye_calibration_node:main",
+            "generate_charuco = lekiwi_calibration.handeye.generate_charuco:main",
         ],
     },
 )

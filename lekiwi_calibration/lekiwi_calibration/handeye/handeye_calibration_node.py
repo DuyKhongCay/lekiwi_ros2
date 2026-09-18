@@ -21,9 +21,9 @@ from cv_bridge import CvBridge
 import tf2_ros
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 
-from handeye_calibration.charuco_detector import CharucoDetectorHelper
-from handeye_calibration.robot_controller_client import RobotArmManager
-from handeye_calibration.handeye_solver import HandEyeSolver
+from lekiwi_calibration.handeye.charuco_detector import CharucoDetectorHelper
+from lekiwi_calibration.handeye.robot_controller_client import RobotArmManager
+from lekiwi_calibration.handeye.handeye_solver import HandEyeSolver
 
 
 class HandEyeCalibrationNode(Node):

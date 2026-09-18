@@ -15,7 +15,6 @@
     nominal_dist: 0.39
     z_height: 0.004
 
-
     # Live capture & optimization settings
     min_tags_cnt: 3
     target_caps_cnt: 20
@@ -25,6 +24,6 @@
     window_name: "LeKiwi Chessboard Tag Calibrator"
     disp_scale: 1.0
 
-    # Output chessboard tags configuration path to update
-    output_yaml_path: "package://apriltag_localizer/config/calib_result.yaml"
+    # Output chessboard tags configuration path to update (SSOT in lekiwi_bringup)
+    output_yaml_path: "package://lekiwi_bringup/config/calibration/chessboard_tags.yaml"
 

@@ -1,15 +1,16 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""Launch file for running LeKiwi omni base calibration routines."""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-# Generates launch description for running LeKiwi omni base calibration routines.
 def generate_launch_description():
-    # Configures launch arguments and registers the omni base calibrator node.
+    """Configures launch arguments and registers the omni base calibrator node."""
     calib_mode_arg = DeclareLaunchArgument(
         "calib_mode",
         default_value="spin",
@@ -38,7 +39,7 @@ def generate_launch_description():
     controller_name_arg = DeclareLaunchArgument(
         "controller_name",
         default_value="omni_base_controller",
-        description="Name of the running omni base controller node to query parameters from.",
+        description="Name of running omni base controller node to query parameters from.",
     )
     actual_measured_dist_arg = DeclareLaunchArgument(
         "actual_measured_dist",
@@ -52,7 +53,7 @@ def generate_launch_description():
     )
 
     calib_node = Node(
-        package="lekiwi_control",
+        package="lekiwi_calibration",
         executable="calibrate_omni_base",
         name="omni_base_calibrator",
         output="screen",

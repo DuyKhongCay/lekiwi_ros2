@@ -3,20 +3,18 @@
 
 """Launch file for running the chessboard AprilTag calibrator node."""
 
-import os
-
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description() -> LaunchDescription:
     """Configures launch arguments and registers the chessboard tag calibrator node."""
-    pkg_share = get_package_share_directory("apriltag_localizer")
-    default_config_path = os.path.join(
-        pkg_share, "config", "calibrate_chessboard_tags.yaml"
+    pkg_share = FindPackageShare("lekiwi_calibration")
+    default_config_path = PathJoinSubstitution(
+        [pkg_share, "config", "chessboard_calib_params.yaml"]
     )
 
     config_file_arg = DeclareLaunchArgument(
@@ -32,8 +30,8 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     calib_node = Node(
-        package="apriltag_localizer",
-        executable="calibrate_chessboard_tags.py",
+        package="lekiwi_calibration",
+        executable="calibrate_chessboard",
         name="chessboard_tag_calibrator",
         output="screen",
         parameters=[

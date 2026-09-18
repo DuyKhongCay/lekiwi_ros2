@@ -1,25 +1,26 @@
-#!/usr/bin/env python3
-"""
-Unit test for ChessboardTagCalibSolver using synthetic multi-view data with noise.
-"""
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
+
+"""Unit test for ChessboardTagCalibSolver using synthetic multi-view data with noise."""
 
 import math
-import sys
 import os
+import tempfile
 import unittest
-import numpy as np
 import cv2
+import numpy as np
+import yaml
 
-# Add scripts directory to path for import
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
-from calibrate_chessboard_tags import ChessboardTagCalibSolver
+from lekiwi_calibration.chessboard.solver import (
+    ChessboardTagCalibSolver,
+    save_to_chessboard_yaml,
+)
 
 
 class TestChessboardTagCalibSolver(unittest.TestCase):
-    # Validates Bundle Adjustment solver accuracy on synthetic 3D tag setups.
+    """Validates Bundle Adjustment solver accuracy on synthetic 3D tag setups."""
 
     def setUp(self):
-        # Configures ground truth tag parameters and synthetic camera intrinsics.
         self.cam_mat = np.array(
             [[2274.0, 0.0, 1640.0], [0.0, 2287.0, 1232.0], [0.0, 0.0, 1.0]],
             dtype=np.float64,
@@ -36,7 +37,6 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
         self.tag_sz = 0.02
 
     def _generate_gt_corners(self):
-        # Generates ground truth 3D corners for each tag.
         h = self.tag_sz / 2.0
         local_pts = np.array(
             [[h, -h, 0.0], [-h, -h, 0.0], [-h, h, 0.0], [h, h, 0.0]], dtype=np.float64
@@ -56,20 +56,17 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
         return gt_3d
 
     def test_bundle_adjustment_accuracy(self):
-        # Verifies that solver recovers true tag coordinates within sub-millimeter error.
         gt_3d = self._generate_gt_corners()
 
         # Generate 15 synthetic camera viewpoints around board
         np.random.seed(42)
         frames_dets = []
 
-        for i in range(15):
-            # Camera at z ~ 0.5 - 0.7m, looking towards board center (0.19, 0.19, 0.0)
+        for _ in range(15):
             cx = 0.19 + np.random.uniform(-0.15, 0.15)
             cy = 0.19 + np.random.uniform(-0.15, 0.15)
             cz = np.random.uniform(0.45, 0.70)
 
-            # Camera pointing roughly downwards with slight tilt
             rvec = np.array(
                 [
                     np.random.uniform(2.8, 3.14),
@@ -106,7 +103,6 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
             res["rms_err"], 1.0, "RMS reprojection error should be under 1.0 px"
         )
 
-        # Check recovered tag 4 (H1) position: ground truth x=0.3842, y=0.0012
         recovered_h1 = res["tags"][4]
         self.assertAlmostEqual(
             recovered_h1["x"], 0.3842, delta=0.002, msg="H1 X recovered within 2mm"
@@ -115,7 +111,6 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
             recovered_h1["y"], 0.0012, delta=0.002, msg="H1 Y recovered within 2mm"
         )
 
-        # Check recovered tag 3 (H8) position: ground truth x=0.3838, y=0.3845
         recovered_h8 = res["tags"][3]
         self.assertAlmostEqual(
             recovered_h8["x"], 0.3838, delta=0.002, msg="H8 X recovered within 2mm"
@@ -125,11 +120,6 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
         )
 
     def test_save_to_chessboard_yaml(self):
-        import tempfile
-        import yaml
-        from calibrate_chessboard_tags import save_to_chessboard_yaml
-
-        # Test saving calibration results with arbitrary tag IDs
         calib_res = {
             "tags": {
                 0: {"name": "A1", "x": 0.0, "y": 0.0, "z": 0.004, "yaw": 0.0},
@@ -140,25 +130,10 @@ class TestChessboardTagCalibSolver(unittest.TestCase):
         }
         with tempfile.NamedTemporaryFile("w+", suffix=".yaml", delete=False) as tf:
             temp_path = tf.name
-            init_content = {
-                "/**": {
-                    "ros__parameters": {
-                        "tag_distance": 0.38,
-                        "tags": {
-                            "ids": [0, 1, 2, 3],
-                            "positions_x": [0.0, 0.0, 0.0, 0.0],
-                            "positions_y": [0.0, 0.0, 0.0, 0.0],
-                            "positions_z": [0.0, 0.0, 0.0, 0.0],
-                            "yaws": [0.0, 0.0, 0.0, 0.0],
-                        },
-                    }
-                }
-            }
-            yaml.dump(init_content, tf)
 
         try:
             save_to_chessboard_yaml(calib_res, temp_path, tag_ids=[0, 1, 2, 3])
-            with open(temp_path, "r") as f:
+            with open(temp_path, "r", encoding="utf-8") as f:
                 saved = yaml.safe_load(f)
             self.assertEqual(saved["ids"], [0, 1, 2, 3])
             self.assertEqual(saved["positions_x"], [0.0, 0.39, 0.39, 0.0])
