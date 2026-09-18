@@ -1,0 +1,24 @@
+/**:
+  ros__parameters:
+    # Stockfish Engine parameters
+    stockfish_path: "/usr/games/stockfish"
+    think_time_ms: 1000
+    action_name: "/chess/compute_best_move"
+
+    # Game State Tracker & Auto-play parameters
+    raw_fen_topic: "/chess/raw_fen"
+    game_status_topic: "/chess/game_status"
+    debounce_frames: 3
+    auto_trigger_engine: true     # Bật để tự chơi trong giai đoạn dev; tắt khi dùng orchestrator
+    robot_color: "black"          # Màu quân cờ robot cầm ("black" hoặc "white")
+
+chessboard_visualizer:
+  ros__parameters:
+    game_status_topic: "/chess/game_status"
+    raw_fen_topic: "/chess/raw_fen"
+    board_2d_topic: "/chess/board_2d/compressed"
+    jpeg_quality: 85
+    board_panel_size: 480
+    debug: false
+    render_rate_hz: 5.0
+
