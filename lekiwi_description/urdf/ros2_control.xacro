@@ -14,17 +14,24 @@
   </xacro:macro>
 
   <!-- Declares interfaces once so real and mock hardware expose the same contract. -->
-  <xacro:macro name="lekiwi_control_joint" params="joint_name servo_id command_interface">
+  <xacro:macro name="lekiwi_control_joint" params="joint_name servo_id command_interface acceleration:='50' velocity_scale:='' velocity_direction:='1' max_velocity:='5.0'">
     <joint name="${joint_name}">
       <param name="id">${servo_id}</param>
+      <param name="acceleration">${acceleration}</param>
+      <xacro:if value="${command_interface == 'velocity'}">
+        <param name="velocity_radians_per_second_per_tick">${velocity_scale}</param>
+        <param name="velocity_direction">${velocity_direction}</param>
+        <param name="max_velocity_radians_per_second">${max_velocity}</param>
+      </xacro:if>
       <command_interface name="${command_interface}"/>
+      <command_interface name="torque_enable"/>
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
   </xacro:macro>
 
   <!-- Selects hardware at launch time while retaining a non-actuating mock default. -->
-  <xacro:macro name="lekiwi_ros2_control" params="hardware_type usb_port joint_config_file">
+  <xacro:macro name="lekiwi_ros2_control" params="hardware_type usb_port">
     <ros2_control name="LeKiwiSystem" type="system">
       <hardware>
         <xacro:if value="${hardware_type == 'mock'}">
@@ -33,18 +40,17 @@
         <xacro:if value="${hardware_type == 'real'}">
           <plugin>lekiwi_ftservo_hardware/LeKiwiFeetechHardwareInterface</plugin>
           <param name="usb_port">${usb_port}</param>
-          <param name="joint_config_file">${joint_config_file}</param>
         </xacro:if>
       </hardware>
-      <xacro:lekiwi_control_joint joint_name="arm_shoulder_pan" servo_id="1" command_interface="position"/>
-      <xacro:lekiwi_control_joint joint_name="arm_shoulder_lift" servo_id="2" command_interface="position"/>
-      <xacro:lekiwi_control_joint joint_name="arm_elbow_flex" servo_id="3" command_interface="position"/>
-      <xacro:lekiwi_control_joint joint_name="arm_wrist_flex" servo_id="4" command_interface="position"/>
-      <xacro:lekiwi_control_joint joint_name="arm_wrist_roll" servo_id="5" command_interface="position"/>
-      <xacro:lekiwi_control_joint joint_name="arm_gripper" servo_id="6" command_interface="position"/>
-      <xacro:lekiwi_control_joint joint_name="base_left_wheel" servo_id="7" command_interface="velocity"/>
-      <xacro:lekiwi_control_joint joint_name="base_back_wheel" servo_id="8" command_interface="velocity"/>
-      <xacro:lekiwi_control_joint joint_name="base_right_wheel" servo_id="9" command_interface="velocity"/>
+      <xacro:lekiwi_control_joint joint_name="arm_shoulder_pan" servo_id="1" command_interface="position" acceleration="50"/>
+      <xacro:lekiwi_control_joint joint_name="arm_shoulder_lift" servo_id="2" command_interface="position" acceleration="50"/>
+      <xacro:lekiwi_control_joint joint_name="arm_elbow_flex" servo_id="3" command_interface="position" acceleration="50"/>
+      <xacro:lekiwi_control_joint joint_name="arm_wrist_flex" servo_id="4" command_interface="position" acceleration="50"/>
+      <xacro:lekiwi_control_joint joint_name="arm_wrist_roll" servo_id="5" command_interface="position" acceleration="50"/>
+      <xacro:lekiwi_control_joint joint_name="arm_gripper" servo_id="6" command_interface="position" acceleration="50"/>
+      <xacro:lekiwi_control_joint joint_name="base_left_wheel" servo_id="7" command_interface="velocity" acceleration="0" velocity_scale="0.0015339807878856412" velocity_direction="-1" max_velocity="5.0"/>
+      <xacro:lekiwi_control_joint joint_name="base_back_wheel" servo_id="8" command_interface="velocity" acceleration="0" velocity_scale="0.0015339807878856412" velocity_direction="-1" max_velocity="5.0"/>
+      <xacro:lekiwi_control_joint joint_name="base_right_wheel" servo_id="9" command_interface="velocity" acceleration="0" velocity_scale="0.0015339807878856412" velocity_direction="-1" max_velocity="5.0"/>
     </ros2_control>
   </xacro:macro>
 

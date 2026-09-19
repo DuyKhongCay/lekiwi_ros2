@@ -87,6 +87,14 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("start_workspace_checker")),
     )
 
+    torque_manager = Node(
+        package="lekiwi_control",
+        executable="torque_manager",
+        name="torque_manager",
+        parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
+        output="screen",
+    )
+
     return LaunchDescription(
         [
             start_lerobot_bridge_arg,
@@ -97,5 +105,6 @@ def generate_launch_description():
             arm_bridge,
             tf_gatekeeper,
             workspace_checker,
+            torque_manager,
         ]
     )
