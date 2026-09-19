@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstring>
 #include <fcntl.h>
+#include <format>
 #include <linux/i2c-dev.h>
 #include <linux/i2c.h>
 #include <sys/ioctl.h>
@@ -93,7 +94,7 @@ namespace lekiwi_icm20948_hardware
         {
             if (error_msg)
             {
-                *error_msg = "Cannot set I2C slave address 0x" + std::to_string(config_.i2c_address) + ": " + std::strerror(errno);
+                *error_msg = std::format("Cannot set I2C slave address 0x{:02X}: {}", config_.i2c_address, std::strerror(errno));
             }
             close_bus();
             return false;
@@ -111,8 +112,15 @@ namespace lekiwi_icm20948_hardware
             return true;
 
         uint8_t buf[2] = {REG_BANK_SEL, bank};
-        if (::write(fd_, buf, 2) != 2)
+        ssize_t ret = 0;
+        do
         {
+            ret = ::write(fd_, buf, 2);
+        } while (ret < 0 && errno == EINTR);
+
+        if (ret != 2)
+        {
+            invalidate_bank_cache();
             return false;
         }
         current_bank_ = bank;
@@ -124,7 +132,18 @@ namespace lekiwi_icm20948_hardware
         if (!set_bank(bank))
             return false;
         uint8_t buf[2] = {reg, val};
-        return (::write(fd_, buf, 2) == 2);
+        ssize_t ret = 0;
+        do
+        {
+            ret = ::write(fd_, buf, 2);
+        } while (ret < 0 && errno == EINTR);
+
+        if (ret != 2)
+        {
+            invalidate_bank_cache();
+            return false;
+        }
+        return true;
     }
 
     bool ICM20948Driver::read_byte(uint8_t bank, uint8_t reg, uint8_t &val)
@@ -134,19 +153,28 @@ namespace lekiwi_icm20948_hardware
 
     bool ICM20948Driver::write_bit(uint8_t bank, uint8_t reg, uint8_t bit_pos, bool bit_val)
     {
-        uint8_t prev_val = 0;
+        if (bit_pos >= 8U)
+        {
+            return false;
+        }
+        uint8_t prev_val = 0U;
         if (!read_byte(bank, reg, prev_val))
             return false;
-        uint8_t new_val = (prev_val & ~(1 << bit_pos)) | ((bit_val ? 1 : 0) << bit_pos);
+        const uint8_t mask = static_cast<uint8_t>(1U << bit_pos);
+        const uint8_t new_val = bit_val ? (prev_val | mask) : (prev_val & static_cast<uint8_t>(~mask));
         return write_byte(bank, reg, new_val);
     }
 
     bool ICM20948Driver::read_bit(uint8_t bank, uint8_t reg, uint8_t bit_pos, bool &bit_val)
     {
-        uint8_t val = 0;
+        if (bit_pos >= 8U)
+        {
+            return false;
+        }
+        uint8_t val = 0U;
         if (!read_byte(bank, reg, val))
             return false;
-        bit_val = ((val >> bit_pos) & 0x01) != 0;
+        bit_val = ((val >> bit_pos) & 0x01U) != 0U;
         return true;
     }
 
@@ -170,7 +198,18 @@ namespace lekiwi_icm20948_hardware
         rdwr.msgs = msgs;
         rdwr.nmsgs = 2;
 
-        return (::ioctl(fd_, I2C_RDWR, &rdwr) >= 0);
+        int ret = 0;
+        do
+        {
+            ret = ::ioctl(fd_, I2C_RDWR, &rdwr);
+        } while (ret < 0 && errno == EINTR);
+
+        if (ret < 0)
+        {
+            invalidate_bank_cache();
+            return false;
+        }
+        return true;
     }
 
     bool ICM20948Driver::write_mag_byte(uint8_t mag_reg, uint8_t val)
@@ -184,12 +223,19 @@ namespace lekiwi_icm20948_hardware
         if (!write_byte(BANK_3, REG_B3_I2C_SLV4_CTRL, 0x80))
             return false;
 
-        bool done = false;
         for (int i = 0; i < 20; ++i)
         {
-            if (read_bit(BANK_0, REG_B0_I2C_MST_STATUS, 6, done) && done)
+            uint8_t status = 0U;
+            if (read_byte(BANK_0, REG_B0_I2C_MST_STATUS, status))
             {
-                return true;
+                if ((status & I2C_MST_STATUS_SLV4_NACK) != 0U)
+                {
+                    return false;
+                }
+                if ((status & I2C_MST_STATUS_SLV4_DONE) != 0U)
+                {
+                    return true;
+                }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -205,16 +251,50 @@ namespace lekiwi_icm20948_hardware
         if (!write_byte(BANK_3, REG_B3_I2C_SLV4_CTRL, 0x80))
             return false;
 
-        bool done = false;
         for (int i = 0; i < 20; ++i)
         {
-            if (read_bit(BANK_0, REG_B0_I2C_MST_STATUS, 6, done) && done)
+            uint8_t status = 0U;
+            if (read_byte(BANK_0, REG_B0_I2C_MST_STATUS, status))
             {
-                return read_byte(BANK_3, REG_B3_I2C_SLV4_DI, val);
+                if ((status & I2C_MST_STATUS_SLV4_NACK) != 0U)
+                {
+                    return false;
+                }
+                if ((status & I2C_MST_STATUS_SLV4_DONE) != 0U)
+                {
+                    return read_byte(BANK_3, REG_B3_I2C_SLV4_DI, val);
+                }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return false;
+    }
+
+    bool ICM20948Driver::reset_i2c_master()
+    {
+        return write_bit(BANK_0, REG_B0_USER_CTRL, 1, true);
+    }
+
+    bool ICM20948Driver::sleep_device(std::string *error_msg)
+    {
+        if (fd_ < 0)
+        {
+            if (error_msg)
+                *error_msg = "I2C bus not open";
+            return false;
+        }
+
+        // 1. Put AK09916 into power-down mode
+        write_mag_byte(REG_AK09916_CNTL2, AK09916_MODE_POWER_DOWN);
+
+        // 2. Put ICM-20948 into low-power sleep mode
+        if (!write_bit(BANK_0, REG_B0_PWR_MGMT_1, 6, true))
+        {
+            if (error_msg)
+                *error_msg = "Failed to put ICM20948 into sleep mode";
+            return false;
+        }
+        return true;
     }
 
     bool ICM20948Driver::init_magnetometer(std::string *error_msg)
@@ -232,6 +312,14 @@ namespace lekiwi_icm20948_hardware
         {
             if (error_msg)
                 *error_msg = "Failed to configure I2C master clock";
+            return false;
+        }
+
+        // Divide I2C Master polling rate (1.1 kHz / 2^3 ≈ 137.5 Hz) to match AK09916 100 Hz continuous mode
+        if (!write_byte(BANK_3, REG_B3_I2C_MST_ODR_CONFIG, I2C_MST_ODR_DIV_137HZ))
+        {
+            if (error_msg)
+                *error_msg = "Failed to configure I2C master ODR";
             return false;
         }
 
@@ -259,7 +347,7 @@ namespace lekiwi_icm20948_hardware
                 break;
             }
             // Reset chip I2C master if communication fails
-            write_bit(BANK_0, REG_B0_USER_CTRL, 1, true);
+            reset_i2c_master();
             std::this_thread::sleep_for(std::chrono::milliseconds(15));
         }
 
@@ -267,7 +355,7 @@ namespace lekiwi_icm20948_hardware
         {
             if (error_msg)
             {
-                *error_msg = "AK09916 magnetometer not detected (WIA2=0x" + std::to_string(mag_id) + ", expected 0x09)";
+                *error_msg = std::format("AK09916 magnetometer not detected (WIA2=0x{:02X}, expected 0x09)", mag_id);
             }
             return false;
         }
@@ -285,8 +373,8 @@ namespace lekiwi_icm20948_hardware
             return false;
         if (!write_byte(BANK_3, REG_B3_I2C_SLV0_REG, REG_AK09916_ST1))
             return false;
-        if (!write_byte(BANK_3, REG_B3_I2C_SLV0_CTRL, 0x89))
-            return false; // Enable + 9 bytes
+        if (!write_byte(BANK_3, REG_B3_I2C_SLV0_CTRL, I2C_SLV0_EN_AND_9BYTES))
+            return false;
 
         return true;
     }
@@ -306,7 +394,7 @@ namespace lekiwi_icm20948_hardware
         {
             if (error_msg)
             {
-                *error_msg = "Invalid WHO_AM_I: 0x" + std::to_string(who_am_i) + " (expected 0xEA)";
+                *error_msg = std::format("Invalid WHO_AM_I: 0x{:02X} (expected 0xEA)", who_am_i);
             }
             return false;
         }
@@ -339,6 +427,14 @@ namespace lekiwi_icm20948_hardware
             return false;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        // Ensure all 6 Accel and Gyro axes are enabled in PWR_MGMT_2
+        if (!write_byte(BANK_0, REG_B0_PWR_MGMT_2, PWR_MGMT_2_ALL_ON))
+        {
+            if (error_msg)
+                *error_msg = "Failed to enable all axes in PWR_MGMT_2";
+            return false;
+        }
 
         // 4. Configure Accelerometer
         const uint8_t accel_msb = static_cast<uint8_t>((config_.accel_sample_rate_div >> 8) & 0x0F);
@@ -398,8 +494,8 @@ namespace lekiwi_icm20948_hardware
         }
 
         // Burst read 23 bytes: Accel (6) + Gyro (6) + Temp (2) + Mag SLV0 Buffer (9)
-        uint8_t buf[23];
-        if (!read_block(BANK_0, REG_B0_ACCEL_XOUT_H, buf, 23))
+        uint8_t buf[IMU_TOTAL_BURST_LEN];
+        if (!read_block(BANK_0, REG_B0_ACCEL_XOUT_H, buf, IMU_TOTAL_BURST_LEN))
         {
             if (error_msg)
                 *error_msg = "I2C burst read failed: " + std::string(std::strerror(errno));
@@ -407,14 +503,14 @@ namespace lekiwi_icm20948_hardware
         }
 
         // Big-endian 16-bit accel
-        const int16_t raw_ax = static_cast<int16_t>((buf[0] << 8) | buf[1]);
-        const int16_t raw_ay = static_cast<int16_t>((buf[2] << 8) | buf[3]);
-        const int16_t raw_az = static_cast<int16_t>((buf[4] << 8) | buf[5]);
+        const int16_t raw_ax = decode_be16(buf[0], buf[1]);
+        const int16_t raw_ay = decode_be16(buf[2], buf[3]);
+        const int16_t raw_az = decode_be16(buf[4], buf[5]);
 
         // Big-endian 16-bit gyro
-        const int16_t raw_gx = static_cast<int16_t>((buf[6] << 8) | buf[7]);
-        const int16_t raw_gy = static_cast<int16_t>((buf[8] << 8) | buf[9]);
-        const int16_t raw_gz = static_cast<int16_t>((buf[10] << 8) | buf[11]);
+        const int16_t raw_gx = decode_be16(buf[6], buf[7]);
+        const int16_t raw_gy = decode_be16(buf[8], buf[9]);
+        const int16_t raw_gz = decode_be16(buf[10], buf[11]);
 
         out_data.accel_m_s2[0] = static_cast<double>(raw_ax) * accel_scale_;
         out_data.accel_m_s2[1] = static_cast<double>(raw_ay) * accel_scale_;
@@ -427,19 +523,21 @@ namespace lekiwi_icm20948_hardware
         // Magnetometer buffer (offset 14: ST1 at buf[14], HXL at buf[15]..ST2 at buf[22])
         const uint8_t st1 = buf[14];
         const uint8_t st2 = buf[22];
-        const bool overflow = (st2 & 0x08) != 0;
-        const bool data_ready = (st1 & 0x01) != 0;
+        const bool overflow = (st2 & AK09916_STATUS2_HOFL_MASK) != 0U;
+        const bool data_ready = (st1 & AK09916_STATUS1_DRDY_MASK) != 0U;
 
         if (data_ready && !overflow)
         {
             // Little-endian 16-bit mag
-            const int16_t raw_mx = static_cast<int16_t>(buf[15] | (buf[16] << 8));
-            const int16_t raw_my = static_cast<int16_t>(buf[17] | (buf[18] << 8));
-            const int16_t raw_mz = static_cast<int16_t>(buf[19] | (buf[20] << 8));
+            const int16_t raw_mx = decode_le16(buf[15], buf[16]);
+            const int16_t raw_my = decode_le16(buf[17], buf[18]);
+            const int16_t raw_mz = decode_le16(buf[19], buf[20]);
 
-            out_data.mag_tesla[0] = static_cast<double>(raw_mx) * MAG_LSB_TO_TESLA;
-            out_data.mag_tesla[1] = static_cast<double>(raw_my) * MAG_LSB_TO_TESLA;
-            out_data.mag_tesla[2] = static_cast<double>(raw_mz) * MAG_LSB_TO_TESLA;
+            // AK09916 die to ICM-20948 body frame alignment (Section 8 Datasheet):
+            // X_imu = +Y_mag, Y_imu = +X_mag, Z_imu = -Z_mag
+            out_data.mag_tesla[0] = static_cast<double>(raw_my) * MAG_LSB_TO_TESLA;
+            out_data.mag_tesla[1] = static_cast<double>(raw_mx) * MAG_LSB_TO_TESLA;
+            out_data.mag_tesla[2] = -static_cast<double>(raw_mz) * MAG_LSB_TO_TESLA;
             out_data.mag_valid = true;
         }
         else

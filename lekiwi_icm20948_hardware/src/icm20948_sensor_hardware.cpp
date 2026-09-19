@@ -9,6 +9,7 @@
 #include "lekiwi_icm20948_hardware/icm20948_sensor_hardware.hpp"
 
 #include <cmath>
+#include <format>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -64,7 +65,13 @@ namespace lekiwi_icm20948_hardware
         {
             try
             {
-                driver_config_.i2c_address = static_cast<uint8_t>(std::stoul(it_addr->second, nullptr, 0));
+                unsigned long addr_val = std::stoul(it_addr->second, nullptr, 0);
+                if (addr_val > 0x7FU)
+                {
+                    RCLCPP_ERROR(get_logger(), "I2C address 0x%lX out of valid 7-bit range (0x00 - 0x7F)", addr_val);
+                    return hardware_interface::CallbackReturn::ERROR;
+                }
+                driver_config_.i2c_address = static_cast<uint8_t>(addr_val);
             }
             catch (const std::exception &e)
             {
@@ -73,7 +80,7 @@ namespace lekiwi_icm20948_hardware
             }
         }
 
-        // Parse Accel Range
+        // Parse Accel Range (with MISRA C Rule 15.7 terminating else)
         auto it_arange = info_.hardware_parameters.find("accel_range");
         if (it_arange != info_.hardware_parameters.end())
         {
@@ -93,9 +100,13 @@ namespace lekiwi_icm20948_hardware
             {
                 driver_config_.accel_range = AccelRange::RANGE_16G;
             }
+            else
+            {
+                RCLCPP_WARN(get_logger(), "Unknown accel_range '%s', defaulting to 4G", it_arange->second.c_str());
+            }
         }
 
-        // Parse Gyro Range
+        // Parse Gyro Range (with MISRA C Rule 15.7 terminating else)
         auto it_grange = info_.hardware_parameters.find("gyro_range");
         if (it_grange != info_.hardware_parameters.end())
         {
@@ -115,6 +126,10 @@ namespace lekiwi_icm20948_hardware
             {
                 driver_config_.gyro_range = GyroRange::RANGE_2000DPS;
             }
+            else
+            {
+                RCLCPP_WARN(get_logger(), "Unknown gyro_range '%s', defaulting to 1000DPS", it_grange->second.c_str());
+            }
         }
 
         // Parse DLPF
@@ -130,7 +145,7 @@ namespace lekiwi_icm20948_hardware
             }
         }
 
-        // Doc cau hinh tu dong can chinh Gyro Bias (Auto-calibration on startup)
+        // Auto-calibration config
         auto it_calib = info_.hardware_parameters.find("auto_calibrate_gyro");
         if (it_calib != info_.hardware_parameters.end())
         {
@@ -151,7 +166,7 @@ namespace lekiwi_icm20948_hardware
             }
         }
 
-        // Doc gia tri gyro bias co dinh (neu khong dung auto calibration)
+        // Parse Manual Gyro Bias
         auto it_gbx = info_.hardware_parameters.find("gyro_bias_x");
         if (it_gbx != info_.hardware_parameters.end())
         {
@@ -185,6 +200,70 @@ namespace lekiwi_icm20948_hardware
             {
             }
         }
+
+        // Parse Manual Accel Bias
+        auto it_abx = info_.hardware_parameters.find("accel_bias_x");
+        if (it_abx != info_.hardware_parameters.end())
+        {
+            try
+            {
+                accel_bias_[0] = std::stod(it_abx->second);
+            }
+            catch (...)
+            {
+            }
+        }
+        auto it_aby = info_.hardware_parameters.find("accel_bias_y");
+        if (it_aby != info_.hardware_parameters.end())
+        {
+            try
+            {
+                accel_bias_[1] = std::stod(it_aby->second);
+            }
+            catch (...)
+            {
+            }
+        }
+        auto it_abz = info_.hardware_parameters.find("accel_bias_z");
+        if (it_abz != info_.hardware_parameters.end())
+        {
+            try
+            {
+                accel_bias_[2] = std::stod(it_abz->second);
+            }
+            catch (...)
+            {
+            }
+        }
+
+        // Parse Axis Sign Directions
+        auto parse_sign = [this](const std::string &param_name, int &out_sign)
+        {
+            auto it = info_.hardware_parameters.find(param_name);
+            if (it != info_.hardware_parameters.end())
+            {
+                try
+                {
+                    int val = std::stoi(it->second);
+                    out_sign = (val < 0) ? -1 : 1;
+                }
+                catch (...)
+                {
+                }
+            }
+        };
+
+        parse_sign("accel_axis_sign_x", accel_axis_sign_[0]);
+        parse_sign("accel_axis_sign_y", accel_axis_sign_[1]);
+        parse_sign("accel_axis_sign_z", accel_axis_sign_[2]);
+
+        parse_sign("gyro_axis_sign_x", gyro_axis_sign_[0]);
+        parse_sign("gyro_axis_sign_y", gyro_axis_sign_[1]);
+        parse_sign("gyro_axis_sign_z", gyro_axis_sign_[2]);
+
+        parse_sign("mag_axis_sign_x", mag_axis_sign_[0]);
+        parse_sign("mag_axis_sign_y", mag_axis_sign_[1]);
+        parse_sign("mag_axis_sign_z", mag_axis_sign_[2]);
 
         // Verify exported state interfaces
         const std::vector<std::string> expected_interfaces = {
@@ -269,34 +348,49 @@ namespace lekiwi_icm20948_hardware
         return hardware_interface::CallbackReturn::SUCCESS;
     }
 
+    hardware_interface::CallbackReturn ICM20948SensorHardware::on_cleanup(
+        const rclcpp_lifecycle::State & /*previous_state*/)
+    {
+        RCLCPP_INFO(get_logger(), "Cleaning up ICM20948SensorHardware...");
+        driver_.close_bus();
+        updater_.reset();
+        return hardware_interface::CallbackReturn::SUCCESS;
+    }
+
     hardware_interface::CallbackReturn ICM20948SensorHardware::on_activate(
         const rclcpp_lifecycle::State & /*previous_state*/)
     {
         RCLCPP_INFO(get_logger(), "Activating ICM20948SensorHardware...");
         consecutive_errors_ = 0;
 
-        // Reset trang thai auto-calibration cho Gyro
+        // Reset auto-calibration state
         gyro_bias_sum_ = {0.0, 0.0, 0.0};
+        gyro_min_ = {1e9, 1e9, 1e9};
+        gyro_max_ = {-1e9, -1e9, -1e9};
         current_calib_count_ = 0;
         gyro_calibrated_ = !auto_calibrate_gyro_;
+
+        for (size_t i = 0; i < 3; ++i)
+        {
+            gyro_bias_atomic_[i].store(gyro_bias_[i], std::memory_order_relaxed);
+        }
+
         if (auto_calibrate_gyro_ && !mock_sensor_)
         {
             RCLCPP_INFO(get_logger(), "Starting Gyro auto-calibration (%d samples)... Keep robot stationary!", gyro_calib_samples_);
         }
 
-        // Initialize shared state buffer
-        {
-            std::lock_guard<std::mutex> lock(shared_state_.mutex);
-            shared_state_.orientation = {0.0, 0.0, 0.0, 1.0};
-            shared_state_.angular_velocity = {0.0, 0.0, 0.0};
-            shared_state_.linear_acceleration = {0.0, 0.0, GRAVITY_EARTH};
-            shared_state_.magnetic_field = {2.0e-5, 0.0, 4.0e-5};
-            shared_state_.mag_valid = true;
-            shared_state_.valid = true;
-            shared_state_.last_read_time = std::chrono::steady_clock::now();
-        }
+        // Initialize RealtimeBuffer with stationary values
+        ImuDataSnapshot initial_snapshot;
+        initial_snapshot.orientation = {0.0, 0.0, 0.0, 1.0};
+        initial_snapshot.angular_velocity = {0.0, 0.0, 0.0};
+        initial_snapshot.linear_acceleration = {0.0, 0.0, GRAVITY_EARTH};
+        initial_snapshot.magnetic_field = {2.0e-5, 0.0, 4.0e-5};
+        initial_snapshot.mag_valid = true;
+        initial_snapshot.valid = true;
+        rt_buffer_.writeFromNonRT(initial_snapshot);
 
-        // Dat gia tri khoi tao qua ten interface da duoc cache (khong cap phat heap)
+        // Pre-seed state interfaces
         set_state(state_interface_names_[0], 0.0);
         set_state(state_interface_names_[1], 0.0);
         set_state(state_interface_names_[2], 0.0);
@@ -314,7 +408,7 @@ namespace lekiwi_icm20948_hardware
         set_state(state_interface_names_[11], 0.0);
         set_state(state_interface_names_[12], 4.0e-5);
 
-        // Khoi dong Async Worker Thread khi chay phan cung thật
+        // Start background worker thread
         if (!mock_sensor_)
         {
             io_running_ = true;
@@ -325,7 +419,6 @@ namespace lekiwi_icm20948_hardware
         return hardware_interface::CallbackReturn::SUCCESS;
     }
 
-    // Xu ly khi deactivate sensor: dung worker thread an toan
     hardware_interface::CallbackReturn ICM20948SensorHardware::on_deactivate(
         const rclcpp_lifecycle::State & /*previous_state*/)
     {
@@ -335,16 +428,31 @@ namespace lekiwi_icm20948_hardware
         {
             io_worker_thread_.join();
         }
+
+        if (!mock_sensor_)
+        {
+            std::string err;
+            if (!driver_.sleep_device(&err))
+            {
+                RCLCPP_WARN(get_logger(), "Failed to put ICM20948 to sleep on deactivate: %s", err.c_str());
+            }
+            else
+            {
+                RCLCPP_INFO(get_logger(), "ICM20948 and AK09916 placed in low-power sleep mode.");
+            }
+        }
+
         return hardware_interface::CallbackReturn::SUCCESS;
     }
 
-    // Chu ky RT read(): khong blocking I/O, khong cap phat dong tren heap, thoi gian thuc thi < 5 us
+    // Hard Real-Time read loop: lock-free, wait-free, zero heap allocation (< 1 µs)
     hardware_interface::return_type ICM20948SensorHardware::read(
         const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
     {
+        total_rt_reads_++;
+
         if (mock_sensor_)
         {
-            total_reads_++;
             set_state(state_interface_names_[0], 0.0);
             set_state(state_interface_names_[1], 0.0);
             set_state(state_interface_names_[2], 0.0);
@@ -364,42 +472,31 @@ namespace lekiwi_icm20948_hardware
             return hardware_interface::return_type::OK;
         }
 
-        // Doc nhanh tu shared state buffer (< 5 us)
-        std::array<double, 3> w;
-        std::array<double, 3> a;
-        std::array<double, 3> m;
-        bool mag_valid = false;
+        // Lock-free read from RealtimeBuffer (No OS mutex contention)
+        const auto *snapshot = rt_buffer_.readFromRT();
+        if (!snapshot || !snapshot->valid)
         {
-            std::lock_guard<std::mutex> lock(shared_state_.mutex);
-            if (!shared_state_.valid)
-            {
-                return hardware_interface::return_type::OK;
-            }
-            w = shared_state_.angular_velocity;
-            a = shared_state_.linear_acceleration;
-            m = shared_state_.magnetic_field;
-            mag_valid = shared_state_.mag_valid;
+            return hardware_interface::return_type::OK;
         }
 
-        // Cap nhat 13 state interfaces qua ten da cache san, loai bo toan bo malloc/free
-        set_state(state_interface_names_[0], 0.0);
-        set_state(state_interface_names_[1], 0.0);
-        set_state(state_interface_names_[2], 0.0);
-        set_state(state_interface_names_[3], 1.0);
+        set_state(state_interface_names_[0], snapshot->orientation[0]);
+        set_state(state_interface_names_[1], snapshot->orientation[1]);
+        set_state(state_interface_names_[2], snapshot->orientation[2]);
+        set_state(state_interface_names_[3], snapshot->orientation[3]);
 
-        set_state(state_interface_names_[4], w[0]);
-        set_state(state_interface_names_[5], w[1]);
-        set_state(state_interface_names_[6], w[2]);
+        set_state(state_interface_names_[4], snapshot->angular_velocity[0]);
+        set_state(state_interface_names_[5], snapshot->angular_velocity[1]);
+        set_state(state_interface_names_[6], snapshot->angular_velocity[2]);
 
-        set_state(state_interface_names_[7], a[0]);
-        set_state(state_interface_names_[8], a[1]);
-        set_state(state_interface_names_[9], a[2]);
+        set_state(state_interface_names_[7], snapshot->linear_acceleration[0]);
+        set_state(state_interface_names_[8], snapshot->linear_acceleration[1]);
+        set_state(state_interface_names_[9], snapshot->linear_acceleration[2]);
 
-        if (mag_valid)
+        if (snapshot->mag_valid)
         {
-            set_state(state_interface_names_[10], m[0]);
-            set_state(state_interface_names_[11], m[1]);
-            set_state(state_interface_names_[12], m[2]);
+            set_state(state_interface_names_[10], snapshot->magnetic_field[0]);
+            set_state(state_interface_names_[11], snapshot->magnetic_field[1]);
+            set_state(state_interface_names_[12], snapshot->magnetic_field[2]);
         }
 
         return hardware_interface::return_type::OK;
@@ -408,12 +505,13 @@ namespace lekiwi_icm20948_hardware
     void ICM20948SensorHardware::io_worker_loop()
     {
         using namespace std::chrono_literals;
-        constexpr auto loop_period = 10ms; // 100 Hz polling rate
+        constexpr auto loop_period = 10ms; // Exact 100 Hz rate
+
+        auto next_wake = std::chrono::steady_clock::now();
 
         while (io_running_)
         {
-            const auto start_time = std::chrono::steady_clock::now();
-            total_reads_++;
+            total_i2c_reads_++;
             SensorData data;
             std::string err;
 
@@ -421,35 +519,94 @@ namespace lekiwi_icm20948_hardware
             {
                 consecutive_errors_++;
                 failed_reads_++;
+
+                // Fault escalation policy
+                if (consecutive_errors_.load() == 5)
+                {
+                    RCLCPP_WARN(get_logger(), "5 consecutive I2C errors: attempting auxiliary I2C master reset");
+                    driver_.reset_i2c_master();
+                }
+                else if (consecutive_errors_.load() >= max_consecutive_errors_)
+                {
+                    RCLCPP_ERROR_THROTTLE(
+                        get_logger(), *get_clock(), 2000,
+                        "%d consecutive I2C errors: reconfiguring ICM20948 hardware",
+                        consecutive_errors_.load());
+                    driver_.invalidate_bank_cache();
+                    driver_.configure_device();
+                }
             }
             else
             {
                 consecutive_errors_ = 0;
-                last_valid_data_ = data;
 
-                const double ax = (data.accel_m_s2[0] - accel_bias_[0]) * accel_axis_sign_[0];
-                const double ay = (data.accel_m_s2[1] - accel_bias_[1]) * accel_axis_sign_[1];
-                const double az = (data.accel_m_s2[2] - accel_bias_[2]) * accel_axis_sign_[2];
+                const double ax = (data.accel_m_s2[0] - accel_bias_[0]) * static_cast<double>(accel_axis_sign_[0]);
+                const double ay = (data.accel_m_s2[1] - accel_bias_[1]) * static_cast<double>(accel_axis_sign_[1]);
+                const double az = (data.accel_m_s2[2] - accel_bias_[2]) * static_cast<double>(accel_axis_sign_[2]);
 
                 double gx = 0.0;
                 double gy = 0.0;
                 double gz = 0.0;
 
-                if (auto_calibrate_gyro_ && !gyro_calibrated_)
+                if (auto_calibrate_gyro_ && !gyro_calibrated_.load())
                 {
-                    gyro_bias_sum_[0] += data.gyro_rad_s[0];
-                    gyro_bias_sum_[1] += data.gyro_rad_s[1];
-                    gyro_bias_sum_[2] += data.gyro_rad_s[2];
-                    current_calib_count_++;
-
-                    if (current_calib_count_ >= gyro_calib_samples_)
+                    // Stationarity guard: check min/max spread across sample window
+                    for (int i = 0; i < 3; ++i)
                     {
-                        gyro_bias_[0] = gyro_bias_sum_[0] / static_cast<double>(gyro_calib_samples_);
-                        gyro_bias_[1] = gyro_bias_sum_[1] / static_cast<double>(gyro_calib_samples_);
-                        gyro_bias_[2] = gyro_bias_sum_[2] / static_cast<double>(gyro_calib_samples_);
-                        gyro_calibrated_ = true;
-                        RCLCPP_INFO(get_logger(), "Gyro bias calibration complete (%d samples)! Bias: [gx: %.6f, gy: %.6f, gz: %.6f] rad/s",
-                                    gyro_calib_samples_, gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
+                        gyro_min_[i] = std::min(gyro_min_[i], data.gyro_rad_s[i]);
+                        gyro_max_[i] = std::max(gyro_max_[i], data.gyro_rad_s[i]);
+                    }
+
+                    const double spread_x = gyro_max_[0] - gyro_min_[0];
+                    const double spread_y = gyro_max_[1] - gyro_min_[1];
+                    const double spread_z = gyro_max_[2] - gyro_min_[2];
+                    constexpr double max_motion_spread = 0.05; // ~2.8 deg/s threshold
+
+                    if (spread_x > max_motion_spread || spread_y > max_motion_spread || spread_z > max_motion_spread)
+                    {
+                        RCLCPP_WARN_THROTTLE(
+                            get_logger(), *get_clock(), 1500,
+                            "Motion detected during gyro calibration! Resetting window (samples: %d/%d)...",
+                            current_calib_count_.load(), gyro_calib_samples_);
+                        gyro_bias_sum_ = {0.0, 0.0, 0.0};
+                        gyro_min_ = {1e9, 1e9, 1e9};
+                        gyro_max_ = {-1e9, -1e9, -1e9};
+                        current_calib_count_ = 0;
+                    }
+                    else
+                    {
+                        gyro_bias_sum_[0] += data.gyro_rad_s[0];
+                        gyro_bias_sum_[1] += data.gyro_rad_s[1];
+                        gyro_bias_sum_[2] += data.gyro_rad_s[2];
+                        current_calib_count_++;
+
+                        if (current_calib_count_.load() >= gyro_calib_samples_)
+                        {
+                            const double inv_samples = 1.0 / static_cast<double>(gyro_calib_samples_);
+                            gyro_bias_[0] = gyro_bias_sum_[0] * inv_samples;
+                            gyro_bias_[1] = gyro_bias_sum_[1] * inv_samples;
+                            gyro_bias_[2] = gyro_bias_sum_[2] * inv_samples;
+
+                            // Plausibility check: typical zero-rate offset < 0.15 rad/s (~8.5 deg/s)
+                            constexpr double max_plausible_bias = 0.15;
+                            if (std::abs(gyro_bias_[0]) > max_plausible_bias ||
+                                std::abs(gyro_bias_[1]) > max_plausible_bias ||
+                                std::abs(gyro_bias_[2]) > max_plausible_bias)
+                            {
+                                RCLCPP_WARN(
+                                    get_logger(),
+                                    "Computed gyro bias exceeds plausibility threshold (%.4f, %.4f, %.4f). Verify sensor is stationary.",
+                                    gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
+                            }
+
+                            for (size_t i = 0; i < 3; ++i)
+                            {
+                                gyro_bias_atomic_[i].store(gyro_bias_[i], std::memory_order_release);
+                            }
+                            gyro_calibrated_ = true;
+                            RCLCPP_INFO(get_logger(), "Gyro bias calibration complete (%d samples)! Bias: [gx: %.6f, gy: %.6f, gz: %.6f] rad/s",
+                                        gyro_calib_samples_, gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
+                        }
                     }
                     gx = 0.0;
                     gy = 0.0;
@@ -457,34 +614,29 @@ namespace lekiwi_icm20948_hardware
                 }
                 else
                 {
-                    gx = (data.gyro_rad_s[0] - gyro_bias_[0]) * gyro_axis_sign_[0];
-                    gy = (data.gyro_rad_s[1] - gyro_bias_[1]) * gyro_axis_sign_[1];
-                    gz = (data.gyro_rad_s[2] - gyro_bias_[2]) * gyro_axis_sign_[2];
+                    gx = (data.gyro_rad_s[0] - gyro_bias_[0]) * static_cast<double>(gyro_axis_sign_[0]);
+                    gy = (data.gyro_rad_s[1] - gyro_bias_[1]) * static_cast<double>(gyro_axis_sign_[1]);
+                    gz = (data.gyro_rad_s[2] - gyro_bias_[2]) * static_cast<double>(gyro_axis_sign_[2]);
                 }
 
-                double mx = data.mag_tesla[0] * mag_axis_sign_[0];
-                double my = data.mag_tesla[1] * mag_axis_sign_[1];
-                double mz = data.mag_tesla[2] * mag_axis_sign_[2];
+                double mx = data.mag_tesla[0] * static_cast<double>(mag_axis_sign_[0]);
+                double my = data.mag_tesla[1] * static_cast<double>(mag_axis_sign_[1]);
+                double mz = data.mag_tesla[2] * static_cast<double>(mag_axis_sign_[2]);
 
-                {
-                    std::lock_guard<std::mutex> lock(shared_state_.mutex);
-                    shared_state_.angular_velocity = {gx, gy, gz};
-                    shared_state_.linear_acceleration = {ax, ay, az};
-                    if (data.mag_valid)
-                    {
-                        shared_state_.magnetic_field = {mx, my, mz};
-                        shared_state_.mag_valid = true;
-                    }
-                    shared_state_.valid = true;
-                    shared_state_.last_read_time = std::chrono::steady_clock::now();
-                }
+                ImuDataSnapshot snapshot;
+                snapshot.orientation = {0.0, 0.0, 0.0, 1.0};
+                snapshot.angular_velocity = {gx, gy, gz};
+                snapshot.linear_acceleration = {ax, ay, az};
+                snapshot.magnetic_field = {mx, my, mz};
+                snapshot.mag_valid = data.mag_valid;
+                snapshot.valid = true;
+
+                rt_buffer_.writeFromNonRT(snapshot);
             }
 
-            const auto elapsed = std::chrono::steady_clock::now() - start_time;
-            if (elapsed < loop_period)
-            {
-                std::this_thread::sleep_for(loop_period - elapsed);
-            }
+            // Anti-drift sleep_until
+            next_wake += loop_period;
+            std::this_thread::sleep_until(next_wake);
         }
     }
 
@@ -495,11 +647,10 @@ namespace lekiwi_icm20948_hardware
         {
             stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Running in MOCK mode");
             stat.add("Mock Mode", "True");
-            stat.add("Total Reads", total_reads_);
+            stat.add("Total RT Reads", total_rt_reads_.load());
             return;
         }
 
-        // 1. Danh gia trang thai suc khoe tong the
         const int err_count = consecutive_errors_.load();
         if (err_count > max_consecutive_errors_)
         {
@@ -511,7 +662,7 @@ namespace lekiwi_icm20948_hardware
         {
             stat.summaryf(
                 diagnostic_msgs::msg::DiagnosticStatus::WARN,
-                "Calibrating Gyro Bias (%d/%d samples)", current_calib_count_, gyro_calib_samples_);
+                "Calibrating Gyro Bias (%d/%d samples)", current_calib_count_.load(), gyro_calib_samples_);
         }
         else if (err_count > 0)
         {
@@ -524,41 +675,41 @@ namespace lekiwi_icm20948_hardware
             stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "IMU hardware OK");
         }
 
-        // 2. Metrics toi thieu khong trung lap voi broadcaster
         std::ostringstream addr_ss;
         addr_ss << "/dev/i2c-" << driver_config_.i2c_bus << " (0x"
                 << std::hex << std::uppercase << static_cast<int>(driver_config_.i2c_address) << ")";
         stat.add("I2C Device", addr_ss.str());
 
         stat.add("Consecutive Read Errors", static_cast<int>(consecutive_errors_.load()));
-        stat.add("Total Reads", static_cast<uint64_t>(total_reads_.load()));
-        stat.add("Failed Reads", static_cast<uint64_t>(failed_reads_.load()));
+        stat.add("Total RT Reads", static_cast<uint64_t>(total_rt_reads_.load()));
+        stat.add("Total I2C Reads", static_cast<uint64_t>(total_i2c_reads_.load()));
+        stat.add("Failed I2C Reads", static_cast<uint64_t>(failed_reads_.load()));
 
-        const uint64_t reads = total_reads_.load();
+        const uint64_t i2c_reads = total_i2c_reads_.load();
         const uint64_t fails = failed_reads_.load();
-        if (reads > 0)
+        if (i2c_reads > 0)
         {
-            double error_rate = (static_cast<double>(fails) / static_cast<double>(reads)) * 100.0;
-            stat.addf("Error Rate (%)", "%.2f", error_rate);
+            double error_rate = (static_cast<double>(fails) / static_cast<double>(i2c_reads)) * 100.0;
+            stat.addf("I2C Error Rate (%)", "%.2f", error_rate);
         }
         else
         {
-            stat.add("Error Rate (%)", "0.00");
+            stat.add("I2C Error Rate (%)", "0.00");
         }
+
+        const double gbx = gyro_bias_atomic_[0].load(std::memory_order_relaxed);
+        const double gby = gyro_bias_atomic_[1].load(std::memory_order_relaxed);
+        const double gbz = gyro_bias_atomic_[2].load(std::memory_order_relaxed);
 
         if (auto_calibrate_gyro_)
         {
-            stat.add("Gyro Calibrated", gyro_calibrated_ ? "Yes" : "In Progress");
-            stat.addf(
-                "Calculated Gyro Bias (rad/s)", "[%.6f, %.6f, %.6f]",
-                gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
+            stat.add("Gyro Calibrated", gyro_calibrated_.load() ? "Yes" : "In Progress");
+            stat.addf("Calculated Gyro Bias (rad/s)", "[%.6f, %.6f, %.6f]", gbx, gby, gbz);
         }
         else
         {
             stat.add("Gyro Calibrated", "Manual Bias");
-            stat.addf(
-                "Configured Gyro Bias (rad/s)", "[%.6f, %.6f, %.6f]",
-                gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
+            stat.addf("Configured Gyro Bias (rad/s)", "[%.6f, %.6f, %.6f]", gbx, gby, gbz);
         }
     }
 

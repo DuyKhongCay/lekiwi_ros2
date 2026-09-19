@@ -7,6 +7,7 @@ find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(realtime_tools REQUIRED)
 
 add_library(lekiwi_icm20948_hardware SHARED
   src/icm20948_driver.cpp
@@ -25,7 +26,8 @@ target_link_libraries(lekiwi_icm20948_hardware
     hardware_interface::hardware_interface
     pluginlib::pluginlib
     rclcpp::rclcpp
-    rclcpp_lifecycle::rclcpp_lifecycle)
+    rclcpp_lifecycle::rclcpp_lifecycle
+    realtime_tools::realtime_tools)
 
 pluginlib_export_plugin_description_file(
   hardware_interface lekiwi_icm20948_hardware_plugin.xml)
@@ -48,6 +50,6 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(lekiwi_icm20948_hardwareTargets HAS_LIBRARY_TARGET)
-ament_export_dependencies(diagnostic_updater hardware_interface pluginlib rclcpp rclcpp_lifecycle)
+ament_export_dependencies(diagnostic_updater hardware_interface pluginlib rclcpp rclcpp_lifecycle realtime_tools)
 ament_package()
 
