@@ -41,6 +41,13 @@ namespace lekiwi_ftservo_hardware::sts
     constexpr uint8_t kInstructionSyncRead = 0x82;
     /// Instruction: Synchronized multi-servo write in a single frame.
     constexpr uint8_t kInstructionSyncWrite = 0x83;
+
+    /// Maximum byte hunt window size when searching for packet preamble (0xFF, 0xFF).
+    constexpr size_t kPreambleSearchLimit = 64U;
+    /// Fast feedback payload size in bytes (registers 56..59: position + speed).
+    constexpr size_t kFastStatePayloadSize = 4U;
+    /// Diagnostic telemetry feedback payload size in bytes (registers 56..70).
+    constexpr size_t kDiagnosticPayloadSize = 15U;
   } // namespace protocol
 
   /**
@@ -99,7 +106,7 @@ namespace lekiwi_ftservo_hardware::sts
     /// 12-bit magnetic encoder resolution: 4096 ticks per complete 360° turn.
     constexpr int kEncoderResolution = 4096;
     /// Mid-point encoder tick corresponding to center / zero angle (2048).
-    constexpr int kEncoderCenter = kEncoderResolution / 2;
+    constexpr int kEncoderCenterTicks = kEncoderResolution / 2;
     /// Conversion multiplier from encoder ticks to radians: (2 * PI) / 4096.
     constexpr double kRadiansPerEncoderTick = (2.0 * M_PI) / kEncoderResolution;
     /// Conversion multiplier from radians to encoder ticks: 4096 / (2 * PI).
@@ -128,32 +135,49 @@ namespace lekiwi_ftservo_hardware::sts
   } // namespace telemetry_scale
 
   /**
-   * @brief Default configuration and diagnostic safety thresholds for LeKiwi robot.
+   * @brief Minimal operational defaults and hardware safety thresholds for STS servos.
    */
   namespace default_config
   {
-    /// Base omni wheels acceleration: 0 enforces immediate step response (hardware ramp disabled).
-    constexpr uint8_t kWheelAcceleration = 0U;
-    /// Follower arm joints default acceleration: 50 ensures smooth motion and protects 3D printed joints.
-    constexpr uint8_t kDefaultArmAcceleration = 50U;
+    // --- Bus & Timing ---
+    /// Default serial bus baud rate in bps.
+    constexpr int kDefaultBaudRate = 1000000;
+    /// Default serial read timeout in milliseconds.
+    constexpr int kDefaultTimeoutMs = 20;
+    /// Per-servo fast read timeout in milliseconds to prevent worker loop starvation.
+    constexpr int kPerServoReadTimeoutMs = 2;
+    /// Target control / IO worker loop period in milliseconds (10 ms = 100 Hz).
+    constexpr int kDefaultLoopPeriodMs = 10;
 
+    // --- Safety & Watchdog ---
+    /// Command freshness watchdog timeout (Deadman's switch): 100 ms without new RT command trips safe stop.
+    constexpr int64_t kCommandWatchdogTimeoutMs = 100;
+    /// Maximum consecutive read errors before invalidating telemetry snapshot (5 * 10 ms = 50 ms).
+    constexpr uint64_t kMaxConsecutiveErrorsBeforeInvalid = 5U;
+    /// Maximum consecutive read errors before triggering serial reconnection attempt (100 * 10 ms = 1000 ms).
+    constexpr uint64_t kMaxConsecutiveErrorsBeforeReconnect = 100U;
+
+    // --- Control Fallbacks (applied when not specified in URDF) ---
+    /// Default acceleration profile (0: immediate step response / hardware ramp disabled).
+    constexpr uint8_t kDefaultAcceleration = 0U;
+    /// Default position tracking target speed in STS ticks.
+    constexpr int kDefaultGoalSpeedTicks = 2400;
+    /// Default velocity conversion factor (rad/s per speed tick): STS3215 nominal ~0.732 RPM/tick.
+    constexpr double kDefaultVelocityScale = 0.0015339807878856412;
+    /// Default maximum velocity limit in rad/s.
+    constexpr double kDefaultMaxVelocity = 5.0;
+
+    // --- Diagnostic Safety Thresholds ---
     /// Diagnostic freshness limit before flagging telemetry as stale (milliseconds).
     constexpr int64_t kTelemetryStaleTimeoutMs = 200;
     /// Temperature warning threshold in degrees Celsius.
     constexpr double kServoTempWarnLimitC = 60.0;
     /// Temperature critical error threshold in degrees Celsius.
     constexpr double kServoTempErrorLimitC = 70.0;
-    /// Minimum safe battery voltage threshold (3S LiPo: 3.17V per cell = ~9.5V).
-    constexpr double kBatteryLowVoltageLimitV = 9.5;
-    /// Maximum allowable bus voltage threshold (3S LiPo full charge: 12.6V, margin to 13.5V).
-    constexpr double kBatteryHighVoltageLimitV = 13.5;
-
-    /// Default serial bus baud rate in bps.
-    constexpr int kDefaultBaudRate = 1000000;
-    /// Default serial read timeout in milliseconds.
-    constexpr int kDefaultTimeoutMs = 20;
-    /// Target control / IO worker loop period in milliseconds (10 ms = 100 Hz).
-    constexpr int kDefaultLoopPeriodMs = 10;
+    /// Minimum safe operating voltage threshold in Volts.
+    constexpr double kLowVoltageLimitV = 9.0;
+    /// Maximum safe operating voltage threshold in Volts.
+    constexpr double kHighVoltageLimitV = 13.5;
   } // namespace default_config
 
 } // namespace lekiwi_ftservo_hardware::sts

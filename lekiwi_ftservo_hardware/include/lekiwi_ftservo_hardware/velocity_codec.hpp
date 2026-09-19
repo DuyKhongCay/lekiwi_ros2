@@ -16,7 +16,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <stdexcept>
 
 #include "lekiwi_ftservo_hardware/sts_constants.hpp"
 
@@ -40,18 +39,16 @@ namespace lekiwi_ftservo_hardware
    *
    * In STS protocol, velocity values use sign-magnitude encoding where the highest bit
    * (bit 15) represents sign (1 = negative/CW, 0 = positive/CCW) and bits [14:0] represent magnitude.
+   * Magnitudes exceeding @ref kStsVelocityMaxTicks (32767) are safely clamped without throwing.
    *
    * @param[in] ticks Signed integer velocity in servo tick units.
    * @return std::array<uint8_t, 2> 2-byte array with {low_byte, high_byte} in little-endian order.
-   * @throws std::out_of_range If @p std::abs(ticks) exceeds @ref kStsVelocityMaxTicks (32767).
    */
-  inline std::array<uint8_t, 2> encode_velocity_ticks(const int ticks)
+  inline std::array<uint8_t, 2> encode_velocity_ticks(const int ticks) noexcept
   {
-    if (std::abs(ticks) > kStsVelocityMaxTicks)
-    {
-      throw std::out_of_range("STS velocity command exceeds sign-magnitude range");
-    }
-    const int encoded = ticks < 0 ? std::abs(ticks) | (1 << kStsVelocitySignBit) : ticks;
+    const int clamped = std::clamp(ticks, -kStsVelocityMaxTicks, kStsVelocityMaxTicks);
+    const int magnitude = std::abs(clamped);
+    const int encoded = (clamped < 0) ? (magnitude | (1 << kStsVelocitySignBit)) : magnitude;
     return {static_cast<uint8_t>(encoded & 0xff), static_cast<uint8_t>((encoded >> 8) & 0xff)};
   }
 
@@ -62,7 +59,7 @@ namespace lekiwi_ftservo_hardware
    * @param[in] high High byte from the servo register payload containing sign bit at bit 7 (overall bit 15).
    * @return int Signed velocity in ticks (negative for CW rotation, positive for CCW rotation).
    */
-  inline int decode_velocity_ticks(const uint8_t low, const uint8_t high)
+  inline int decode_velocity_ticks(const uint8_t low, const uint8_t high) noexcept
   {
     const int encoded = static_cast<int>(low) | (static_cast<int>(high) << 8);
     const int magnitude = encoded & kStsVelocityMaxTicks;
@@ -74,28 +71,29 @@ namespace lekiwi_ftservo_hardware
    *
    * Clamps the input velocity within `[-max_radians_per_second, max_radians_per_second]`,
    * accounts for hardware mounting inversion (@p direction), and scales by the conversion factor.
+   * Never throws exceptions; safely falls back to 0 ticks if input is NaN/infinite.
    *
-   * @param[in] radians_per_second Commanded wheel angular velocity in rad/s.
+   * @param[in] radians_per_second Commanded angular velocity in rad/s.
    * @param[in] radians_per_second_per_tick Conversion scale from ticks to rad/s (must be > 0.0).
    * @param[in] max_radians_per_second Maximum allowable speed ceiling in rad/s (must be > 0.0).
    * @param[in] direction Direction polarity multiplier (must be either +1 or -1).
    * @return int Signed tick command ready to be encoded via @ref encode_velocity_ticks.
-   * @throws std::invalid_argument If any scale/direction argument is non-positive or not in {-1, 1},
-   *         or if @p radians_per_second is not finite (NaN or infinity).
    */
   inline int radians_per_second_to_ticks(
       const double radians_per_second, const double radians_per_second_per_tick,
-      const double max_radians_per_second, const int direction)
+      const double max_radians_per_second, const int direction) noexcept
   {
-    if (!std::isfinite(radians_per_second) || radians_per_second_per_tick <= 0.0 ||
-        max_radians_per_second <= 0.0 || (direction != -1 && direction != 1))
+    if (!std::isfinite(radians_per_second) ||
+        radians_per_second_per_tick <= 0.0 ||
+        max_radians_per_second <= 0.0 ||
+        (direction != 1 && direction != -1))
     {
-      throw std::invalid_argument("Invalid wheel velocity conversion parameters");
+      return 0;
     }
-    const double bounded = std::clamp(
-        radians_per_second, -max_radians_per_second, max_radians_per_second);
-    return static_cast<int>(std::lround(bounded * static_cast<double>(direction) /
-                                        radians_per_second_per_tick));
+
+    const double bounded = std::clamp(radians_per_second, -max_radians_per_second, max_radians_per_second);
+    const double commanded_ticks = std::lround((bounded * static_cast<double>(direction)) / radians_per_second_per_tick);
+    return std::clamp(static_cast<int>(commanded_ticks), -kStsVelocityMaxTicks, kStsVelocityMaxTicks);
   }
 
 } // namespace lekiwi_ftservo_hardware

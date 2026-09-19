@@ -15,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -131,7 +132,7 @@ namespace lekiwi_ftservo_hardware
          */
         bool read_register(
             uint8_t id, uint8_t address, size_t count, std::vector<uint8_t> *data,
-            std::string *error);
+            std::string *error, uint8_t *status_byte = nullptr);
 
         /**
          * @brief Performs a synchronized read (0x82) from a list of servo IDs in a single bus request.
@@ -145,7 +146,8 @@ namespace lekiwi_ftservo_hardware
          */
         bool sync_read(
             const std::vector<uint8_t> &ids, uint8_t address, size_t count,
-            std::vector<std::vector<uint8_t>> *data, std::string *error);
+            std::vector<std::vector<uint8_t>> *data, std::string *error,
+            std::vector<uint8_t> *statuses = nullptr);
 
         /**
          * @brief Reads fast state (position + velocity, 4 bytes per servo) for all specified IDs.
@@ -244,15 +246,63 @@ namespace lekiwi_ftservo_hardware
             const std::vector<uint8_t> &ids, const std::vector<bool> &enable_states,
             std::string *error);
 
+        /**
+         * @brief Flushes any pending incoming bytes from the hardware serial input buffer.
+         *
+         * Used to clear out stray echo bytes, residual responses after a timed-out SYNC_READ,
+         * or corrupted UART frames to prevent cascading packet desynchronization.
+         */
+        void flush_input() noexcept;
+
+        /**
+         * @brief Decodes a 15-byte diagnostic telemetry register block into a ServoDiagnosticData struct.
+         *
+         * @param[in] id Hardware ID of the servo.
+         * @param[in] feedback Raw byte block from register 56 (kPresentPosition) to 70.
+         * @param[out] diag Output structure receiving decoded telemetry values.
+         * @return true if feedback size is valid (>= 15 bytes), false otherwise.
+         */
+        static bool decode_telemetry_payload(
+            uint8_t id, const std::vector<uint8_t> &feedback, ServoDiagnosticData &diag) noexcept;
+
+        /**
+         * @brief Computes standard Feetech STS frame checksum: ~(sum of bytes) & 0xFF.
+         *
+         * Guaranteed zero dynamic heap memory allocation (MISRA C++ 18.0.1 / CERT MEM52-C).
+         *
+         * @param[in] data Pointer to contiguous byte sequence.
+         * @param[in] length Number of bytes to sum.
+         * @return uint8_t Inverted 8-bit checksum.
+         */
+        static uint8_t compute_checksum(const uint8_t *data, size_t length) noexcept;
+
+        /**
+         * @brief Computes standard Feetech STS frame checksum over a std::span.
+         *
+         * @param[in] bytes View of byte sequence.
+         * @return uint8_t Inverted 8-bit checksum.
+         */
+        static uint8_t compute_checksum(std::span<const uint8_t> bytes) noexcept;
+
     private:
         /**
          * @brief Encapsulates payload into an STS frame, computes checksum, and writes to serial port.
          *
+         * Uses pre-allocated tx_buffer_ to ensure zero dynamic heap memory allocation at 100 Hz.
+         *
          * @param[in] id Target ID or broadcast ID.
          * @param[in] instruction STS command byte (Ping, Read, Write, SyncRead, etc.).
-         * @param[in] parameters Command parameters / payload.
+         * @param[in] parameters Pointer to command parameters buffer.
+         * @param[in] param_len Number of parameter bytes.
          * @param[out] error Output string on failure.
          * @return true If written successfully, false otherwise.
+         */
+        bool write_packet(
+            uint8_t id, uint8_t instruction, const uint8_t *parameters, size_t param_len,
+            std::string *error);
+
+        /**
+         * @brief Vector overload of write_packet for convenience.
          */
         bool write_packet(
             uint8_t id, uint8_t instruction, const std::vector<uint8_t> &parameters,
@@ -265,9 +315,13 @@ namespace lekiwi_ftservo_hardware
          * @param[in] expected_data_size Expected length of returned parameter payload.
          * @param[out] data Output buffer populated with the payload bytes.
          * @param[out] error Output string on failure.
+         * @param[in] timeout_ms Optional per-packet timeout in milliseconds (-1 uses member timeout_ms_).
+         * @param[out] status_byte Optional pointer to store the servo's hardware status byte.
          * @return true If packet was received with matching ID and valid checksum, false otherwise.
          */
-        bool read_status(uint8_t expected_id, size_t expected_data_size, std::vector<uint8_t> *data, std::string *error);
+        bool read_status(
+            uint8_t expected_id, size_t expected_data_size, std::vector<uint8_t> *data,
+            std::string *error, int timeout_ms = -1, uint8_t *status_byte = nullptr);
 
         /**
          * @brief Converts integer baud rate into LibSerial BaudRate enumeration value.
@@ -280,6 +334,9 @@ namespace lekiwi_ftservo_hardware
 
         LibSerial::SerialPort port_;
         int timeout_ms_{20};
+
+        /// Pre-allocated TX frame buffer to guarantee zero dynamic heap allocation during cyclic operations.
+        std::array<uint8_t, 256> tx_buffer_{};
     };
 
 } // namespace lekiwi_ftservo_hardware
