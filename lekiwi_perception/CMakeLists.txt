@@ -20,6 +20,7 @@ find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(lekiwi_interfaces REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
@@ -116,6 +117,7 @@ ament_target_dependencies(lekiwi_perception_component
   geometry_msgs
   lekiwi_interfaces
   lifecycle_msgs
+  nav_msgs
   rclcpp
   rclcpp_components
   rclcpp_lifecycle
@@ -211,6 +213,17 @@ if(BUILD_TESTING)
   ament_add_gtest(test_chess_overlay_component test/test_chess_overlay_component.cpp)
   if(TARGET test_chess_overlay_component)
     target_link_libraries(test_chess_overlay_component lekiwi_perception_component ${OpenCV_LIBRARIES})
+  endif()
+
+  ament_add_gtest(test_chessboard_covariance test/test_chessboard_covariance.cpp)
+  if(TARGET test_chessboard_covariance)
+    target_link_libraries(test_chessboard_covariance lekiwi_perception_component)
+    ament_target_dependencies(test_chessboard_covariance
+      rclcpp
+      rclcpp_lifecycle
+      nav_msgs
+      geometry_msgs
+    )
   endif()
 endif()
 

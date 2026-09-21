@@ -51,6 +51,16 @@ namespace lekiwi_perception
     declare_parameter<std::vector<double>>("tags.positions_z", {0.004, 0.004, 0.004, 0.004});
     declare_parameter<std::vector<double>>("tags.yaws", {0.0, 0.0, 0.0, 0.0});
 
+    declare_parameter<std::string>("odom_topic", "/omni_base_controller/odom");
+    declare_parameter<double>("odom_timeout_sec", 0.5);
+    declare_parameter<double>("covariance.base_pos_var", 0.0001);
+    declare_parameter<double>("covariance.base_rot_var", 0.0004);
+    declare_parameter<double>("covariance.vel_scale_pos", 0.01);
+    declare_parameter<double>("covariance.vel_scale_rot", 0.05);
+    declare_parameter<double>("covariance.max_pos_var", 0.01);
+    declare_parameter<double>("covariance.max_rot_var", 0.04);
+    declare_parameter<bool>("covariance.scale_by_tag_count", true);
+
     autostart_ = get_parameter("autostart").as_bool();
     if (autostart_)
     {
@@ -96,6 +106,11 @@ namespace lekiwi_perception
           "~/image_raw",
           rclcpp::SensorDataQoS(),
           std::bind(&ChessboardPoseEstimator::on_image, this, std::placeholders::_1));
+
+      odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+          odom_topic_,
+          rclcpp::SensorDataQoS(),
+          std::bind(&ChessboardPoseEstimator::on_odometry, this, std::placeholders::_1));
 
       if (!lifecycle_helper_)
       {
@@ -207,11 +222,17 @@ namespace lekiwi_perception
     tag_centers_pub_.reset();
     camera_info_sub_.reset();
     image_sub_.reset();
+    odom_sub_.reset();
+    {
+      std::lock_guard<std::mutex> lock(odom_mutex_);
+      latest_odom_.reset();
+    }
     tf_listener_.reset();
     tf_buffer_.reset();
     static_tf_broadcaster_.reset();
     has_camera_info_ = false;
     last_used_tags_.store(0);
+    odom_received_.store(false);
   }
 
   void ChessboardPoseEstimator::load_parameters()
@@ -230,6 +251,16 @@ namespace lekiwi_perception
 
     chessboard_pose_in_map_ = get_parameter("chessboard_pose_in_map").as_double_array();
     publish_static_tf_ = get_parameter("publish_tf").as_bool();
+
+    odom_topic_ = get_parameter("odom_topic").as_string();
+    odom_timeout_sec_ = get_parameter("odom_timeout_sec").as_double();
+    base_pos_var_ = get_parameter("covariance.base_pos_var").as_double();
+    base_rot_var_ = get_parameter("covariance.base_rot_var").as_double();
+    vel_scale_pos_ = get_parameter("covariance.vel_scale_pos").as_double();
+    vel_scale_rot_ = get_parameter("covariance.vel_scale_rot").as_double();
+    max_pos_var_ = get_parameter("covariance.max_pos_var").as_double();
+    max_rot_var_ = get_parameter("covariance.max_rot_var").as_double();
+    scale_by_tag_count_ = get_parameter("covariance.scale_by_tag_count").as_bool();
 
     const auto tag_ids = get_parameter("tags.ids").as_integer_array();
     const auto tag_names = get_parameter("tags.names").as_string_array();
@@ -343,6 +374,66 @@ namespace lekiwi_perception
     RCLCPP_INFO(get_logger(), "CameraInfo received and intrinsics configured (fx=%.2f, fy=%.2f, cx=%.2f, cy=%.2f)",
                 camera_matrix_.at<double>(0, 0), camera_matrix_.at<double>(1, 1),
                 camera_matrix_.at<double>(0, 2), camera_matrix_.at<double>(1, 2));
+  }
+
+  void ChessboardPoseEstimator::on_odometry(const nav_msgs::msg::Odometry::ConstSharedPtr &msg)
+  {
+    if (!msg)
+    {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(odom_mutex_);
+    latest_odom_ = msg;
+    odom_received_.store(true);
+  }
+
+  ChessboardPoseEstimator::CovarianceResult ChessboardPoseEstimator::compute_covariance(
+      double speed, double wz, int used_tags) const
+  {
+    CovarianceResult res;
+
+    // Defensive validation for inputs
+    if (std::isnan(speed) || std::isinf(speed) || speed < 0.0)
+    {
+      speed = 0.0;
+    }
+    if (std::isnan(wz) || std::isinf(wz))
+    {
+      wz = 0.0;
+    }
+    else
+    {
+      wz = std::abs(wz);
+    }
+
+    // Velocity-dependent variance scaling
+    const double pos_var_dyn = base_pos_var_ + vel_scale_pos_ * (speed * speed);
+    const double rot_var_dyn = base_rot_var_ + vel_scale_rot_ * (wz * wz);
+
+    // Tag count scale factor
+    double tag_scale = 1.0;
+    if (scale_by_tag_count_)
+    {
+      if (used_tags >= 4)
+      {
+        tag_scale = 1.0;
+      }
+      else if (used_tags == 3)
+      {
+        tag_scale = 2.0;
+      }
+      else
+      {
+        // 2 tags or fewer: high uncertainty
+        tag_scale = 4.0;
+      }
+    }
+
+    // Clamp to [base_var, max_var]
+    res.pos_var = std::clamp(pos_var_dyn * tag_scale, base_pos_var_, max_pos_var_);
+    res.rot_var = std::clamp(rot_var_dyn * tag_scale, base_rot_var_, max_rot_var_);
+
+    return res;
   }
 
   bool ChessboardPoseEstimator::should_process_image(
@@ -570,20 +661,55 @@ namespace lekiwi_perception
 
       const tf2::Transform T_map_base = T_map_board * T_board_base;
 
+      double current_speed = 0.0;
+      double current_wz = 0.0;
+      {
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        if (latest_odom_)
+        {
+          bool is_fresh = true;
+          if (latest_odom_->header.stamp.sec > 0 || latest_odom_->header.stamp.nanosec > 0)
+          {
+            const rclcpp::Time img_time(header.stamp);
+            const rclcpp::Time odom_time(latest_odom_->header.stamp);
+            const double age = std::abs((img_time - odom_time).seconds());
+            if (age > odom_timeout_sec_)
+            {
+              is_fresh = false;
+              RCLCPP_WARN_THROTTLE(
+                  get_logger(), *get_clock(), 5000,
+                  "Latest odometry is stale (age: %.3f s > timeout: %.3f s). Fallback to static covariance.",
+                  age, odom_timeout_sec_);
+            }
+          }
+          if (is_fresh)
+          {
+            const auto &twist = latest_odom_->twist.twist;
+            current_speed = std::hypot(twist.linear.x, twist.linear.y);
+            current_wz = std::abs(twist.angular.z);
+          }
+        }
+      }
+
+      last_linear_speed_.store(current_speed);
+      last_angular_speed_.store(current_wz);
+
+      const auto cov = compute_covariance(current_speed, current_wz, used_tags);
+      last_computed_pos_var_.store(cov.pos_var);
+      last_computed_rot_var_.store(cov.rot_var);
+
       auto robot_pose_msg = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
       robot_pose_msg->header.stamp = header.stamp;
       robot_pose_msg->header.frame_id = map_frame_;
       tf2::toMsg(T_map_base, robot_pose_msg->pose.pose);
 
-      constexpr double pos_var = 0.0001;
-      constexpr double rot_var = 0.0004;
       robot_pose_msg->pose.covariance.fill(0.0);
-      robot_pose_msg->pose.covariance[0] = pos_var;
-      robot_pose_msg->pose.covariance[7] = pos_var;
-      robot_pose_msg->pose.covariance[14] = pos_var;
-      robot_pose_msg->pose.covariance[21] = rot_var;
-      robot_pose_msg->pose.covariance[28] = rot_var;
-      robot_pose_msg->pose.covariance[35] = rot_var;
+      robot_pose_msg->pose.covariance[0] = cov.pos_var;
+      robot_pose_msg->pose.covariance[7] = cov.pos_var;
+      robot_pose_msg->pose.covariance[14] = cov.pos_var;
+      robot_pose_msg->pose.covariance[21] = cov.rot_var;
+      robot_pose_msg->pose.covariance[28] = cov.rot_var;
+      robot_pose_msg->pose.covariance[35] = cov.rot_var;
       robot_pose_pub_->publish(std::move(robot_pose_msg));
     }
     catch (const tf2::TransformException &ex)
@@ -663,6 +789,11 @@ namespace lekiwi_perception
           s.add("Used Board Tags Count", used_tags);
           s.add("Detected Tag IDs", tag_ids_str);
           s.add("Camera Info Received", has_camera_info_ ? "true" : "false");
+          s.add("Odom Connected", odom_received_.load() ? "true" : "false");
+          s.addf("Current Speed (m/s)", "%.3f", last_linear_speed_.load());
+          s.addf("Current Yaw Rate (deg/s)", "%.2f", last_angular_speed_.load() * (180.0 / M_PI));
+          s.addf("Calculated Pos Std (cm)", "%.2f", std::sqrt(last_computed_pos_var_.load()) * 100.0);
+          s.addf("Calculated Yaw Std (deg)", "%.2f", std::sqrt(last_computed_rot_var_.load()) * (180.0 / M_PI));
         });
   }
 

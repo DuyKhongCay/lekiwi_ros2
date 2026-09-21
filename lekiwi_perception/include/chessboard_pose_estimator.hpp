@@ -38,6 +38,7 @@
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "lekiwi_interfaces/msg/camera_mode.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "rclcpp_lifecycle/lifecycle_publisher.hpp"
@@ -73,6 +74,14 @@ namespace lekiwi_perception
         CallbackReturn on_shutdown(const rclcpp_lifecycle::State &state) override;
         CallbackReturn on_error(const rclcpp_lifecycle::State &state) override;
 
+        struct CovarianceResult
+        {
+            double pos_var{0.0001};
+            double rot_var{0.0004};
+        };
+
+        CovarianceResult compute_covariance(double speed, double wz, int used_tags) const;
+
     private:
         void load_parameters();
         void init_detector();
@@ -82,6 +91,7 @@ namespace lekiwi_perception
         // Subscriptions
         void on_camera_info(const sensor_msgs::msg::CameraInfo::ConstSharedPtr &msg);
         void on_image(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
+        void on_odometry(const nav_msgs::msg::Odometry::ConstSharedPtr &msg);
 
         // Sub-pipeline helper methods
         bool should_process_image(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
@@ -124,6 +134,17 @@ namespace lekiwi_perception
         std::vector<double> chessboard_pose_in_map_{0.0, 0.0, 0.004, 0.0, 0.0, 0.0};
         bool publish_static_tf_{true};
 
+        // Dynamic Velocity-Dependent Covariance Parameters
+        std::string odom_topic_{"/omni_base_controller/odom"};
+        double odom_timeout_sec_{0.5};
+        double base_pos_var_{0.0001};
+        double base_rot_var_{0.0004};
+        double vel_scale_pos_{0.01};
+        double vel_scale_rot_{0.05};
+        double max_pos_var_{0.01};
+        double max_rot_var_{0.04};
+        bool scale_by_tag_count_{true};
+
         // Calibration & Detection structures
         std::map<int, TagConfig> tag_configs_;
         cv::Mat camera_matrix_;
@@ -136,6 +157,10 @@ namespace lekiwi_perception
         // ROS 2 Interfaces
         rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
         rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+        rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+
+        mutable std::mutex odom_mutex_;
+        nav_msgs::msg::Odometry::ConstSharedPtr latest_odom_{nullptr};
 
         rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr robot_pose_pub_;
         rclcpp_lifecycle::LifecyclePublisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_detections_pub_;
@@ -147,6 +172,13 @@ namespace lekiwi_perception
 
         // Rate limiting
         rclcpp::Time last_detection_stamp_{0, 0, RCL_ROS_TIME};
+
+        // Diagnostics tracking for velocity & dynamic covariance
+        std::atomic<double> last_linear_speed_{0.0};
+        std::atomic<double> last_angular_speed_{0.0};
+        std::atomic<double> last_computed_pos_var_{0.0001};
+        std::atomic<double> last_computed_rot_var_{0.0004};
+        std::atomic<bool> odom_received_{false};
 
         // Composition helper for Lifecycle, Mode Gating, Autostart & Diagnostics
         std::unique_ptr<utils::PerceptionLifecycleHelper> lifecycle_helper_;

@@ -18,6 +18,7 @@
   <depend>geometry_msgs</depend>
   <depend>lekiwi_interfaces</depend>
   <depend>lifecycle_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>opencv</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
