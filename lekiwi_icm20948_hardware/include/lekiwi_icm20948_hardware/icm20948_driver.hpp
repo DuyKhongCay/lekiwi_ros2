@@ -17,6 +17,8 @@
 
 #include "lekiwi_icm20948_hardware/icm20948_defs.hpp"
 
+class ICM20948MathTest_BitShiftGuards_Test;
+
 namespace lekiwi_icm20948_hardware
 {
 
@@ -267,6 +269,8 @@ namespace lekiwi_icm20948_hardware
          * @brief Initializes AK09916 auxiliary I2C master slave mappings and continuous mode.
          */
         bool init_magnetometer(std::string *error_msg = nullptr);
+
+        friend class ::ICM20948MathTest_BitShiftGuards_Test;
     };
 
 } // namespace lekiwi_icm20948_hardware

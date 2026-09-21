@@ -121,8 +121,8 @@ TEST(ICM20948MathTest, LittleEndianMagnetometerDecoding)
 }
 
 /**
- * @brief Verifies AK09916 coordinate alignment to ICM-20948 body frame (Section 8 Datasheet).
- * X_imu = +Y_mag, Y_imu = +X_mag, Z_imu = -Z_mag
+ * @brief Verifies AK09916 coordinate alignment to ICM-20948 body frame (DS-000189 Section 15, Fig 12 & 13).
+ * X_imu = +X_mag, Y_imu = -Y_mag, Z_imu = -Z_mag
  */
 TEST(ICM20948MathTest, AK09916ToBodyFrameAlignment)
 {
@@ -134,12 +134,12 @@ TEST(ICM20948MathTest, AK09916ToBodyFrameAlignment)
     int16_t raw_my = 2000;
     int16_t raw_mz = 3000;
 
-    double imu_body_mag_x = static_cast<double>(raw_my) * MAG_LSB_TO_TESLA;
-    double imu_body_mag_y = static_cast<double>(raw_mx) * MAG_LSB_TO_TESLA;
+    double imu_body_mag_x = static_cast<double>(raw_mx) * MAG_LSB_TO_TESLA;
+    double imu_body_mag_y = -static_cast<double>(raw_my) * MAG_LSB_TO_TESLA;
     double imu_body_mag_z = -static_cast<double>(raw_mz) * MAG_LSB_TO_TESLA;
 
-    EXPECT_NEAR(imu_body_mag_x, 2000.0 * MAG_LSB_TO_TESLA, 1e-12);
-    EXPECT_NEAR(imu_body_mag_y, 1000.0 * MAG_LSB_TO_TESLA, 1e-12);
+    EXPECT_NEAR(imu_body_mag_x, 1000.0 * MAG_LSB_TO_TESLA, 1e-12);
+    EXPECT_NEAR(imu_body_mag_y, -2000.0 * MAG_LSB_TO_TESLA, 1e-12);
     EXPECT_NEAR(imu_body_mag_z, -3000.0 * MAG_LSB_TO_TESLA, 1e-12);
 }
 

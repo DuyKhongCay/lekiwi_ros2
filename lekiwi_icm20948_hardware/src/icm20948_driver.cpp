@@ -533,10 +533,10 @@ namespace lekiwi_icm20948_hardware
             const int16_t raw_my = decode_le16(buf[17], buf[18]);
             const int16_t raw_mz = decode_le16(buf[19], buf[20]);
 
-            // AK09916 die to ICM-20948 body frame alignment (Section 8 Datasheet):
-            // X_imu = +Y_mag, Y_imu = +X_mag, Z_imu = -Z_mag
-            out_data.mag_tesla[0] = static_cast<double>(raw_my) * MAG_LSB_TO_TESLA;
-            out_data.mag_tesla[1] = static_cast<double>(raw_mx) * MAG_LSB_TO_TESLA;
+            // AK09916 die to ICM-20948 body frame alignment (DS-000189 Section 15, Fig 12 & 13):
+            // X_imu = +X_mag, Y_imu = -Y_mag, Z_imu = -Z_mag
+            out_data.mag_tesla[0] = static_cast<double>(raw_mx) * MAG_LSB_TO_TESLA;
+            out_data.mag_tesla[1] = -static_cast<double>(raw_my) * MAG_LSB_TO_TESLA;
             out_data.mag_tesla[2] = -static_cast<double>(raw_mz) * MAG_LSB_TO_TESLA;
             out_data.mag_valid = true;
         }
