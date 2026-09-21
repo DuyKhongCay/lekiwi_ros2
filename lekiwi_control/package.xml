@@ -2,27 +2,38 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lekiwi_control</name>
-  <version>0.1.0</version>
-  <description>LeKiwi arm kinematics, workspace reachability checking, and base standoff calculation.</description>
+  <version>0.2.0</version>
+  <description>
+    LeKiwi Motion Arbiter and Safety Gate.
+    Provides: TF/localization readiness gating (C++ Lifecycle Node),
+    arm workspace reachability checking and motor torque management (C++ components).
+  </description>
   <maintainer email="duykhongcay@todo.todo">duykhongcay</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <build_depend>ament_cmake_python</build_depend>
 
-  <exec_depend>diagnostic_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>lekiwi_interfaces</exec_depend>
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>tf2_geometry_msgs</exec_depend>
+  <!-- C++ dependencies: build + exec (dùng <depend>) -->
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>diagnostic_updater</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>rclcpp_components</depend>
+  <depend>urdf</depend>
+  <depend>lekiwi_interfaces</depend>
+  <depend>controller_manager_msgs</depend>
 
-  <test_depend>ament_cmake_pytest</test_depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>rcl_interfaces</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
