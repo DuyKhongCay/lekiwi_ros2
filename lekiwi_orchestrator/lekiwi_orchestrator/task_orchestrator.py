@@ -33,6 +33,11 @@ class TaskOrchestratorNode(Node):
         self.declare_parameter("camera_hub_service", "")
         self.declare_parameter("orchestrator_service", "/orchestrator/set_mode")
         self.declare_parameter("lifecycle_poll_period_sec", 0.5)
+        self.declare_parameter("start_navigation", False)
+        self._navigation_startup = None
+        if self.get_parameter("start_navigation").value:
+            from lekiwi_orchestrator.navigation_startup import NavigationStartup
+            self._navigation_startup = NavigationStartup(self)
 
         cam_hub_node = self._param_with_legacy(
             "cam_hub_node", "camera_hub_node"

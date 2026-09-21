@@ -10,7 +10,6 @@ install(
   PROGRAMS
     scripts/chess_mission_orchestrator
     scripts/task_orchestrator
-    scripts/tf_gatekeeper
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -21,12 +20,11 @@ install(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_navigation_startup test/test_navigation_startup.py)
   ament_add_pytest_test(test_fsm test/test_fsm.py)
   ament_add_pytest_test(test_chessboard_mapper test/test_chessboard_mapper.py)
-  ament_add_pytest_test(test_tf_gatekeeper test/test_tf_gatekeeper.py)
   ament_add_pytest_test(test_task_orchestrator test/test_task_orchestrator.py)
   ament_add_pytest_test(test_chess_mission_orchestrator test/test_chess_mission_orchestrator.py)
 endif()
 
 ament_package()
-

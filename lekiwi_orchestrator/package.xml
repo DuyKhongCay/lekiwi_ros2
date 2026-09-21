@@ -3,7 +3,7 @@
 <package format="3">
   <name>lekiwi_orchestrator</name>
   <version>0.1.0</version>
-  <description>High-level autonomous chess mission orchestrator, TF readiness gatekeeper, and camera mode state machine for LeKiwi.</description>
+  <description>High-level autonomous chess mission orchestrator, readiness-gated navigation startup, and camera mode state machine for LeKiwi.</description>
   <maintainer email="duykhongcay@todo.todo">duykhongcay</maintainer>
   <license>Apache-2.0</license>
 

@@ -1,6 +1,6 @@
 # `lekiwi_orchestrator`
 
-High-level autonomous chess mission orchestrator, TF readiness gatekeeper, and camera operational mode state machine for LeKiwi mobile manipulation robot.
+High-level autonomous chess mission orchestrator, readiness-gated navigation startup, and camera operational mode state machine for LeKiwi mobile manipulation robot.
 
 ---
 
@@ -17,8 +17,9 @@ High-level autonomous chess mission orchestrator, TF readiness gatekeeper, and c
 3. **Single Responsibility Principle (SRP) (`ChessboardCoordinateMapper`)**:
    - Pure mathematical and geometry translation module mapping FIDE notation ("a1".."h8") to Cartesian 3D $(x, y, z)$ on `chessboard_frame`.
    - 100% testable without ROS graph.
-4. **Readiness Gating (`TfReadinessGatekeeper`)**:
-   - Guards system integrity: verifies standstill, global EKF convergence, arm joint completeness, and TF transform freshness before latching `/system/tf_ready`.
+4. **Readiness consumption**:
+   - The C++ gatekeeper belongs to `lekiwi_control`. Mission dispatch expires its readiness heartbeat after `readiness_timeout_sec`.
+   - `NavigationStartup` starts Nav2 once after fresh readiness when task orchestration receives `start_navigation:=true`; service attempts have bounded timeouts and retry backoff.
 
 ---
 
@@ -27,18 +28,15 @@ High-level autonomous chess mission orchestrator, TF readiness gatekeeper, and c
 | Executable | Class | Purpose |
 |---|---|---|
 | `chess_mission_orchestrator` | `ChessMissionOrchestrator` | End-to-end mission loop manager |
-| `tf_gatekeeper` | `TfReadinessGatekeeper` | Monitors localization & activates Nav2 |
-| `task_orchestrator` | `TaskOrchestratorNode` | Bootstraps camera lifecycle and CameraMode FSM |
+| `task_orchestrator` | `TaskOrchestratorNode` | Bootstraps cameras, CameraMode FSM, and optional readiness-gated Nav2 startup |
 
 ---
 
 ## 📡 Interfaces & Communication
 
 ### Subscriptions
-- `/system/tf_ready` (`std_msgs/msg/Bool`): Latched readiness signal from gatekeeper.
+- `/system/tf_ready` (`std_msgs/msg/Bool`): Readiness heartbeat from `lekiwi_control`; consumers use a receipt-time expiry.
 - `/chess/game_status` (`lekiwi_interfaces/msg/ChessGameStatus`): Match state, FIDE legality, and Stockfish `best_move`.
-- `/joint_states` (`sensor_msgs/msg/JointState`): Real-time arm joint states for readiness gating.
-- `/odometry/filtered` & `/odometry/global` (`nav_msgs/msg/Odometry`): Localization covariance & standstill verification.
 
 ### Clients (Services & Actions)
 - `/workspace/check_move_feasibility` (`lekiwi_interfaces/srv/CheckMoveFeasibility`): Kinematics reachability & standoff pose query.
@@ -69,4 +67,3 @@ Run automated pytest unit tests:
 colcon test --packages-select lekiwi_orchestrator --event-handlers console_cohesion+
 colcon test-result --verbose
 ```
-

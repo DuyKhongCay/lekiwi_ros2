@@ -16,6 +16,7 @@ Acts as a Mediator and Facade coordinating:
 from __future__ import annotations
 
 import math
+import time
 from typing import Optional
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
@@ -26,6 +27,7 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.node import Node
+from rclpy.clock import Clock, ClockType
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool
 
@@ -107,6 +109,10 @@ class ChessMissionOrchestrator(Node):
         self._mission_state = MissionState.BOOT_INITIALIZING
         self._camera_mode = CameraMode.STANDBY
         self._tf_ready = False
+        self._last_readiness_heartbeat = None
+        self._readiness_timeout = self.declare_parameter("readiness_timeout_sec", 1.0).value
+        if not math.isfinite(self._readiness_timeout) or self._readiness_timeout <= 0:
+            raise ValueError("readiness_timeout_sec must be finite and positive")
         self._current_goal_move: Optional[str] = None
         self._current_move_details: Optional[UciMoveDetails] = None
         self._last_processed_fen: Optional[str] = None
@@ -126,7 +132,7 @@ class ChessMissionOrchestrator(Node):
             Bool,
             "/system/tf_ready",
             self._on_tf_ready,
-            latched_qos,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
             callback_group=self._cb_group_sub,
         )
         self._game_status_sub = self.create_subscription(
@@ -179,6 +185,10 @@ class ChessMissionOrchestrator(Node):
 
         # Periodic Diagnostic Timer (1 Hz)
         self._diag_timer = self.create_timer(1.0, self._publish_diagnostics)
+        self._readiness_timer = self.create_timer(
+            min(0.2, self._readiness_timeout / 2), self._expire_readiness,
+            callback_group=self._cb_group_sub,
+            clock=Clock(clock_type=ClockType.STEADY_TIME))
 
         # Initial State transition to WAITING_FOR_TF_READY
         self.transition_to(MissionState.WAITING_FOR_TF_READY)
@@ -197,7 +207,8 @@ class ChessMissionOrchestrator(Node):
 
     @property
     def is_tf_ready(self) -> bool:
-        return self._tf_ready
+        return (self._tf_ready and self._last_readiness_heartbeat is not None
+                and time.monotonic() - self._last_readiness_heartbeat <= self._readiness_timeout)
 
     # ================= State Machine Management =================
 
@@ -250,9 +261,16 @@ class ChessMissionOrchestrator(Node):
 
     # ================= Subscription Callbacks =================
 
+    def _expire_readiness(self):
+        """Withdraw cached readiness when its heartbeat lease expires."""
+        if self._tf_ready and not self.is_tf_ready:
+            self._tf_ready = False
+            self.get_logger().warning("TF readiness heartbeat expired")
+
     def _on_tf_ready(self, msg: Bool) -> None:
         """Handle readiness notifications from TfReadinessGatekeeper."""
-        previous = self._tf_ready
+        previous = self.is_tf_ready
+        self._last_readiness_heartbeat = time.monotonic()
         self._tf_ready = bool(msg.data)
 
         if self._tf_ready and not previous:
@@ -275,7 +293,7 @@ class ChessMissionOrchestrator(Node):
 
     def _on_game_status(self, msg: ChessGameStatus) -> None:
         """Process game state updates from lekiwi_chess_master."""
-        if not self._tf_ready:
+        if not self.is_tf_ready:
             return
 
         # Game over condition
@@ -323,6 +341,8 @@ class ChessMissionOrchestrator(Node):
 
     def _dispatch_move_workflow(self, uci_move: str) -> None:
         """Begin autonomous execution of a single chess move."""
+        if not self.is_tf_ready:
+            return
         try:
             details = self._mapper.parse_uci_move(uci_move)
             self._current_move_details = details
@@ -546,7 +566,7 @@ class ChessMissionOrchestrator(Node):
         if self._mission_state == MissionState.ERROR_FALLBACK:
             diag.level = DiagnosticStatus.ERROR
             diag.message = "System in Error Fallback state"
-        elif not self._tf_ready:
+        elif not self.is_tf_ready:
             diag.level = DiagnosticStatus.WARN
             diag.message = "Waiting for TF readiness"
         else:

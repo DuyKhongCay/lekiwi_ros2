@@ -149,3 +149,17 @@ def test_workflow_dispatch_zero_nav_simulation(ros_context):
         assert node.camera_mode == CameraMode.CHESS_THINKING
     finally:
         node.destroy_node()
+
+
+def test_readiness_lease_expires_without_ros_time(ros_context):
+    """A stopped gatekeeper cannot leave cached readiness valid indefinitely."""
+    import time
+    node = ChessMissionOrchestrator()
+    try:
+        node._on_tf_ready(Bool(data=True))
+        node._last_readiness_heartbeat = time.monotonic() - node._readiness_timeout - 0.1
+        assert not node.is_tf_ready
+        node._expire_readiness()
+        assert not node._tf_ready
+    finally:
+        node.destroy_node()

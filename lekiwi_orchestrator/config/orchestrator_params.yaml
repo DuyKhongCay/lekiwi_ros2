@@ -8,18 +8,7 @@ chess_mission_orchestrator:
     feasibility_timeout_sec: 5.0
     action_timeout_sec: 60.0
     skip_navigation: false
-
-tf_readiness_gatekeeper:
-  ros__parameters:
-    max_transform_age_sec: 0.30
-    max_pos_variance: 0.0012
-    max_yaw_variance: 0.0030
-    max_stop_velocity: 0.03
-    max_stop_angular_vel: 0.08
-    check_frequency_hz: 10.0
-    trigger_nav2: true
-    nav2_lifecycle_service: "/lifecycle_manager_navigation/manage_nodes"
-    auto_pause_nav2_on_tf_loss: false
+    readiness_timeout_sec: 1.0
 
 task_orchestrator:
   ros__parameters:
@@ -27,4 +16,3 @@ task_orchestrator:
     cam_hub_srv: "/hailo_chess_inference/set_mode"
     orchestrator_service: "/orchestrator/set_mode"
     lifecycle_poll_period_sec: 0.5
-
