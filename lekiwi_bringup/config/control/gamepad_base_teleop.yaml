@@ -1,11 +1,12 @@
 # Gamepad Teleoperation configuration for LeKiwi Mobile Base (Flydigi / Xbox 360 controller)
 # Standard Button Map:
-# Button 0: A
+# Button 0: A (Toggle Base Controller & Torque On/Off)
 # Button 1: B (Reset Global EKF when chessboard moves / drift reset)
-# Button 2: X (E-Stop toggle / lock)
+# Button 2: X (Toggle Arm Controller & Torque On/Off)
 # Button 3: Y (Enable Global EKF)
-# Button 4: LB
+# Button 4: LB (Turbo modifier)
 # Button 5: RB (Deadman switch)
+# Button 6: Back / Select (Emergency Stop)
 
 joy_linux_node:
   ros__parameters:
@@ -57,24 +58,46 @@ joy_teleop:
           scale: 1
           offset: 0.0
 
-    # 3. Button X (Index 2): Emergency Stop (Publish /safety/estop_active = True)
-    lekiwi_estop_button:
-      type: topic
-      interface_type: std_msgs/msg/Bool
-      topic_name: /safety/estop_active
-      deadman_buttons: [2]
-      message_value:
-        data:
-          value: true
+    # 3. Button X (Index 2): Toggle Arm Torque & Controller (Call /set_torque_enabled)
+    lekiwi_toggle_arm_torque:
+      type: service
+      interface_type: lekiwi_interfaces/srv/SetTorqueEnabled
+      service_name: /set_torque_enabled
+      buttons: [2]
+      service_request:
+        target: 1 # TARGET_ARM
+        enabled: false
+        toggle: true
 
-    # 4. Button Y (Index 3): Enable Global EKF (Call /ekf_filter_node_map/enable service)
+    # 4. Button A (Index 0): Toggle Base Torque & Controller (Call /set_torque_enabled)
+    lekiwi_toggle_base_torque:
+      type: service
+      interface_type: lekiwi_interfaces/srv/SetTorqueEnabled
+      service_name: /set_torque_enabled
+      buttons: [0]
+      service_request:
+        target: 2 # TARGET_BASE
+        enabled: false
+        toggle: true
+
+    # # 5. Button Back (Index 6): Emergency Stop (Publish /safety/estop_active = True)
+    # lekiwi_estop_button:
+    #   type: topic
+    #   interface_type: std_msgs/msg/Bool
+    #   topic_name: /safety/estop_active
+    #   deadman_buttons: [6]
+    #   message_value:
+    #     data:
+    #       value: true
+
+    # 6. Button Y (Index 3): Enable Global EKF (Call /ekf_filter_node_map/enable service)
     lekiwi_enable_ekf_button:
       type: service
       interface_type: std_srvs/srv/Empty
       service_name: /ekf_filter_node_map/enable
       buttons: [3]
 
-    # 5. Button B (Index 1): Reset Global EKF when chessboard moves / drift reset (Call /ekf_filter_node_map/reset service)
+    # 7. Button B (Index 1): Reset Global EKF when chessboard moves / drift reset (Call /ekf_filter_node_map/reset service)
     lekiwi_reset_ekf_button:
       type: service
       interface_type: std_srvs/srv/Empty

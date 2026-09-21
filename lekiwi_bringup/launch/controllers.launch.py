@@ -58,7 +58,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "use_mag",
-            default_value="false",
+            default_value="true",
             description="Spawn and activate magnetometer broadcaster",
         ),
     ]
@@ -178,6 +178,21 @@ def generate_launch_description():
         output="screen",
     )
 
+    control_config = PathJoinSubstitution(
+        [bringup_share, "config", "control", "control.yaml"]
+    )
+
+    torque_manager_node = Node(
+        package="lekiwi_control",
+        executable="torque_manager_node",
+        name="torque_manager",
+        output="screen",
+        parameters=[
+            control_config,
+            {"use_sim_time": use_sim_time},
+        ],
+    )
+
     return LaunchDescription(
         [
             *declared_arguments,
@@ -188,6 +203,12 @@ def generate_launch_description():
                 OnProcessExit(
                     target_action=joint_state_broadcaster,
                     on_exit=[torque_controller_spawner],
+                )
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=torque_controller_spawner,
+                    on_exit=[torque_manager_node],
                 )
             ),
             RegisterEventHandler(

@@ -1,110 +1,75 @@
-# Copyright 2026 LeKiwi Labs
-# Licensed under the Apache License, Version 2.0.
+"""Launch LeKiwi control subsystem nodes and component container."""
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+)
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+from launch_ros.actions import (
+    ComposableNodeContainer,
+    LoadComposableNodes,
+)
+from launch_ros.descriptions import ComposableNode
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Launch LeKiwi control orchestration and optional LeRobot bridge helper."""
-    bringup_share = FindPackageShare("lekiwi_bringup")
-
-    joint_config_file = PathJoinSubstitution(
-        [bringup_share, "config", "servos", "lekiwi_arm_calib.yaml"]
+    """Start control component container and load composable nodes from control.yaml."""
+    control_config = PathJoinSubstitution(
+        [FindPackageShare("lekiwi_bringup"), "config", "control", "control.yaml"]
     )
-    orchestrator_params_file = PathJoinSubstitution(
-        [bringup_share, "config", "control", "orchestrator.yaml"]
-    )
+    clock = {
+        "use_sim_time": ParameterValue(
+            LaunchConfiguration("use_sim_time"), value_type=bool
+        )
+    }
 
-    start_lerobot_bridge_arg = DeclareLaunchArgument(
-        "start_lerobot_bridge",
-        default_value="false",
-        description="Start LeRobot arm trajectory bridge node",
-    )
-
-    start_tf_gatekeeper_arg = DeclareLaunchArgument(
-        "start_tf_gatekeeper",
-        default_value="true",
-        description="Start TF Tree Readiness Gatekeeper node",
+    # Component container for zero-copy intra-process communication
+    control_container = ComposableNodeContainer(
+        name="lekiwi_control_container",
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_mt",
+        composable_node_descriptions=[],
+        output="screen",
     )
 
-    start_workspace_checker_arg = DeclareLaunchArgument(
-        "start_workspace_checker",
-        default_value="true",
-        description="Start URDF-based Workspace Checker node",
-    )
-
-    use_sim_time_arg = DeclareLaunchArgument(
-        "use_sim_time",
-        default_value="false",
-        description="Use simulation (Gazebo) clock if true",
-    )
-
-    orchestrator = Node(
-        package="lekiwi_orchestrator",
-        executable="task_orchestrator",
-        name="task_orchestrator",
-        parameters=[
-            orchestrator_params_file,
-            {"use_sim_time": LaunchConfiguration("use_sim_time")},
+    # Dynamic loading of readiness check components into container when enabled
+    load_readiness_nodes = LoadComposableNodes(
+        target_container="lekiwi_control_container",
+        composable_node_descriptions=[
+            ComposableNode(
+                package="lekiwi_control",
+                plugin="lekiwi_control::WorkspaceCheckerNode",
+                name="workspace_checker",
+                parameters=[control_config, clock],
+                extra_arguments=[{"use_intra_process_comms": True}],
+            ),
+            ComposableNode(
+                package="lekiwi_control",
+                plugin="lekiwi_control::TfGatekeeperNode",
+                name="tf_gatekeeper_node",
+                parameters=[control_config, clock],
+                extra_arguments=[{"use_intra_process_comms": True}],
+            ),
         ],
-        output="screen",
-    )
-
-    arm_bridge = Node(
-        package="lekiwi_manipulation",
-        executable="lerobot_arm_bridge",
-        name="lerobot_arm_bridge",
-        parameters=[
-            {
-                "joint_config_file": joint_config_file,
-                "use_sim_time": LaunchConfiguration("use_sim_time"),
-            }
-        ],
-        output="screen",
-        condition=IfCondition(LaunchConfiguration("start_lerobot_bridge")),
-    )
-
-    tf_gatekeeper = Node(
-        package="lekiwi_orchestrator",
-        executable="tf_gatekeeper",
-        name="tf_readiness_gatekeeper",
-        parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
-        output="screen",
-        condition=IfCondition(LaunchConfiguration("start_tf_gatekeeper")),
-    )
-
-    workspace_checker = Node(
-        package="lekiwi_control",
-        executable="workspace_checker",
-        name="workspace_checker",
-        parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
-        output="screen",
-        condition=IfCondition(LaunchConfiguration("start_workspace_checker")),
-    )
-
-    torque_manager = Node(
-        package="lekiwi_control",
-        executable="torque_manager",
-        name="torque_manager",
-        parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
-        output="screen",
     )
 
     return LaunchDescription(
         [
-            start_lerobot_bridge_arg,
-            start_tf_gatekeeper_arg,
-            start_workspace_checker_arg,
-            use_sim_time_arg,
-            orchestrator,
-            arm_bridge,
-            tf_gatekeeper,
-            workspace_checker,
-            torque_manager,
+            DeclareLaunchArgument(
+                "enable_readiness_checks",
+                default_value="true",
+                description="Start both TF and workspace readiness checks",
+            ),
+            DeclareLaunchArgument("use_sim_time", default_value="false"),
+            control_container,
+            GroupAction(
+                [load_readiness_nodes],
+                condition=IfCondition(LaunchConfiguration("enable_readiness_checks")),
+            ),
         ]
     )

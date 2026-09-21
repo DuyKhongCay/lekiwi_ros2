@@ -1,119 +1,41 @@
-# `lekiwi_bringup`
+# lekiwi_bringup
 
-Central orchestration package for the LeKiwi robot, containing subsystem and full system launch files, runtime parameter YAMLs, controller configurations, calibration matrices, and Linux udev rules.
+Robot launch files and deployment configuration for LeKiwi.
 
----
+## Control migration
 
-## 🚀 Launch Architecture
-
-```text
-robot.launch.py (Top-level System Entrypoint)
-├── description.launch.py    -> robot_state_publisher + ros2_control controller manager + spawners
-├── cameras.launch.py        -> lekiwi_perception_container (4x CameraStreamer + HailoChessInference)
-├── control.launch.py        -> task_orchestrator + LeRobotArmBridge + camera_mode_demo
-├── imu.launch.py            -> ICM-20948 broadcaster + Madgwick filter + TF2 transformer
-├── teleop_gamepad.launch.py -> joy_linux_node + joy_teleop (Base joystick teleop)
-├── teleop_uarm.launch.py    -> teleop_uarm_node (uArm leader arm teleop)
-└── diagnostics.launch.py    -> diagnostic_aggregator (/diagnostics_agg) + system resource monitors (CPU, RAM, Disk)
-```
-
----
-
-## 🛠️ Launch Commands
-
-### 1. Full Robot Stack & Master Switches
-
-`robot.launch.py` cung cấp các biến Master Switch quan trọng nhất để bật/tắt toàn bộ hoặc từng phần của robot:
-
-| Master Variable | Mặc Định | Chức Năng |
-|---|---|---|
-| `enable_description` | `true` | Bật/tắt URDF, robot_state_publisher và ros2_control manager |
-| `enable_perception` | `false` | Bật/tắt cụm 4 Camera GStreamer + Hailo-8 NPU perception |
-| `enable_control` | `true` | Bật/tắt tầng điều khiển cấp cao (`lekiwi_control`) |
-| `enable_imu_pipeline` | `true` | Bật/tắt lọc Madgwick IMU và biến đổi TF2 base_footprint |
-| `start_gamepad_teleop` | `false` | Bật/tắt điều khiển mobile base bằng tay cầm joystick |
-| `start_uarm_teleop` | `false` | Bật/tắt điều khiển cánh tay bằng uArm leader |
-| `enable_diagnostics` | `true` | Bật/tắt cây chẩn đoán diagnostic_aggregator & monitors |
+`control.launch.py` is the single entry point for `lekiwi_control`: torque manager always runs, while `enable_readiness_checks` enables both TF gatekeeper and workspace checker. It contains no orchestrator or manipulation nodes.
 
 ```bash
-# Chạy mặc định (Mock mode an toàn cho dev, diagnostics & imu bật)
-ros2 launch lekiwi_bringup robot.launch.py
-
-# Chạy trên robot thật với toàn bộ controllers & teleop:
-ros2 launch lekiwi_bringup robot.launch.py \
-  hardware_type:=real \
-  imu_hardware_type:=real \
-  start_controller_manager:=true \
-  activate_controllers:=true \
-  start_gamepad_teleop:=true \
-  start_uarm_teleop:=true
-
-# Kích hoạt riêng arm_controller (dành cho teleop hoặc điều khiển cánh tay độc lập):
-ros2 launch lekiwi_bringup robot.launch.py \
-  hardware_type:=real \
-  start_controller_manager:=true \
-  start_arm_controller:=true \
-  start_uarm_teleop:=true
-
-# Chạy cùng LeRobot ML Bridge:
-ros2 launch lekiwi_bringup robot.launch.py \
-  hardware_type:=real \
-  start_controller_manager:=true \
-  start_arm_controller:=true \
-  start_lerobot_bridge:=true
+ros2 launch lekiwi_bringup control.launch.py
+ros2 launch lekiwi_bringup control.launch.py enable_readiness_checks:=false use_sim_time:=true
 ```
 
-### 2. Isolated Subsystem Debugging
-```bash
-# Description and controllers only:
-ros2 launch lekiwi_description description.launch.py hardware_type:=mock
-```
+These commands launch the control services and monitors only; they do not start ros2_control or hardware. Replace old launches from `lekiwi_control` and separate workspace/gatekeeper switches with this entry point and combined switch.
 
-# Controllers only:
-ros2 launch lekiwi_bringup controllers.launch.py hardware_type:=mock
+`robot.launch.py` forwards `enable_readiness_checks` and `use_sim_time`. It starts task orchestration separately. When navigation is enabled, task orchestration starts Nav2 after a fresh readiness heartbeat. Disabling readiness checks does not bypass that readiness requirement.
 
-# Composed perception container only:
-ros2 launch lekiwi_bringup cameras.launch.py use_test_sources:=true
-
-# Control orchestrator and LeRobot bridge only:
-ros2 launch lekiwi_bringup control.launch.py start_lerobot_bridge:=true
-
-# IMU filtering pipeline:
-ros2 launch lekiwi_bringup imu.launch.py
-
-# Standalone Gamepad teleoperation:
-ros2 launch lekiwi_bringup teleop_gamepad.launch.py
-
-# Standalone uArm leader arm teleoperation:
-ros2 launch lekiwi_bringup teleop_uarm.launch.py arm_mode:=joint_trajectory
-
-# Diagnostics aggregator and system monitors only:
-ros2 launch lekiwi_bringup diagnostics.launch.py
-
-# View diagnostics tree in GUI:
-ros2 run rqt_robot_monitor rqt_robot_monitor
-```
-
----
-
-## ⚙️ Configuration Directories (`config/`)
-
-- `config/control/`: High-level FSM orchestrator, gamepad teleop, and uArm parameters.
-- `config/controllers/`: `ros2_control` controller configurations (`arm_controller`, `omni_base_controller`, `lekiwi_imu_broadcaster`, `joint_state_broadcaster`).
-- `config/diagnostics/`: Diagnostic analyzer grouping hierarchy for `diagnostic_aggregator`.
-- `config/localization/`: EKF robot localization (`ekf.yaml`) and AprilTag chessboard layout parameters (`chessboard_tags.yaml`, `chessboard_tags_calib.yaml`).
-- `config/navigation/`: Nav2 stack parameter configuration (`nav2_params.yaml`).
-- `config/perception/`: GStreamer pipelines (`gscam_cameras.yaml`) and intrinsic camera calibration matrices.
-- `config/sensors/`: IMU Madgwick orientation estimation parameters (`imu_filter.yaml`).
-
----
-
-## 🔌 Udev Rules
-
-Install udev rules to create persistent symlinks for hardware buses:
+Use the installed launch descriptions to inspect the complete top-level interface:
 
 ```bash
-sudo cp udev/99-lekiwi.rules /etc/udev/rules.d/
-sudo cp udev/99-teleop-lekiwi.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
+ros2 launch lekiwi_bringup robot.launch.py --show-args
+```
+
+The top-level default hardware type is `real`; explicitly choose deployment arguments for your environment.
+
+## Configuration
+
+`config/control/lekiwi_controllers.yaml` contains controller parameters and the workspace checker, torque manager, and TF gatekeeper sections. The control launch derives shared base frame, wheel-center radius, arm/base joint lists, and torque command order directly from the controller sections before starting nodes. No runtime parameter discovery is required.
+
+Geometry, thresholds, timeouts, and topic configuration belong in YAML. Wheel-center radius, footprint padding, and planning clearance have distinct meanings. See [control documentation](../lekiwi_control/README.md) for model and torque startup contracts.
+
+Other configuration folders hold localization, navigation, perception, sensors, and diagnostics. Calibration values remain deployment-specific.
+
+## Tests
+
+`test/test_control_launch.py` exercises the installed launch with isolated fake ROS sensors and services, including the combined switch, EKF bootstrap, stale odometry, workspace responses, and lifecycle reconfiguration.
+
+```bash
+colcon test --packages-select lekiwi_bringup
+colcon test-result --verbose
 ```

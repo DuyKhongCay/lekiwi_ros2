@@ -18,6 +18,11 @@ def generate_launch_description():
     # Global and Subsystem Arguments
     declared_arguments = [
         DeclareLaunchArgument(
+            "enable_readiness_checks",
+            default_value="true",
+            description="Start both TF and workspace readiness checks",
+        ),
+        DeclareLaunchArgument(
             "cameras",
             default_value="true",
             description="Lekiwi perception: true of false",
@@ -117,10 +122,26 @@ def generate_launch_description():
             PathJoinSubstitution([bringup_share, "launch", "control.launch.py"])
         ),
         launch_arguments={
-            "start_tf_gatekeeper": "true",
-            "start_workspace_checker": "false",
+            "enable_readiness_checks": LaunchConfiguration("enable_readiness_checks"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
         }.items(),
+    )
+
+    # Preserve camera orchestration outside the control-only subsystem launch.
+    task_orchestrator = Node(
+        package="lekiwi_orchestrator",
+        executable="task_orchestrator",
+        name="task_orchestrator",
+        output="screen",
+        parameters=[
+            PathJoinSubstitution(
+                [bringup_share, "config", "control", "orchestrator.yaml"]
+            ),
+            {
+                "use_sim_time": LaunchConfiguration("use_sim_time"),
+                "start_navigation": LaunchConfiguration("navigation"),
+            },
+        ],
     )
 
     diagnostics = IncludeLaunchDescription(
@@ -183,6 +204,7 @@ def generate_launch_description():
             cameras,
             diagnostics,
             control,
+            task_orchestrator,
             teleop_gamepad,
             teleop_uarm,
             navigation,

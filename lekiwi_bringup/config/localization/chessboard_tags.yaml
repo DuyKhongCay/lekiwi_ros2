@@ -2,7 +2,7 @@
   ros__parameters:
     tag_family: "16h5"
     tag_size: 0.029
-    detection_rate_hz: 5.0
+    detection_rate_hz: 10.0
     calib: false
     min_tags_cnt: 2
 
@@ -11,14 +11,13 @@
     # +Y: Rank 1 -> 8 (Bottom -> Top)
     # +Z: Normal pointing up perpendicular to the board
     tags:
-      # Calibration Date & Time: 2026-09-19 00:23:32
+      # Calibration Date & Time: 2026-09-22 00:08:07
       ids: [0, 1, 2, 3]
       names: [A1, H1, H8, A8]
-      positions_x: [-0.1926, 0.1938, 0.1912, -0.1924]
-      positions_y: [-0.1932, -0.1928, 0.1934, 0.1926]
-      positions_z: [0.004, 0.004, 0.004, 0.004]
-      yaws: [0.0, 0.0203, -0.0095, 0.0051]
-
+      positions_x: [-0.1922, 0.1915, 0.1912, -0.1905]
+      positions_y: [-0.1915, -0.1933, 0.1918, 0.193]
+      positions_z: [0.006, 0.006, 0.006, 0.006]
+      yaws: [0.0, 0.0235, -0.0141, 0.0043]
 
 
     # Frame IDs
@@ -29,7 +28,20 @@
     base_frame: "base_footprint"
 
     # Board nominal pose in map: [x, y, z, roll, pitch, yaw]
-    chessboard_pose_in_map: [0.0, 0.0, 0.004, 0.0, 0.0, 0.0]
+    chessboard_pose_in_map: [0.0, 0.0, 0.006, 0.0, 0.0, 0.0]
 
     # Static TF Broadcasting (map -> chessboard_frame)
     publish_tf: true
+
+    # Dynamic Velocity-Dependent Covariance Configuration
+    odom_topic: "/omni_base_controller/odom"
+    odom_timeout_sec: 0.5
+    covariance:
+      base_pos_var: 0.0001    # 1 cm std khi đứng yên
+      base_rot_var: 0.0004    # 1.15° std khi đứng yên
+      vel_scale_pos: 0.01     # m²/(m/s)² - tăng variance theo speed²
+      vel_scale_rot: 0.05     # rad²/(rad/s)² - tăng variance theo wz²
+      max_pos_var: 0.01       # 10 cm std clamp tối đa
+      max_rot_var: 0.04       # ~11.5° std clamp tối đa
+      scale_by_tag_count: true
+
