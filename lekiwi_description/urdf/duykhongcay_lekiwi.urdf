@@ -218,36 +218,7 @@
     <child link="baseframe"/>
     <axis xyz="0 0 0"/>
   </joint>
-  <!-- Frame stereo_left_optical (dummy link + fixed joint) -->
-  <link name="stereo_left_optical">
-    <origin xyz="0 0 0" rpy="0 -0 0"/>
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0"/>
-      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
-    </inertial>
-  </link>
-  <joint name="stereo_left_optical_frame" type="fixed">
-    <origin xyz="-0.0381026 -0.0300367 0.401858" rpy="-2.35619 0 -1.5708"/>
-    <parent link="base_footprint"/>
-    <child link="stereo_left_optical"/>
-    <axis xyz="0 0 0"/>
-  </joint>
-  <!-- Frame stereo_right_optical (dummy link + fixed joint) -->
-  <link name="stereo_right_optical">
-    <origin xyz="0 0 0" rpy="0 -0 0"/>
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0"/>
-      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
-    </inertial>
-  </link>
-  <joint name="stereo_right_optical_frame" type="fixed">
-    <origin xyz="-0.0381026 0.0300633 0.401858" rpy="-2.35619 0 -1.5708"/>
-    <parent link="base_footprint"/>
-    <child link="stereo_right_optical"/>
-    <axis xyz="0 0 0"/>
-  </joint>
+
   <!-- Frame icm20948_imu (dummy link + fixed joint) -->
   <link name="icm20948_imu">
     <origin xyz="0 0 0" rpy="0 -0 0"/>
@@ -666,7 +637,7 @@
     <parent link="gripper"/>
     <child link="moving_jaw_so101_v1"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-0.0863006" upper="1.65903"/>
+    <limit effort="10" velocity="10" lower="-0.15" upper="1.75"/>
   </joint>
   <!-- Joint from wrist to gripper -->
   <joint name="arm_wrist_roll" type="revolute">
@@ -674,7 +645,7 @@
     <parent link="wrist"/>
     <child link="gripper"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-2.64577" upper="2.76475"/>
+    <limit effort="10" velocity="10" lower="-2.80" upper="2.85"/>
   </joint>
   <!-- Joint from lower_arm to wrist -->
   <joint name="arm_wrist_flex" type="revolute">
@@ -682,7 +653,7 @@
     <parent link="lower_arm"/>
     <child link="wrist"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.56161" upper="1.57999"/>
+    <limit effort="10" velocity="10" lower="-1.68" upper="1.68"/>
   </joint>
   <!-- Joint from upper_arm to lower_arm -->
   <joint name="arm_elbow_flex" type="revolute">
@@ -690,7 +661,7 @@
     <parent link="upper_arm"/>
     <child link="lower_arm"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.65765" upper="1.57121"/>
+    <limit effort="10" velocity="10" lower="-1.75" upper="1.68"/>
   </joint>
   <!-- Joint from rotation_pitch to upper_arm -->
   <joint name="arm_shoulder_lift" type="revolute">
@@ -698,7 +669,7 @@
     <parent link="rotation_pitch"/>
     <child link="upper_arm"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.74533" upper="1.74533"/>
+    <limit effort="10" velocity="10" lower="-1.85" upper="1.85"/>
   </joint>
   <!-- Joint from base_footprint to rotation_pitch -->
   <joint name="arm_shoulder_pan" type="revolute">
@@ -706,7 +677,7 @@
     <parent link="base_footprint"/>
     <child link="rotation_pitch"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.74919" upper="1.74147"/>
+    <limit effort="10" velocity="10" lower="-1.85" upper="1.85"/>
   </joint>
   <!-- Link omniwheel_7 -->
   <link name="omniwheel_7">

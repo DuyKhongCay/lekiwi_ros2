@@ -7,6 +7,7 @@ uint8 TARGET_BASE=2
 
 uint8 target       # TARGET_ALL (0), TARGET_ARM (1), or TARGET_BASE (2)
 bool enabled       # true to enable torque, false to disable torque
+bool toggle false  # true to toggle current state of target, false to respect enabled
 ---
 bool success
 string message

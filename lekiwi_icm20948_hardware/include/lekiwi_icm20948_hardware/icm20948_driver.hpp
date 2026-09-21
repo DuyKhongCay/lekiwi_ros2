@@ -17,6 +17,8 @@
 
 #include "lekiwi_icm20948_hardware/icm20948_defs.hpp"
 
+class ICM20948MathTest_BitShiftGuards_Test;
+
 namespace lekiwi_icm20948_hardware
 {
 
@@ -132,6 +134,26 @@ namespace lekiwi_icm20948_hardware
         bool read_sensor_data(SensorData &out_data, std::string *error_msg = nullptr);
 
         /**
+         * @brief Puts the ICM-20948 and AK09916 into low-power sleep mode.
+         *
+         * @param[out] error_msg Optional string capturing diagnostics on failure.
+         * @return true On success, false on I2C communication failure.
+         */
+        bool sleep_device(std::string *error_msg = nullptr);
+
+        /**
+         * @brief Resets the auxiliary I2C master logic for bus fault recovery.
+         *
+         * @return true On success, false on I2C error.
+         */
+        bool reset_i2c_master();
+
+        /**
+         * @brief Invalidates the internal bank cache to force an explicit bank select on the next transaction.
+         */
+        void invalidate_bank_cache() noexcept { current_bank_ = 0xFF; }
+
+        /**
          * @brief Closes the I2C bus file descriptor.
          */
         void close_bus();
@@ -163,6 +185,24 @@ namespace lekiwi_icm20948_hardware
          * @return double Conversion factor ($rad/s / \text{LSB}$).
          */
         static double calculate_gyro_scale(GyroRange range);
+
+        /**
+         * @brief Decodes two Big-Endian bytes into a signed 16-bit integer (MISRA C compliant).
+         */
+        static constexpr int16_t decode_be16(uint8_t msb, uint8_t lsb) noexcept
+        {
+            const uint16_t u = (static_cast<uint16_t>(msb) << 8U) | static_cast<uint16_t>(lsb);
+            return static_cast<int16_t>(u);
+        }
+
+        /**
+         * @brief Decodes two Little-Endian bytes into a signed 16-bit integer (MISRA C compliant).
+         */
+        static constexpr int16_t decode_le16(uint8_t lsb, uint8_t msb) noexcept
+        {
+            const uint16_t u = (static_cast<uint16_t>(msb) << 8U) | static_cast<uint16_t>(lsb);
+            return static_cast<int16_t>(u);
+        }
 
     private:
         int fd_{-1};
@@ -229,6 +269,8 @@ namespace lekiwi_icm20948_hardware
          * @brief Initializes AK09916 auxiliary I2C master slave mappings and continuous mode.
          */
         bool init_magnetometer(std::string *error_msg = nullptr);
+
+        friend class ::ICM20948MathTest_BitShiftGuards_Test;
     };
 
 } // namespace lekiwi_icm20948_hardware

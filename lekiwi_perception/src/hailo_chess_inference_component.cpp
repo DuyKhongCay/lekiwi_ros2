@@ -38,22 +38,30 @@ namespace lekiwi_perception
   {
     // Parameters
     board_hef_path_ = declare_parameter<std::string>("board_hef_path", "/resources/model/yolov8n-seg.hef");
-    pcs_hef_path_ = declare_parameter<std::string>("pcs_hef_path", "/resources/model/yolo11n.hef");
+    pcs_hef_path_ = declare_parameter<std::string>("pcs_hef_path", "/resources/model/yolov11n.hef");
     camera_topic_ = declare_parameter<std::string>("camera_topic", "/cameras/stereo_left/image_raw");
-    fen_topic_ = declare_parameter<std::string>("fen_topic", "/chess/fen");
+    fen_topic_ = declare_parameter<std::string>("fen_topic", "/chess/raw_fen");
     detections_topic_ = declare_parameter<std::string>("detections_topic", "/chess/detections_2d");
     tag_centers_topic_ = declare_parameter<std::string>("tag_centers_topic", "/chess/tag_centers");
+    grid_points_topic_ = declare_parameter<std::string>("grid_points_topic", "/chess/grid_points");
+    debug_ = declare_parameter<bool>("debug", true);
+
+    const auto tag_ids = declare_parameter<std::vector<int64_t>>("tags.ids", {0, 1, 2, 3});
+    tag_offsets_.clear();
+    for (size_t i = 0; i < tag_ids.size() && i < 4; ++i)
+    {
+      tag_offsets_[static_cast<int>(tag_ids[i])] = static_cast<int>(i);
+    }
+    RCLCPP_INFO(get_logger(), "Configured %zu tag offsets from parameter 'tags.ids'", tag_offsets_.size());
 
     frame_id_ = declare_parameter<std::string>("frame_id", "stereo_left_optical");
     vdevice_group_id_ = declare_parameter<std::string>("vdevice_group_id", "lekiwi_chess");
     confidence_threshold_ = declare_parameter<double>("confidence_threshold", 0.35);
-    const int history_window = declare_parameter<int>("history_window_size", 3);
     transition_timeout_ = std::chrono::milliseconds(declare_parameter<int>("transition_timeout_ms", 5000));
-
-    game_tracker_ = std::make_unique<hailo::ChessGameStateTracker>(history_window);
 
     fen_pub_ = create_publisher<std_msgs::msg::String>(fen_topic_, rclcpp::SensorDataQoS());
     detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>(detections_topic_, rclcpp::SensorDataQoS());
+    grid_points_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(grid_points_topic_, rclcpp::SensorDataQoS());
 
     mode_srv_ = create_service<lekiwi_interfaces::srv::SetCamMode>(
         "~/set_mode",
@@ -76,14 +84,18 @@ namespace lekiwi_perception
           this->handle_sample(sample, pipeline);
         });
 
-    updater_ = std::make_shared<diagnostic_updater::Updater>(this);
-    updater_->setHardwareID("hailo8_npu");
-    updater_->add(
+    lifecycle_helper_ = std::make_unique<utils::PerceptionLifecycleHelper>(
+        this, "hailo8_npu", "NPU_Pipeline_Status");
+    lifecycle_helper_->setup_camera_mode_sub({lekiwi_interfaces::msg::CameraMode::CHESS_THINKING});
+    lifecycle_helper_->diagnostics().updater().add(
         "NPU_Pipeline_Status", this,
         &HailoChessInferenceComponent::produce_diagnostics);
 
-    pipeline_state_ = "STOPPED";
-    last_error_.clear();
+    pipeline_state_.store(PipelineState::STOPPED);
+    {
+      std::lock_guard<std::mutex> lock(error_mutex_);
+      last_error_.clear();
+    }
     last_logged_fen_.clear();
 
     RCLCPP_INFO(get_logger(), "HailoChessInferenceComponent configured successfully");
@@ -95,22 +107,26 @@ namespace lekiwi_perception
   {
     fen_pub_->on_activate();
     detections_pub_->on_activate();
+    grid_points_pub_->on_activate();
 
-    pipeline_state_ = "STARTING";
+    pipeline_state_.store(PipelineState::STARTING);
     std::string error;
     if (!hailo_pipeline_->start(board_hef_path_, pcs_hef_path_, vdevice_group_id_, transition_timeout_, error))
     {
-      pipeline_state_ = "ERROR";
-      last_error_ = error;
+      pipeline_state_.store(PipelineState::ERROR);
+      {
+        std::lock_guard<std::mutex> lock(error_mutex_);
+        last_error_ = error;
+      }
       RCLCPP_ERROR(get_logger(), "Failed to start Hailo pipeline: %s", error.c_str());
       return CallbackReturn::FAILURE;
     }
 
-    pipeline_state_ = "RUNNING";
-    last_fps_time_ = std::chrono::steady_clock::now();
-    last_fps_frame_count_ = 0;
-    frame_counter_.store(0);
-    current_fps_ = 0.0F;
+    pipeline_state_.store(PipelineState::RUNNING);
+    if (lifecycle_helper_)
+    {
+      lifecycle_helper_->perf_tracker().reset();
+    }
 
     bus_timer_ = create_wall_timer(
         std::chrono::milliseconds(100), std::bind(&HailoChessInferenceComponent::poll_bus_errors, this));
@@ -128,16 +144,17 @@ namespace lekiwi_perception
       bus_timer_.reset();
     }
 
-    pipeline_state_ = "STOPPING";
+    pipeline_state_.store(PipelineState::STOPPING);
     std::string error;
     if (hailo_pipeline_)
     {
       static_cast<void>(hailo_pipeline_->stop(transition_timeout_, error));
     }
-    pipeline_state_ = "STOPPED";
+    pipeline_state_.store(PipelineState::STOPPED);
 
     fen_pub_->on_deactivate();
     detections_pub_->on_deactivate();
+    grid_points_pub_->on_deactivate();
 
     RCLCPP_INFO(get_logger(), "HailoChessInferenceComponent deactivated");
     return CallbackReturn::SUCCESS;
@@ -188,9 +205,23 @@ namespace lekiwi_perception
     }
     fen_pub_.reset();
     detections_pub_.reset();
+    grid_points_pub_.reset();
+    if (lifecycle_helper_)
+    {
+      lifecycle_helper_->reset();
+      lifecycle_helper_.reset();
+    }
+    {
+      std::lock_guard<std::mutex> lock(debug_metrics_mutex_);
+      debug_yolo_detections_ = 0;
+      debug_yolo_mapped_ = 0;
+      debug_yolo_avg_conf_ = 0.0F;
+      debug_yolo_min_conf_ = 0.0F;
+      debug_yolo_placement_.clear();
+      debug_unmapped_pieces_.clear();
+    }
     a1_corner_idx_.store(0);
-    current_camera_mode_.store(lekiwi_interfaces::msg::CameraMode::STANDBY);
-    pipeline_state_ = "STOPPED";
+    pipeline_state_.store(PipelineState::STOPPED);
   }
 
   void HailoChessInferenceComponent::handle_tag_centers(
@@ -226,12 +257,15 @@ namespace lekiwi_perception
     if (req_mode > lekiwi_interfaces::msg::CameraMode::MANIPULATION_LEROBOT)
     {
       response->success = false;
-      response->applied_mode.value = current_camera_mode_.load();
+      response->applied_mode.value = lifecycle_helper_ ? lifecycle_helper_->get_current_mode() : 0;
       response->message = "Invalid camera mode requested";
       return;
     }
 
-    current_camera_mode_.store(req_mode);
+    if (lifecycle_helper_)
+    {
+      lifecycle_helper_->set_current_mode(req_mode);
+    }
     response->success = true;
     response->applied_mode.value = req_mode;
     response->message = "Camera mode applied successfully";
@@ -241,11 +275,11 @@ namespace lekiwi_perception
   void HailoChessInferenceComponent::handle_image_input(
       const sensor_msgs::msg::Image::ConstSharedPtr &msg)
   {
-    if (current_camera_mode_.load() != lekiwi_interfaces::msg::CameraMode::CHESS_THINKING)
+    if (!lifecycle_helper_ || !lifecycle_helper_->is_mode_allowed())
     {
       return;
     }
-    if (!hailo_pipeline_ || pipeline_state_ != "RUNNING")
+    if (!hailo_pipeline_ || pipeline_state_.load() != PipelineState::RUNNING)
     {
       return;
     }
@@ -265,9 +299,6 @@ namespace lekiwi_perception
     {
       return;
     }
-
-    (void)pipeline;
-    const auto proc_start = std::chrono::steady_clock::now();
 
     GstBuffer *buffer = gst_sample_get_buffer(sample);
     if (!buffer)
@@ -306,7 +337,7 @@ namespace lekiwi_perception
       tags_snapshot = latest_tags_;
     }
 
-    const bool valid_metadata = roi && hailo::ChessVisionMapper::decode_hailo_metadata(roi, state, tags_snapshot);
+    const bool valid_metadata = roi && hailo::ChessVisionMapper::decode_hailo_metadata(roi, state, tags_snapshot, tag_offsets_);
     if (valid_metadata)
     {
       a1_corner_idx_.store(state.a1_corner_idx);
@@ -325,21 +356,76 @@ namespace lekiwi_perception
 
     if (valid_metadata)
     {
-      // Process game rules, debounce, and generate full FEN
-      const hailo::GameStateResult game_res = game_tracker_->update(state.piece_placement);
+      if (state.grid_points_norm.size() == hailo::kGridPointsCount && grid_points_pub_->is_activated())
+      {
+        auto poly_msg = std::make_unique<geometry_msgs::msg::PolygonStamped>();
+        poly_msg->header = header;
+        poly_msg->polygon.points.reserve(hailo::kGridPointsCount);
+        for (const auto &pt : state.grid_points_norm)
+        {
+          geometry_msgs::msg::Point32 p32;
+          p32.x = pt.x;
+          p32.y = pt.y;
+          p32.z = 0.0f;
+          poly_msg->polygon.points.push_back(p32);
+        }
+        grid_points_pub_->publish(std::move(poly_msg));
+      }
 
-      if (!game_res.full_fen.empty() && fen_pub_->is_activated())
+      if (debug_)
+      {
+        float total_conf = 0.0F;
+        float min_conf = 1.0F;
+        std::map<std::string, int> square_counts;
+        std::vector<UnmappedPieceInfo> unmapped_list;
+
+        for (const auto &p : state.pieces)
+        {
+          total_conf += p.confidence;
+          if (p.confidence < min_conf)
+          {
+            min_conf = p.confidence;
+          }
+
+          if (p.square.empty())
+          {
+            unmapped_list.push_back({p.label, "offboard", p.confidence, false});
+          }
+          else
+          {
+            square_counts[p.square]++;
+            if (square_counts[p.square] > 1)
+            {
+              unmapped_list.push_back({p.label, p.square, p.confidence, true});
+            }
+          }
+        }
+
+        const float avg_conf = state.pieces.empty() ? 0.0F : (total_conf / static_cast<float>(state.pieces.size()));
+
+        {
+          std::lock_guard<std::mutex> lock(debug_metrics_mutex_);
+          debug_yolo_detections_ = static_cast<int>(state.pieces.size());
+          debug_yolo_mapped_ = state.num_pieces;
+          debug_yolo_avg_conf_ = avg_conf;
+          debug_yolo_min_conf_ = state.pieces.empty() ? 0.0F : min_conf;
+          debug_yolo_placement_ = state.piece_placement;
+          debug_unmapped_pieces_ = std::move(unmapped_list);
+        }
+      }
+
+      // Publish raw piece placement string continuously
+      if (!state.piece_placement.empty() && fen_pub_->is_activated())
       {
         auto fen_msg = std::make_unique<std_msgs::msg::String>();
-        fen_msg->data = game_res.full_fen;
+        fen_msg->data = state.piece_placement;
         fen_pub_->publish(std::move(fen_msg));
 
-        if (game_res.full_fen != last_logged_fen_)
+        if (state.piece_placement != last_logged_fen_)
         {
-          last_logged_fen_ = game_res.full_fen;
-          RCLCPP_INFO(get_logger(), "Board state: %d pieces | Full FEN: %s%s",
-                      state.num_pieces, game_res.full_fen.c_str(),
-                      game_res.last_move.empty() ? "" : (" | Move: " + game_res.last_move).c_str());
+          last_logged_fen_ = state.piece_placement;
+          RCLCPP_INFO(get_logger(), "Board state: %d pieces | Raw Placement: %s",
+                      state.num_pieces, state.piece_placement.c_str());
         }
       }
 
@@ -369,6 +455,7 @@ namespace lekiwi_perception
       }
     }
 
+    double lat_ms = 0.0;
     if (pipeline != nullptr && GST_BUFFER_PTS_IS_VALID(buffer))
     {
       GstClock *clock = gst_element_get_clock(pipeline);
@@ -382,8 +469,7 @@ namespace lekiwi_perception
           const GstClockTime pts = GST_BUFFER_PTS(buffer);
           if (running_time >= pts)
           {
-            const double lat_ms = static_cast<double>(running_time - pts) / 1000000.0;
-            current_latency_ms_.store(lat_ms);
+            lat_ms = static_cast<double>(running_time - pts) / 1000000.0;
           }
         }
         gst_object_unref(clock);
@@ -391,7 +477,11 @@ namespace lekiwi_perception
     }
 
     gst_buffer_unmap(buffer, &map);
-    frame_counter_.fetch_add(1, std::memory_order_relaxed);
+
+    if (lifecycle_helper_)
+    {
+      lifecycle_helper_->perf_tracker().record_frame(lat_ms);
+    }
   }
 
   void HailoChessInferenceComponent::poll_bus_errors()
@@ -403,8 +493,11 @@ namespace lekiwi_perception
     std::string diags;
     if (hailo_pipeline_->poll_error(diags))
     {
-      last_error_ = diags;
-      pipeline_state_ = "ERROR";
+      {
+        std::lock_guard<std::mutex> lock(error_mutex_);
+        last_error_ = diags;
+      }
+      pipeline_state_.store(PipelineState::ERROR);
       RCLCPP_ERROR(get_logger(), "Hailo GStreamer bus error: %s", diags.c_str());
     }
   }
@@ -412,57 +505,67 @@ namespace lekiwi_perception
   void HailoChessInferenceComponent::produce_diagnostics(
       diagnostic_updater::DiagnosticStatusWrapper &stat)
   {
-    const auto now_tp = std::chrono::steady_clock::now();
-    const auto elapsed_sec = std::chrono::duration<float>(now_tp - last_fps_time_).count();
-    const uint64_t current_count = frame_counter_.load(std::memory_order_relaxed);
-
-    if (elapsed_sec >= 0.5F)
+    if (!lifecycle_helper_)
     {
-      const uint64_t delta_frames = current_count - last_fps_frame_count_;
-      current_fps_.store(static_cast<float>(delta_frames) / elapsed_sec);
-      last_fps_time_ = now_tp;
-      last_fps_frame_count_ = current_count;
+      return;
     }
 
-    const float fps = current_fps_.load();
-    const double latency_ms = current_latency_ms_.load();
+    const auto state = pipeline_state_.load();
+    const bool is_running = (state == PipelineState::RUNNING);
 
-    // 1. Overall Status
-    if (pipeline_state_ == "ERROR")
+    std::string err_msg;
     {
-      stat.summaryf(
-          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
-          "Hailo Pipeline Error: %s", last_error_.c_str());
-    }
-    else if (pipeline_state_ == "RUNNING" && fps < 1.0F && current_count > 10)
-    {
-      stat.summary(
-          diagnostic_msgs::msg::DiagnosticStatus::WARN,
-          "Low Inference FPS (Waiting for Frames or Under load)");
-    }
-    else if (pipeline_state_ == "RUNNING")
-    {
-      stat.summaryf(
-          diagnostic_msgs::msg::DiagnosticStatus::OK,
-          "Hailo-8 NPU Inference Active (%.1f FPS, %.1f ms latency)", fps, latency_ms);
-    }
-    else
-    {
-      stat.summary(
-          diagnostic_msgs::msg::DiagnosticStatus::OK,
-          "Hailo-8 NPU Standby / Idle");
+      std::lock_guard<std::mutex> lock(error_mutex_);
+      if (state == PipelineState::ERROR)
+      {
+        err_msg = last_error_.empty() ? "Unknown pipeline error" : last_error_;
+      }
     }
 
-    // 2. Metrics (Minimal & Non-overlapping with FEN / Detections)
-    stat.add("NPU Device", "Hailo-8 M.2 (26 TOPS)");
-    stat.add("Pipeline State", pipeline_state_);
-    stat.addf("Inference Framerate (FPS)", "%.1f", fps);
-    stat.addf("End-to-End Latency (ms)", "%.2f", latency_ms);
-    stat.add("Total Inferred Frames", current_count);
-    if (!last_error_.empty())
-    {
-      stat.add("Last Error", last_error_);
-    }
+    lifecycle_helper_->update_diagnostics(
+        stat, is_running, err_msg, 1.0F,
+        [&](diagnostic_updater::DiagnosticStatusWrapper &s)
+        {
+          s.add("NPU Device", "Hailo-8 M.2 (26 TOPS)");
+          s.add("Pipeline State", to_string(state));
+
+          if (debug_)
+          {
+            int detections = 0;
+            int mapped = 0;
+            float avg_conf = 0.0F;
+            float min_conf = 0.0F;
+            std::string placement;
+            std::vector<UnmappedPieceInfo> unmapped_pieces;
+            {
+              std::lock_guard<std::mutex> lock(debug_metrics_mutex_);
+              detections = debug_yolo_detections_;
+              mapped = debug_yolo_mapped_;
+              avg_conf = debug_yolo_avg_conf_;
+              min_conf = debug_yolo_min_conf_;
+              placement = debug_yolo_placement_;
+              unmapped_pieces = debug_unmapped_pieces_;
+            }
+
+            s.add("Debug Mode", "true");
+            s.add("YOLO Total Detections", detections);
+            s.add("YOLO Mapped Squares", mapped);
+            s.add("YOLO Unmapped Pieces Count", static_cast<int>(unmapped_pieces.size()));
+            s.addf("YOLO Confidence Avg", "%.2f", avg_conf);
+            s.addf("YOLO Confidence Min", "%.2f", min_conf);
+            s.add("YOLO Raw Placement", placement.empty() ? "(none)" : placement);
+
+            for (size_t i = 0; i < unmapped_pieces.size(); ++i)
+            {
+              const auto &ump = unmapped_pieces[i];
+              char buf[128];
+              std::snprintf(buf, sizeof(buf), "%s @ %s%s (conf: %.2f)",
+                            ump.label.c_str(), ump.square.c_str(),
+                            ump.is_duplicate ? " [dup]" : "", ump.confidence);
+              s.add("YOLO Unmapped [" + std::to_string(i + 1) + "]", std::string(buf));
+            }
+          }
+        });
   }
 
 } // namespace lekiwi_perception

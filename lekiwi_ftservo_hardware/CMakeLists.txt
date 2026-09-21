@@ -8,11 +8,13 @@ find_package(pluginlib REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
-find_package(yaml-cpp REQUIRED)
-find_package(lekiwi_interfaces REQUIRED)
+find_package(realtime_tools REQUIRED)
 pkg_check_modules(SERIAL REQUIRED libserial)
 
 add_library(lekiwi_feetech_hardware SHARED
+  src/joint_config_parser.cpp
+  src/feetech_diagnostics.cpp
+  src/feetech_bus_worker.cpp
   src/lekiwi_feetech_hardware.cpp
   src/sts_protocol.cpp)
 target_compile_features(lekiwi_feetech_hardware PUBLIC cxx_std_20)
@@ -28,8 +30,7 @@ target_link_libraries(lekiwi_feetech_hardware
     pluginlib::pluginlib
     rclcpp::rclcpp
     rclcpp_lifecycle::rclcpp_lifecycle
-    yaml-cpp
-    ${lekiwi_interfaces_TARGETS}
+    realtime_tools::realtime_tools
     ${SERIAL_LIBRARIES})
 
 pluginlib_export_plugin_description_file(
@@ -54,8 +55,18 @@ if(BUILD_TESTING)
   target_compile_features(test_sts_protocol PUBLIC cxx_std_20)
   target_include_directories(test_sts_protocol PRIVATE include)
   target_link_libraries(test_sts_protocol lekiwi_feetech_hardware)
+
+  ament_add_gtest(test_joint_config_parser test/test_joint_config_parser.cpp)
+  target_compile_features(test_joint_config_parser PUBLIC cxx_std_20)
+  target_include_directories(test_joint_config_parser PRIVATE include)
+  target_link_libraries(test_joint_config_parser lekiwi_feetech_hardware)
+
+  ament_add_gtest(test_feetech_diagnostics test/test_feetech_diagnostics.cpp)
+  target_compile_features(test_feetech_diagnostics PUBLIC cxx_std_20)
+  target_include_directories(test_feetech_diagnostics PRIVATE include)
+  target_link_libraries(test_feetech_diagnostics lekiwi_feetech_hardware)
 endif()
 
 ament_export_targets(lekiwi_ftservo_hardwareTargets HAS_LIBRARY_TARGET)
-ament_export_dependencies(diagnostic_updater hardware_interface pluginlib rclcpp rclcpp_lifecycle yaml-cpp lekiwi_interfaces)
+ament_export_dependencies(diagnostic_updater hardware_interface pluginlib rclcpp rclcpp_lifecycle realtime_tools)
 ament_package()

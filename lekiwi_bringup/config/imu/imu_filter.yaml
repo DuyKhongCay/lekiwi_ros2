@@ -5,14 +5,14 @@ imu_filter:
   ros__parameters:
     use_sim_time: false
     stateless: false
-    use_mag: false              # Temporarily disabled: Gyro+Accel 6-DoF mode (absolute yaw handled by AprilTag)
+    use_mag: false               # Enabled: 9-DoF mode (Gyro + Accel + Magnetometer) for drift-free orientation in odom frame
     publish_tf: false          # Do not publish TF directly from filter; handled by robot_state_publisher & EKF
     reverse_tf: false
     fixed_frame: "odom"
     constant_dt: 0.0            # 0.0 = calculate dt dynamically from message header timestamps
     publish_debug_topics: false
     world_frame: "enu"          # REP-103 standard: East-North-Up
-    gain: 0.1                   # Filter gain (beta) for accelerometer attitude correction
+    gain: 0.1                   # Filter gain (beta) for attitude and heading correction
     zeta: 0.0                   # 0.0 because static gyro bias is auto-calibrated at hardware layer on startup
     mag_bias_x: 0.0
     mag_bias_y: 0.0

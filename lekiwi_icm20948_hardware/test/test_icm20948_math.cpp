@@ -81,11 +81,17 @@ TEST(ICM20948MathTest, BigEndianAccelGyroDecoding)
         0x00, 0x00  // gz = 0
     };
 
-    int16_t ax = static_cast<int16_t>((buf[0] << 8) | buf[1]);
-    int16_t gy = static_cast<int16_t>((buf[8] << 8) | buf[9]);
+    int16_t ax = ICM20948Driver::decode_be16(buf[0], buf[1]);
+    int16_t gy = ICM20948Driver::decode_be16(buf[8], buf[9]);
 
     EXPECT_EQ(ax, 8192);
     EXPECT_EQ(gy, 3280);
+
+    // Negative values and signed boundaries (MISRA C compliance)
+    EXPECT_EQ(ICM20948Driver::decode_be16(0x7F, 0xFF), 32767);
+    EXPECT_EQ(ICM20948Driver::decode_be16(0x80, 0x00), -32768);
+    EXPECT_EQ(ICM20948Driver::decode_be16(0xFF, 0xFF), -1);
+    EXPECT_EQ(ICM20948Driver::decode_be16(0x00, 0x00), 0);
 }
 
 /**
@@ -102,8 +108,52 @@ TEST(ICM20948MathTest, LittleEndianMagnetometerDecoding)
         0x00        // ST2: HOFL = 0
     };
 
-    int16_t mx = static_cast<int16_t>(mag_buf[1] | (mag_buf[2] << 8));
+    int16_t mx = ICM20948Driver::decode_le16(mag_buf[1], mag_buf[2]);
     EXPECT_EQ(mx, 667);
     double mag_t = static_cast<double>(mx) * MAG_LSB_TO_TESLA;
     EXPECT_NEAR(mag_t, 100.05e-6, 1e-6);
+
+    // Negative values and signed boundaries (MISRA C compliance)
+    EXPECT_EQ(ICM20948Driver::decode_le16(0xFF, 0x7F), 32767);
+    EXPECT_EQ(ICM20948Driver::decode_le16(0x00, 0x80), -32768);
+    EXPECT_EQ(ICM20948Driver::decode_le16(0xFF, 0xFF), -1);
+    EXPECT_EQ(ICM20948Driver::decode_le16(0x00, 0x00), 0);
+}
+
+/**
+ * @brief Verifies AK09916 coordinate alignment to ICM-20948 body frame (DS-000189 Section 15, Fig 12 & 13).
+ * X_imu = +X_mag, Y_imu = -Y_mag, Z_imu = -Z_mag
+ */
+TEST(ICM20948MathTest, AK09916ToBodyFrameAlignment)
+{
+    // Raw magnetometer reading:
+    // mx = +1000 LSB (pointing along +X of AK09916 die)
+    // my = +2000 LSB (pointing along +Y of AK09916 die)
+    // mz = +3000 LSB (pointing along +Z of AK09916 die)
+    int16_t raw_mx = 1000;
+    int16_t raw_my = 2000;
+    int16_t raw_mz = 3000;
+
+    double imu_body_mag_x = static_cast<double>(raw_mx) * MAG_LSB_TO_TESLA;
+    double imu_body_mag_y = -static_cast<double>(raw_my) * MAG_LSB_TO_TESLA;
+    double imu_body_mag_z = -static_cast<double>(raw_mz) * MAG_LSB_TO_TESLA;
+
+    EXPECT_NEAR(imu_body_mag_x, 1000.0 * MAG_LSB_TO_TESLA, 1e-12);
+    EXPECT_NEAR(imu_body_mag_y, -2000.0 * MAG_LSB_TO_TESLA, 1e-12);
+    EXPECT_NEAR(imu_body_mag_z, -3000.0 * MAG_LSB_TO_TESLA, 1e-12);
+}
+
+/**
+ * @brief Verifies bit shifting guards (MISRA C Rule 12.2).
+ */
+TEST(ICM20948MathTest, BitShiftGuards)
+{
+    ICM20948Driver driver;
+    bool bit_val = false;
+
+    // Out of bounds shift positions (>= 8) must return false without crash or undefined behavior
+    EXPECT_FALSE(driver.write_bit(BANK_0, REG_B0_PWR_MGMT_1, 8, true));
+    EXPECT_FALSE(driver.write_bit(BANK_0, REG_B0_PWR_MGMT_1, 32, true));
+    EXPECT_FALSE(driver.read_bit(BANK_0, REG_B0_PWR_MGMT_1, 8, bit_val));
+    EXPECT_FALSE(driver.read_bit(BANK_0, REG_B0_PWR_MGMT_1, 64, bit_val));
 }

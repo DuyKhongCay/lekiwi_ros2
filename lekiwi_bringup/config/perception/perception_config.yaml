@@ -1,0 +1,50 @@
+/**:
+  ros__parameters:
+    # Global Debug Flag for Perception Pipeline
+    debug: false
+
+    # Common Topics & Frames
+    frame_id: "stereo_left_optical"
+    camera_topic: "/cameras/stereo_left/image_raw"
+    fen_topic: "/chess/raw_fen"
+    game_state_topic: "/chess/game_state"
+    detections_topic: "/chess/detections_2d"
+    tag_centers_topic: "/chess/tag_centers"
+    grid_points_topic: "/chess/grid_points"
+
+    # AprilTag IDs for Chessboard Corners (A1, H1, H8, A8)
+    tags:
+      ids: [0, 1, 2, 3]
+
+hailo_chess_inference:
+  ros__parameters:
+    # frame_id: "stereo_left_optical"
+    # camera_topic: "/cameras/stereo_left/image_raw"
+    # fen_topic: "/chess/fen"
+    # detections_topic: "/chess/detections_2d"
+    # tag_centers_topic: "/chess/tag_centers"
+    # grid_points_topic: "/chess/grid_points"
+
+    # Hailo Hardware & Models
+    vdevice_group_id: "lekiwi_chess"
+    board_hef_path: /root/docker_ws/lekiwi_ros2/install/lekiwi_perception/share/lekiwi_perception/resources/models/yolov8n-seg.hef
+    pcs_hef_path: /root/docker_ws/lekiwi_ros2/install/lekiwi_perception/share/lekiwi_perception/resources/models/yolo11n.hef
+
+    # Processing & Game State Parameters
+    transition_timeout_ms: 5000
+    history_window_size: 3
+    confidence_threshold: 0.35
+
+    debug: true
+
+chess_overlay:
+  ros__parameters:
+    # camera_topic: "/cameras/stereo_left/image_raw"
+    # detections_topic: "/chess/detections_2d"
+    # tag_centers_topic: "/chess/tag_centers"
+    # grid_points_topic: "/chess/grid_points"
+    overlay_topic: "/chess/overlay_image/compressed"
+    jpeg_quality: 85
+    debug: true
+    
+

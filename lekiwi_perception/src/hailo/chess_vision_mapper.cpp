@@ -16,8 +16,6 @@
 namespace lekiwi_perception::hailo
 {
 
-  static const std::vector<int> CORNER_GRID_INDICES = {0, 8, 80, 72};
-
   // ---------------------------------------------------------------------------
   // ChessVisionMapper Implementation
   // ---------------------------------------------------------------------------
@@ -34,38 +32,42 @@ namespace lekiwi_perception::hailo
     std::vector<cv::Point2f> dst_pts;
     cv::perspectiveTransform(src_pts, dst_pts, homography_matrix);
 
-    float norm_x = dst_pts[0].x;
-    float norm_y = dst_pts[0].y;
+    float board_x = dst_pts[0].x;
+    float board_y = dst_pts[0].y;
 
-    if (norm_x < 0.0F || norm_x > 1.0F || norm_y < 0.0F || norm_y > 1.0F)
+    if (board_x < -0.1F || board_x > 8.1F || board_y < -0.1F || board_y > 8.1F)
     {
       return "";
     }
 
-    int c = std::clamp(static_cast<int>(std::floor(norm_x * 8.0F)), 0, 7);
-    int r = std::clamp(static_cast<int>(std::floor(norm_y * 8.0F)), 0, 7);
+    int c = std::clamp(static_cast<int>(std::floor(board_x)), 0, 7);
+    int r = std::clamp(static_cast<int>(std::floor(board_y)), 0, 7);
 
-    int rot_steps = (4 - (a1_corner_idx % 4)) % 4;
-    if (rot_steps == 1)
+    // a1_corner_idx: 0=BL, 1=BR, 2=TR, 3=TL
+    int c_sq = c;
+    int r_sq = r;
+    switch ((a1_corner_idx % 4 + 4) % 4)
     {
-      int old_c = c;
-      c = 7 - r;
-      r = old_c;
-    }
-    else if (rot_steps == 2)
-    {
-      c = 7 - c;
-      r = 7 - r;
-    }
-    else if (rot_steps == 3)
-    {
-      int old_c = c;
-      c = r;
-      r = 7 - old_c;
+    case 0: // A1 at BL (standard White)
+      c_sq = c;
+      r_sq = r;
+      break;
+    case 1: // A1 at BR (90 deg CCW)
+      c_sq = 7 - r;
+      r_sq = c;
+      break;
+    case 2: // A1 at TR (180 deg, Black)
+      c_sq = 7 - c;
+      r_sq = 7 - r;
+      break;
+    case 3: // A1 at TL (90 deg CW)
+      c_sq = r;
+      r_sq = 7 - c;
+      break;
     }
 
-    char file_char = static_cast<char>('a' + c);
-    char rank_char = static_cast<char>('0' + (8 - r));
+    char file_char = static_cast<char>('a' + c_sq);
+    char rank_char = static_cast<char>('0' + (8 - r_sq));
     return std::string(1, file_char) + std::string(1, rank_char);
   }
 
@@ -110,20 +112,6 @@ namespace lekiwi_perception::hailo
     return fen_stream.str();
   }
 
-  namespace
-  {
-
-    const std::map<int, std::string> kPieceClassMap = {
-        {0, "B"}, {1, "K"}, {2, "N"}, {3, "P"}, {4, "Q"}, {5, "R"},
-        {6, "b"}, {7, "k"}, {8, "n"}, {9, "p"}, {10, "q"}, {11, "r"}};
-
-    bool is_piece_label(const std::string &label)
-    {
-      return label.size() == 1U && std::string("BKNPQRbknpqr").find(label[0]) != std::string::npos;
-    }
-
-  } // namespace
-
   bool ChessVisionMapper::decode_hailo_metadata(const HailoROIPtr &roi, ChessboardState &state)
   {
     if (!roi)
@@ -154,14 +142,14 @@ namespace lekiwi_perception::hailo
           }
         }
       }
-      else if (matrix->height() == 81U && matrix->width() == 2U)
+      else if (matrix->height() == kGridPointsCount && matrix->width() == 2U)
       {
         const auto &data = matrix->get_data();
-        if (data.size() == 162U)
+        if (data.size() == kGridDataFloats)
         {
           state.grid_points_norm.clear();
-          state.grid_points_norm.reserve(81U);
-          for (size_t i = 0; i < 81U; ++i)
+          state.grid_points_norm.reserve(kGridPointsCount);
+          for (size_t i = 0; i < kGridPointsCount; ++i)
           {
             state.grid_points_norm.emplace_back(data[i * 2], data[i * 2 + 1]);
           }
@@ -184,13 +172,9 @@ namespace lekiwi_perception::hailo
       int class_id = det->get_class_id();
       if (label.empty())
       {
-        auto it = kPieceClassMap.find(class_id);
-        if (it != kPieceClassMap.end())
-        {
-          label = it->second;
-        }
+        label = piece_label_from_class_id(static_cast<uint32_t>(class_id));
       }
-      if (!is_piece_label(label))
+      if (!is_valid_piece_label(label))
       {
         continue;
       }
@@ -201,7 +185,9 @@ namespace lekiwi_perception::hailo
       piece.class_id = class_id;
       piece.confidence = det->get_confidence();
       piece.bbox = cv::Rect2f(bbox.xmin(), bbox.ymin(), bbox.width(), bbox.height());
-      piece.base_pt = cv::Point2f(bbox.xmin() + bbox.width() / 2.0F, bbox.ymin() + bbox.height());
+      piece.base_pt = cv::Point2f(
+          bbox.xmin() + bbox.width() / 2.0F,
+          bbox.ymin() + bbox.height() * kPieceBaseYRatio);
 
       if (!state.homography_matrix.empty())
       {
@@ -223,37 +209,28 @@ namespace lekiwi_perception::hailo
     return true;
   }
 
-  // Canonical tag placement offset (in CW steps from corner A1):
-  // Tag 1 (A1): offset 0 (0 steps from A1)
-  // Tag 6 (A8): offset 1 (1 step CW from A1)
-  // Tag 3 (H8): offset 2 (2 steps CW from A1)
-  // Tag 4 (H1): offset 3 (3 steps CW from A1)
-  static const std::map<int, int> TAG_CANONICAL_OFFSET = {
-      {1, 0}, // A1
-      {6, 1}, // A8
-      {3, 2}, // H8
-      {4, 3}, // H1
-      {0, 0}, // Optional fallback for 0-based tag numbering
-      {2, 2}
-  };
-
+  // Canonical tag placement offset (in CCW steps from corner A1 [0: BL, 1: BR, 2: TR, 3: TL]):
+  // Tag 0 (A1): offset 0 (0 steps from A1)
+  // Tag 1 (H1): offset 1 (1 step CCW from A1)
+  // Tag 2 (H8): offset 2 (2 steps CCW from A1)
+  // Tag 3 (A8): offset 3 (3 steps CCW from A1)
   int ChessVisionMapper::match_a1_corner_index(
       const std::vector<cv::Point2f> &grid_points_norm,
       const std::vector<Tag2D> &detected_tags,
-      int fallback_a1_idx)
+      const std::map<int, int> &tag_offsets)
   {
-    if (detected_tags.empty() || grid_points_norm.size() != 81U)
+    if (detected_tags.empty() || grid_points_norm.size() != kGridPointsCount || tag_offsets.empty())
     {
-      return fallback_a1_idx;
+      return -1;
     }
 
     // The 4 chessboard corners in normalized coordinates:
-    // CORNER_GRID_INDICES: {0: TL, 8: TR, 80: BR, 72: BL}
+    // kCornerGridIndices: {72: BL, 80: BR, 8: TR, 0: TL}
     const std::vector<cv::Point2f> corner_pts = {
-        grid_points_norm[CORNER_GRID_INDICES[0]], // 0: TL
-        grid_points_norm[CORNER_GRID_INDICES[1]], // 1: TR
-        grid_points_norm[CORNER_GRID_INDICES[2]], // 2: BR
-        grid_points_norm[CORNER_GRID_INDICES[3]]  // 3: BL
+        grid_points_norm[kCornerGridIndices[0]], // 0: BL
+        grid_points_norm[kCornerGridIndices[1]], // 1: BR
+        grid_points_norm[kCornerGridIndices[2]], // 2: TR
+        grid_points_norm[kCornerGridIndices[3]]  // 3: TL
     };
 
     // Consensus voting array for a1_corner_idx (0..3)
@@ -262,15 +239,15 @@ namespace lekiwi_perception::hailo
 
     for (const auto &tag : detected_tags)
     {
-      auto it = TAG_CANONICAL_OFFSET.find(tag.id);
-      if (it == TAG_CANONICAL_OFFSET.end())
+      auto it = tag_offsets.find(tag.id);
+      if (it == tag_offsets.end())
       {
         continue;
       }
 
       int tag_offset = it->second;
 
-      // Find nearest image corner k in {0:TL, 1:TR, 2:BR, 3:BL}
+      // Find nearest image corner k in {0:BL, 1:BR, 2:TR, 3:TL}
       float min_dist_sq = 1e9F;
       int nearest_corner = 0;
 
@@ -297,10 +274,10 @@ namespace lekiwi_perception::hailo
 
     if (valid_votes == 0)
     {
-      return fallback_a1_idx;
+      return -1;
     }
 
-    int best_a1 = fallback_a1_idx;
+    int best_a1 = -1;
     int max_votes = 0;
     for (int i = 0; i < 4; ++i)
     {
@@ -316,18 +293,19 @@ namespace lekiwi_perception::hailo
 
   bool ChessVisionMapper::decode_hailo_metadata(
       const HailoROIPtr &roi, ChessboardState &state,
-      const std::vector<Tag2D> &detected_tags)
+      const std::vector<Tag2D> &detected_tags,
+      const std::map<int, int> &tag_offsets)
   {
     if (!decode_hailo_metadata(roi, state))
     {
       return false;
     }
 
-    if (!detected_tags.empty() && state.grid_points_norm.size() == 81U)
+    if (!detected_tags.empty() && state.grid_points_norm.size() == kGridPointsCount)
     {
       int matched_a1 = match_a1_corner_index(
-          state.grid_points_norm, detected_tags, state.a1_corner_idx);
-      if (matched_a1 != state.a1_corner_idx)
+          state.grid_points_norm, detected_tags, tag_offsets);
+      if (matched_a1 != -1 && matched_a1 != state.a1_corner_idx)
       {
         remap_board_orientation(state, matched_a1);
       }

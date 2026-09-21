@@ -2,8 +2,13 @@
 # Licensed under the Apache License, Version 2.0.
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import (
+    DeclareLaunchArgument,
+    RegisterEventHandler,
+    TimerAction,
+)
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessStart
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
 from launch_ros.descriptions import ComposableNode
@@ -27,8 +32,8 @@ def generate_launch_description():
     )
     use_mag_arg = DeclareLaunchArgument(
         "use_mag",
-        default_value="false",
-        description="Enable magnetometer pipeline and fusion",
+        default_value="true",
+        description="Enable magnetometer pipeline and fusion in Local EKF",
     )
 
     use_sim_time_param = ParameterValue(
@@ -130,12 +135,25 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("use_mag")),
     )
 
+    delayed_mag_bias_observer = RegisterEventHandler(
+        OnProcessStart(
+            target_action=imu_container,
+            on_start=[
+                TimerAction(
+                    period=4.0,
+                    actions=[mag_bias_observer_node],
+                )
+            ],
+        ),
+        condition=IfCondition(LaunchConfiguration("use_mag")),
+    )
+
     return LaunchDescription(
         [
             use_sim_time_arg,
             use_mag_arg,
             imu_container,
             load_mag_bias_remover,
-            mag_bias_observer_node,
+            delayed_mag_bias_observer,
         ]
     )

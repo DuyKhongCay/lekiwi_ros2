@@ -1,0 +1,14 @@
+/**:
+  ros__parameters:
+    calib_mode: "spin"
+    test_dist: 1.0
+    rot_cnt: 5
+    linear_vel: 0.15
+    angular_vel: 0.5
+    controller_name: "omni_base_controller"
+    actual_measured_dist: 0.0
+    imu_topic: "/imu/data_transformed"
+    odom_topic: "/odometry/filtered"
+    tag_pose_topic: "/chessboard/robot_pose"
+    cmd_vel_topic: "/cmd_vel_calib"
+

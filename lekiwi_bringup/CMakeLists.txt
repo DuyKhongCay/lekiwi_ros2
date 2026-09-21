@@ -14,4 +14,8 @@ install(FILES
   DESTINATION share/${PROJECT_NAME}/udev
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+endif()
+
 ament_package()

@@ -39,7 +39,7 @@ def generate_launch_description():
             {"use_sim_time": use_sim_time},
         ],
         remappings=[
-            ("odometry/filtered", "/odometry/filtered"),
+            ("odometry/filtered", "/odometry/local"),
             ("set_pose", "/ekf_filter_node_odom/set_pose"),
             ("enable", "/ekf_filter_node_odom/enable"),
             ("reset", "/ekf_filter_node_odom/reset"),

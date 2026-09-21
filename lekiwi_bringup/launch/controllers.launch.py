@@ -29,9 +29,6 @@ def generate_launch_description():
     twist_mux_config = PathJoinSubstitution(
         [bringup_share, "config", "control", "twist_mux.yaml"]
     )
-    joint_config_file = PathJoinSubstitution(
-        [bringup_share, "config", "servos", "lekiwi_arm_calib.yaml"]
-    )
 
     declared_arguments = [
         DeclareLaunchArgument(
@@ -61,7 +58,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "use_mag",
-            default_value="false",
+            default_value="true",
             description="Spawn and activate magnetometer broadcaster",
         ),
     ]
@@ -74,8 +71,6 @@ def generate_launch_description():
                     xacro_file,
                     " hardware_type:=",
                     LaunchConfiguration("hardware_type"),
-                    " joint_config_file:=",
-                    joint_config_file,
                 ]
             ),
             value_type=str,
@@ -172,12 +167,50 @@ def generate_launch_description():
         ],
     )
 
+    torque_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[
+            "robot_torque_controller",
+            "--controller-manager",
+            "/controller_manager",
+        ],
+        output="screen",
+    )
+
+    control_config = PathJoinSubstitution(
+        [bringup_share, "config", "control", "control.yaml"]
+    )
+
+    torque_manager_node = Node(
+        package="lekiwi_control",
+        executable="torque_manager_node",
+        name="torque_manager",
+        output="screen",
+        parameters=[
+            control_config,
+            {"use_sim_time": use_sim_time},
+        ],
+    )
+
     return LaunchDescription(
         [
             *declared_arguments,
             controller_manager,
             twist_mux_node,
             joint_state_broadcaster,
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=joint_state_broadcaster,
+                    on_exit=[torque_controller_spawner],
+                )
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=torque_controller_spawner,
+                    on_exit=[torque_manager_node],
+                )
+            ),
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=joint_state_broadcaster,

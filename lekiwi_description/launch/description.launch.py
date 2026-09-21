@@ -19,20 +19,12 @@ def generate_launch_description():
     xacro_file = PathJoinSubstitution(
         [description_share, "urdf", "lekiwi_robot.urdf.xacro"]
     )
-    default_joint_config = PathJoinSubstitution(
-        [description_share, "config", "calibration", "sts3215_servos_calib.yaml"]
-    )
 
     declared_arguments = [
         DeclareLaunchArgument(
             "hardware_type",
             default_value="real",
             description="Hardware type: real or mock",
-        ),
-        DeclareLaunchArgument(
-            "joint_config_file",
-            default_value=default_joint_config,
-            description="Path to joint calibration config file",
         ),
         DeclareLaunchArgument(
             "use_sim_time",
@@ -53,8 +45,6 @@ def generate_launch_description():
                 xacro_file,
                 " hardware_type:=",
                 LaunchConfiguration("hardware_type"),
-                " joint_config_file:=",
-                LaunchConfiguration("joint_config_file"),
             ]
         ),
         value_type=str,

@@ -91,6 +91,8 @@ namespace lekiwi_icm20948_hardware
     constexpr uint8_t REG_B2_ACCEL_CONFIG = 0x14;
 
     // --- Bank 3 Registers (I2C Master Control) ---
+    /// Bank 3: I2C Master ODR configuration (Divides master polling rate from 1.1 kHz).
+    constexpr uint8_t REG_B3_I2C_MST_ODR_CONFIG = 0x00;
     /// Bank 3: I2C Master control (clock frequency, delay settings).
     constexpr uint8_t REG_B3_I2C_MST_CTRL = 0x01;
     /// Bank 3: I2C Slave 0 physical target address.
@@ -110,6 +112,14 @@ namespace lekiwi_icm20948_hardware
     /// Bank 3: I2C Slave 4 data in register (read payload).
     constexpr uint8_t REG_B3_I2C_SLV4_DI = 0x17;
 
+    // --- Burst Buffer Dimensions ---
+    /// Number of bytes for Accelerometer (6) + Gyroscope (6) + Temperature (2)
+    constexpr size_t IMU_RAW_DATA_LEN = 14;
+    /// Number of bytes for AK09916 buffer: ST1 (1) + HXL..HZH (6) + TMPS (1) + ST2 (1)
+    constexpr size_t AK09916_BURST_DATA_LEN = 9;
+    /// Total contiguous burst length read from REG_B0_ACCEL_XOUT_H (14 + 9 = 23)
+    constexpr size_t IMU_TOTAL_BURST_LEN = IMU_RAW_DATA_LEN + AK09916_BURST_DATA_LEN;
+
     // --- ICM-20948 Constants & Bitfields ---
     /// Expected device ID returned by ICM-20948 WHO_AM_I register (0xEA).
     constexpr uint8_t ICM20948_WHO_AM_I_VALUE = 0xEA;
@@ -119,12 +129,22 @@ namespace lekiwi_icm20948_hardware
     constexpr uint8_t PWR_MGMT_1_SLEEP = 0x40;
     /// Bits [2:0] of PWR_MGMT_1: Automatically select best available clock source (PLL).
     constexpr uint8_t PWR_MGMT_1_CLKSEL_AUTO = 0x01;
+    /// Value for PWR_MGMT_2 to ensure all 6 Accel and Gyro axes are powered on (0x00).
+    constexpr uint8_t PWR_MGMT_2_ALL_ON = 0x00;
     /// Bit 5 of USER_CTRL: Enables auxiliary I2C master peripheral mode.
     constexpr uint8_t USER_CTRL_I2C_MST_EN = 0x20;
     /// Bit 1 of USER_CTRL: Resets auxiliary I2C master logic.
     constexpr uint8_t USER_CTRL_I2C_MST_RST = 0x02;
     /// Bit 1 of INT_PIN_CFG: Enables direct host-to-auxiliary I2C bypass multiplexer.
     constexpr uint8_t INT_PIN_CFG_BYPASS_EN = 0x02;
+    /// Bit 6 of I2C_MST_STATUS: SLV4 transaction completed.
+    constexpr uint8_t I2C_MST_STATUS_SLV4_DONE = 0x40;
+    /// Bit 4 of I2C_MST_STATUS: SLV4 NACK received.
+    constexpr uint8_t I2C_MST_STATUS_SLV4_NACK = 0x10;
+    /// Value written to I2C_MST_ODR_CONFIG: Divides master clock by 2^3 = 8 (1.1 kHz / 8 ≈ 137.5 Hz).
+    constexpr uint8_t I2C_MST_ODR_DIV_137HZ = 0x03;
+    /// Value written to I2C_SLV0_CTRL: Enable SLV0 (bit 7) and read 9 bytes (bits [3:0] = 0x9).
+    constexpr uint8_t I2C_SLV0_EN_AND_9BYTES = 0x89;
 
     // --- AK09916 Magnetometer Registers ---
     /// AK09916 Company / Device ID 2 register (Expected value: 0x09).
@@ -143,6 +163,10 @@ namespace lekiwi_icm20948_hardware
     // --- AK09916 Mode Constants ---
     /// Expected device ID returned by AK09916 WIA2 register (0x09).
     constexpr uint8_t AK09916_WIA2_VALUE = 0x09;
+    /// AK09916 Status 1 Data Ready mask (bit 0).
+    constexpr uint8_t AK09916_STATUS1_DRDY_MASK = 0x01;
+    /// AK09916 Status 2 Overflow mask (bit 3).
+    constexpr uint8_t AK09916_STATUS2_HOFL_MASK = 0x08;
     /// AK09916 Power-down mode (quiescent state).
     constexpr uint8_t AK09916_MODE_POWER_DOWN = 0x00;
     /// AK09916 Continuous measurement mode 1 (10 Hz).

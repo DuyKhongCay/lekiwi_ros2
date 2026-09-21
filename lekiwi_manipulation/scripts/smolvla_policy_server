@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
+
+from lekiwi_manipulation.smolvla_policy_server import main
+
+if __name__ == "__main__":
+    main()

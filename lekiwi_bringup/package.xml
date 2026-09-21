@@ -15,7 +15,22 @@
   <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>rcl_interfaces</test_depend>
+  <test_depend>std_srvs</test_depend>
+  <test_depend>std_msgs</test_depend>
+  <test_depend>sensor_msgs</test_depend>
+  <test_depend>nav_msgs</test_depend>
+  <test_depend>geometry_msgs</test_depend>
+  <test_depend>tf2_ros</test_depend>
+  <test_depend>lekiwi_interfaces</test_depend>
+  <test_depend>composition_interfaces</test_depend>
   <exec_depend>lekiwi_control</exec_depend>
+  <exec_depend>lekiwi_manipulation</exec_depend>
+  <exec_depend>lekiwi_orchestrator</exec_depend>
   <exec_depend>lekiwi_description</exec_depend>
   <exec_depend>diagnostic_aggregator</exec_depend>
   <exec_depend>diagnostic_common_diagnostics</exec_depend>
@@ -32,7 +47,7 @@
   <exec_depend>teleop_zhongli_servo_hw</exec_depend>
   <exec_depend>lekiwi_ftservo_hardware</exec_depend>
   <exec_depend>lekiwi_perception</exec_depend>
-  <exec_depend>apriltag_localizer</exec_depend>
+  <exec_depend>lekiwi_chess_master</exec_depend>
 
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>

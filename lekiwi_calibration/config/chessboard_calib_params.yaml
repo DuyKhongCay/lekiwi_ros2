@@ -1,0 +1,34 @@
+/**:
+  ros__parameters:
+    # Topic names
+    img_topic: "/cameras/stereo_left/image_raw"
+    cam_info_topic: "/cameras/stereo_left/camera_info"
+    tag_dets_topic: "/tag_detections"
+
+    # Camera calibration info path (package:// URI or absolute path)
+    cam_info_path: "package://lekiwi_bringup/config/perception/camera_info/stereo_left.yaml"
+
+    # Physical chessboard AprilTag parameters
+    tag_ids: [0, 1, 2, 3]
+    tag_names: ["A1", "H1", "H8", "A8"]
+    tag_sz: 0.029
+    nominal_dist: 0.38
+    z_height: 0.006
+
+    # Live capture & optimization settings
+    min_tags_cnt: 3
+    target_caps_cnt: 20
+    auto_cap_interval_sec: 3.0
+
+    # GUI visualizer settings
+    window_name: "LeKiwi Chessboard Tag Calibrator"
+    disp_scale: 1.0
+
+    # Output chessboard tags configuration path to update
+    output_yaml_path: "package://lekiwi_calibration/config/calib_result.yaml"
+
+    # Curated calibration dataset dump settings
+    enable_dataset_dump: true
+    dataset_dump_dir: "package://lekiwi_calibration/data/chessboard_dataset"
+    save_overlay_image: true
+

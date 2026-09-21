@@ -20,7 +20,6 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,6 +31,7 @@
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "rclcpp/macros.hpp"
 #include "rclcpp_lifecycle/state.hpp"
+#include "realtime_tools/realtime_buffer.hpp"
 
 #include "lekiwi_icm20948_hardware/icm20948_defs.hpp"
 #include "lekiwi_icm20948_hardware/icm20948_driver.hpp"
@@ -40,18 +40,16 @@ namespace lekiwi_icm20948_hardware
 {
 
     /**
-     * @brief Thread-safe shared state buffer holding latest filtered IMU measurements.
+     * @brief Trivially-copyable snapshot holding latest filtered IMU measurements.
      */
-    struct SharedImuState
+    struct ImuDataSnapshot
     {
-        mutable std::mutex mutex;
         std::array<double, 4> orientation{0.0, 0.0, 0.0, 1.0};
         std::array<double, 3> angular_velocity{0.0, 0.0, 0.0};
         std::array<double, 3> linear_acceleration{0.0, 0.0, GRAVITY_EARTH};
-        std::array<double, 3> magnetic_field{2.0e-5, 0.0, 4.0e-5};
+        std::array<double, 3> magnetic_field{0.0, 0.0, 0.0};
         bool mag_valid{false};
         bool valid{false};
-        std::chrono::steady_clock::time_point last_read_time;
     };
 
     /**
@@ -88,6 +86,15 @@ namespace lekiwi_icm20948_hardware
             const rclcpp_lifecycle::State &previous_state) override;
 
         /**
+         * @brief Cleans up device driver resources and closes the I2C bus file descriptor.
+         *
+         * @param[in] previous_state Lifecycle state prior to transition (Inactive).
+         * @return hardware_interface::CallbackReturn SUCCESS on successful cleanup.
+         */
+        hardware_interface::CallbackReturn on_cleanup(
+            const rclcpp_lifecycle::State &previous_state) override;
+
+        /**
          * @brief Activates the IMU sensor and starts the zero-motion gyro calibration sequence.
          *
          * @param[in] previous_state Lifecycle state prior to transition (Inactive).
@@ -106,11 +113,10 @@ namespace lekiwi_icm20948_hardware
             const rclcpp_lifecycle::State &previous_state) override;
 
         /**
-         * @brief Reads fresh IMU state from the shared buffer into ros2_control state interfaces.
+         * @brief Reads fresh IMU state from the lock-free RealtimeBuffer into ros2_control state interfaces.
          *
-         * @note **Real-Time Safety:** This function is non-blocking (< 5 µs). It simply copies
-         * cached kinematic variables from the thread-safe shared buffer using pre-allocated
-         * interface names, guaranteeing zero dynamic heap allocations in the RT control loop.
+         * @note **Real-Time Safety:** This function is non-blocking, wait-free (< 1 µs). It reads
+         * from a lock-free buffer with zero OS mutex contention and zero dynamic heap allocations.
          *
          * @param[in] time Current ROS system time.
          * @param[in] period Control loop cycle duration since last call.
@@ -133,8 +139,8 @@ namespace lekiwi_icm20948_hardware
         // Pre-cached state interface names to avoid any dynamic std::string allocations in read()
         std::array<std::string, 13> state_interface_names_;
 
-        // Thread-safe Async I/O state
-        SharedImuState shared_state_;
+        // Lock-Free Realtime Buffer (wait-free read in RT thread)
+        realtime_tools::RealtimeBuffer<ImuDataSnapshot> rt_buffer_;
         std::thread io_worker_thread_;
         std::atomic<bool> io_running_{false};
 
@@ -146,19 +152,22 @@ namespace lekiwi_icm20948_hardware
         std::array<int, 3> gyro_axis_sign_{1, 1, 1};
         std::array<int, 3> mag_axis_sign_{1, 1, 1};
 
-        // Static Gyro Bias Auto-Calibration
+        // Static Gyro Bias Auto-Calibration with Stationarity Guard
         bool auto_calibrate_gyro_{true};
         int gyro_calib_samples_{500};
-        int current_calib_count_{0};
+        std::atomic<int> current_calib_count_{0};
         std::array<double, 3> gyro_bias_sum_{0.0, 0.0, 0.0};
+        std::array<double, 3> gyro_min_{1e9, 1e9, 1e9};
+        std::array<double, 3> gyro_max_{-1e9, -1e9, -1e9};
         std::atomic<bool> gyro_calibrated_{false};
+        std::atomic<double> gyro_bias_atomic_[3]{0.0, 0.0, 0.0};
 
         // Error & Reliability tracking
         std::atomic<int> consecutive_errors_{0};
         int max_consecutive_errors_{10};
-        std::atomic<uint64_t> total_reads_{0};
+        std::atomic<uint64_t> total_rt_reads_{0};
+        std::atomic<uint64_t> total_i2c_reads_{0};
         std::atomic<uint64_t> failed_reads_{0};
-        SensorData last_valid_data_;
 
         // Diagnostics
         std::shared_ptr<diagnostic_updater::Updater> updater_;

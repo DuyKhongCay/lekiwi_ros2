@@ -20,49 +20,63 @@ extern "C"
 
   void free_resources(void *params_void_ptr)
   {
-    delete reinterpret_cast<YoloNmsPostprocess *>(params_void_ptr);
+    delete static_cast<YoloNmsPostprocess *>(params_void_ptr);
   }
 
   void filter(HailoROIPtr roi, void *params_void_ptr)
   {
-    if (!roi || !roi->has_tensors())
+    try
     {
-      return;
-    }
-
-    const auto *postprocess = reinterpret_cast<YoloNmsPostprocess *>(params_void_ptr);
-    if (!postprocess)
-    {
-      return;
-    }
-
-    for (const auto &tensor : roi->get_tensors())
-    {
-      if (tensor->name().find("nms") != std::string::npos)
+      if (!roi || !roi->has_tensors())
       {
-        hailo_common::add_detections(roi, postprocess->decode(tensor));
+        return;
       }
+
+      const auto *postprocess = static_cast<YoloNmsPostprocess *>(params_void_ptr);
+      if (!postprocess)
+      {
+        return;
+      }
+
+      for (const auto &tensor : roi->get_tensors())
+      {
+        if (tensor->name().find("nms") != std::string::npos)
+        {
+          hailo_common::add_detections(roi, postprocess->decode(tensor));
+        }
+      }
+    }
+    catch (...)
+    {
+      // Prevent exceptions from crossing C-ABI boundary into GStreamer
     }
   }
 
   void filter_letterbox(HailoROIPtr roi, void *params_void_ptr)
   {
-    filter(roi, params_void_ptr);
-
-    HailoBBox roi_bbox = hailo_common::create_flattened_bbox(roi->get_bbox(), roi->get_scaling_bbox());
-    auto detections = hailo_common::get_hailo_detections(roi);
-    for (auto &detection : detections)
+    try
     {
-      auto det_bbox = detection->get_bbox();
-      auto xmin = (det_bbox.xmin() * roi_bbox.width()) + roi_bbox.xmin();
-      auto ymin = (det_bbox.ymin() * roi_bbox.height()) + roi_bbox.ymin();
-      auto xmax = (det_bbox.xmax() * roi_bbox.width()) + roi_bbox.xmin();
-      auto ymax = (det_bbox.ymax() * roi_bbox.height()) + roi_bbox.ymin();
+      filter(roi, params_void_ptr);
 
-      HailoBBox new_bbox(xmin, ymin, xmax - xmin, ymax - ymin);
-      detection->set_bbox(new_bbox);
+      HailoBBox roi_bbox = hailo_common::create_flattened_bbox(roi->get_bbox(), roi->get_scaling_bbox());
+      auto detections = hailo_common::get_hailo_detections(roi);
+      for (auto &detection : detections)
+      {
+        auto det_bbox = detection->get_bbox();
+        auto xmin = (det_bbox.xmin() * roi_bbox.width()) + roi_bbox.xmin();
+        auto ymin = (det_bbox.ymin() * roi_bbox.height()) + roi_bbox.ymin();
+        auto xmax = (det_bbox.xmax() * roi_bbox.width()) + roi_bbox.xmin();
+        auto ymax = (det_bbox.ymax() * roi_bbox.height()) + roi_bbox.ymin();
+
+        HailoBBox new_bbox(xmin, ymin, xmax - xmin, ymax - ymin);
+        detection->set_bbox(new_bbox);
+      }
+      roi->clear_scaling_bbox();
     }
-    roi->clear_scaling_bbox();
+    catch (...)
+    {
+      // Prevent exceptions from crossing C-ABI boundary into GStreamer
+    }
   }
 
 } // extern "C"

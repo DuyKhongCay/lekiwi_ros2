@@ -13,8 +13,11 @@
       <xacro:property name="stereo_left_rpy" value="-2.392200 0.013614 -1.566144"/>
     </xacro:unless>
 
+    <!-- Dummy link for stereo left optical frame -->
+    <link name="stereo_left_optical"/>
+
     <!-- Calibrated optical frame joint connecting base_footprint to stereo_left_optical -->
-    <joint name="stereo_left_optical_calibrated_joint" type="fixed">
+    <joint name="stereo_left_optical_joint" type="fixed">
       <origin xyz="${stereo_left_xyz}" rpy="${stereo_left_rpy}"/>
       <parent link="base_footprint"/>
       <child link="stereo_left_optical"/>

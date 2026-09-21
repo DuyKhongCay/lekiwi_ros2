@@ -12,12 +12,14 @@
 #ifndef LEKIWI_PERCEPTION__HAILO__CHESS_VISION_MAPPER_HPP_
 #define LEKIWI_PERCEPTION__HAILO__CHESS_VISION_MAPPER_HPP_
 
-#include <opencv2/opencv.hpp>
+#include <opencv2/core.hpp>
 #include "hailo_objects.hpp"
 
 #include <map>
 #include <string>
 #include <vector>
+
+#include "hailo/chess_constants.hpp"
 
 namespace lekiwi_perception::hailo
 {
@@ -59,7 +61,7 @@ namespace lekiwi_perception::hailo
         std::string piece_placement;
         /// Total number of detected chess pieces.
         int num_pieces{0};
-        /// Index of top-left square corner: 0 (TL), 1 (TR), 2 (BR), 3 (BL).
+        /// Index of A1 square corner: 0 (BL), 1 (BR), 2 (TR), 3 (TL).
         int a1_corner_idx{0};
         /// Perspective transformation matrix (3x3).
         cv::Mat homography_matrix;
@@ -78,16 +80,16 @@ namespace lekiwi_perception::hailo
     {
     public:
         /**
-         * @brief Determines the A1 corner index (0=TL, 1=TR, 2=BR, 3=BL) by matching AprilTags with grid corners.
+         * @brief Determines the A1 corner index (0=BL, 1=BR, 2=TR, 3=TL) by matching AprilTags with grid corners.
          * @param[in] grid_points_norm 81 normalized grid intersection points.
          * @param[in] detected_tags List of detected AprilTags with IDs and normalized image centers.
-         * @param[in] fallback_a1_idx Fallback A1 corner index if no valid tag matches.
-         * @return Corner index corresponding to square A1: 0 (TL), 1 (TR), 2 (BR), or 3 (BL).
+         * @param[in] tag_offsets Map of tag ID to nominal corner offset [0=A1, 1=H1, 2=H8, 3=A8].
+         * @return Corner index corresponding to square A1: 0 (BL), 1 (BR), 2 (TR), 3 (TL), or -1 if no valid match.
          */
         static int match_a1_corner_index(
             const std::vector<cv::Point2f> &grid_points_norm,
             const std::vector<Tag2D> &detected_tags,
-            int fallback_a1_idx = 0);
+            const std::map<int, int> &tag_offsets = {});
 
         /**
          * @brief Decodes Hailo ROI tensors and populates board state.
@@ -96,7 +98,8 @@ namespace lekiwi_perception::hailo
             const HailoROIPtr &roi, ChessboardState &state);
         [[nodiscard]] static bool decode_hailo_metadata(
             const HailoROIPtr &roi, ChessboardState &state,
-            const std::vector<Tag2D> &detected_tags);
+            const std::vector<Tag2D> &detected_tags,
+            const std::map<int, int> &tag_offsets = {});
 
         static void remap_board_orientation(ChessboardState &state, int new_a1_corner_idx);
 

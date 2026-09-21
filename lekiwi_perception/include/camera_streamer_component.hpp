@@ -5,6 +5,7 @@
  * Wraps GStreamer pipeline execution (compatible with gscam configurations) inside a ROS 2
  * lifecycle component. Publishes `sensor_msgs/msg/Image` and `sensor_msgs/msg/CameraInfo`
  * using zero-copy intra-process comms where available.
+ * Integrates PerceptionLifecycleHelper and CameraInfoScaler.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -24,8 +25,8 @@
 #include <string>
 #include <vector>
 
-#include <diagnostic_updater/diagnostic_updater.hpp>
 #include <camera_info_manager/camera_info_manager.hpp>
+#include <diagnostic_updater/diagnostic_updater.hpp>
 #include "lekiwi_interfaces/msg/camera_mode.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -35,50 +36,27 @@
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/image.hpp"
 
+#include "perception_utils.hpp"
+
 namespace lekiwi_perception
 {
 
   /**
    * @brief ROS 2 Lifecycle Component streaming video frames via GStreamer.
-   *
-   * Manages GStreamer pipeline lifecycle (`PLAYING`, `PAUSED`, `NULL`), mode-based GStreamer valve control,
-   * camera info calibration loading, and health diagnostics publishing.
    */
   class CameraStreamerComponent : public rclcpp_lifecycle::LifecycleNode
   {
   public:
-    /**
-     * @brief Constructs CameraStreamerComponent with node options.
-     * @param[in] options Node options passed by component container.
-     */
     explicit CameraStreamerComponent(const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
     ~CameraStreamerComponent() override;
 
     using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
-    /**
-     * @brief Configures parameters, loads calibration URL, and creates GStreamer pipeline.
-     */
     CallbackReturn on_configure(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Activates image publishers and sets GStreamer pipeline state to PLAYING.
-     */
     CallbackReturn on_activate(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Deactivates image publishers and pauses GStreamer pipeline.
-     */
     CallbackReturn on_deactivate(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Cleans up GStreamer pipeline and bus elements.
-     */
     CallbackReturn on_cleanup(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Handles node shutdown transition.
-     */
     CallbackReturn on_shutdown(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Handles error state transition and resets pipeline.
-     */
     CallbackReturn on_error(const rclcpp_lifecycle::State &state) override;
 
     // Public getters & helpers for testing / status introspection
@@ -90,7 +68,6 @@ namespace lekiwi_perception
         uint32_t target_w, uint32_t target_h) const;
 
   private:
-    void on_camera_mode(const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg);
     void update_valve_state();
     void monitor_tick();
     void poll_bus_errors();
@@ -114,12 +91,7 @@ namespace lekiwi_perception
     rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::CameraInfo>::SharedPtr info_pub_;
     bool publish_raw_{true};
     bool publish_compressed_{false};
-    rclcpp::Subscription<lekiwi_interfaces::msg::CameraMode>::SharedPtr mode_sub_;
-    rclcpp::TimerBase::SharedPtr autostart_timer_;
     rclcpp::TimerBase::SharedPtr monitor_timer_;
-
-    // Diagnostic updater
-    std::shared_ptr<diagnostic_updater::Updater> updater_;
 
     // Parameters (compatible with gscam)
     std::string gscam_config_;
@@ -139,15 +111,12 @@ namespace lekiwi_perception
 
     // State & Thread safety
     std::mutex gst_mutex_;
-    std::atomic<uint8_t> current_camera_mode_{lekiwi_interfaces::msg::CameraMode::STANDBY};
     std::atomic<bool> is_streaming_{false};
-    std::atomic<uint64_t> frame_counter_{0};
 
-    // Telemetry & Diagnostic stats
-    std::atomic<double> current_latency_ms_{0.0};
-    std::atomic<float> current_fps_{0.0F};
-    std::chrono::steady_clock::time_point last_fps_time_;
-    uint64_t last_fps_frame_count_{0};
+    // Composition helper for Lifecycle, Mode Gating, Autostart & Diagnostics
+    std::unique_ptr<utils::PerceptionLifecycleHelper> lifecycle_helper_;
+
+    std::mutex error_mutex_;
     std::string last_gst_error_;
   };
 

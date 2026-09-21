@@ -10,8 +10,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <cstring>
 #include <exception>
 #include <sstream>
+#include <thread>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -19,24 +22,35 @@
 
 namespace lekiwi_ftservo_hardware
 {
+  uint8_t StsProtocol::compute_checksum(const uint8_t *data, const size_t length) noexcept
+  {
+    if (data == nullptr || length == 0U)
+    {
+      return 0xFF;
+    }
+    uint8_t sum = 0;
+    for (size_t i = 0; i < length; ++i)
+    {
+      sum = static_cast<uint8_t>(sum + data[i]);
+    }
+    return static_cast<uint8_t>(~sum);
+  }
+
+  uint8_t StsProtocol::compute_checksum(std::span<const uint8_t> bytes) noexcept
+  {
+    return compute_checksum(bytes.data(), bytes.size());
+  }
+
   namespace
   {
     using namespace sts::protocol;
 
     /**
-     * @brief Computes standard Feetech STS frame checksum: ~(ID + Length + Instruction + Params) & 0xFF.
-     *
-     * @param[in] bytes Byte sequence starting from Packet ID through the end of Parameters.
-     * @return uint8_t Inverted 8-bit sum representing the packet checksum.
+     * @brief Legacy vector helper forwarding to zero-allocation StsProtocol::compute_checksum.
      */
     uint8_t checksum(const std::vector<uint8_t> &bytes)
     {
-      uint8_t sum = 0;
-      for (const auto byte : bytes)
-      {
-        sum = static_cast<uint8_t>(sum + byte);
-      }
-      return static_cast<uint8_t>(~sum);
+      return StsProtocol::compute_checksum(bytes.data(), bytes.size());
     }
 
     /**
@@ -141,43 +155,119 @@ namespace lekiwi_ftservo_hardware
     }
   }
 
+  void StsProtocol::flush_input() noexcept
+  {
+    try
+    {
+      if (port_.IsOpen())
+      {
+        port_.FlushInputBuffer();
+      }
+    }
+    catch (const std::exception &)
+    {
+    }
+  }
+
+  bool StsProtocol::write_packet(
+      const uint8_t id, const uint8_t instruction, const uint8_t *parameters,
+      const size_t param_len, std::string *error)
+  {
+    if (!port_.IsOpen())
+    {
+      set_error(error, "Feetech serial port is closed");
+      return false;
+    }
+    if (param_len > 248U)
+    {
+      set_error(error, "Feetech packet parameter payload is too large (> 248 bytes)");
+      return false;
+    }
+
+    tx_buffer_[0] = kHeader;
+    tx_buffer_[1] = kHeader;
+    tx_buffer_[2] = id;
+    tx_buffer_[3] = static_cast<uint8_t>(param_len + 2U);
+    tx_buffer_[4] = instruction;
+    if (parameters != nullptr && param_len > 0U)
+    {
+      std::memcpy(&tx_buffer_[5], parameters, param_len);
+    }
+    const size_t total_len = param_len + 6U;
+    tx_buffer_[total_len - 1] = compute_checksum(&tx_buffer_[2], param_len + 3U);
+
+    const int fd = port_.GetFileDescriptor();
+    if (fd < 0)
+    {
+      set_error(error, "Invalid serial port file descriptor");
+      return false;
+    }
+
+    size_t bytes_written = 0;
+    size_t zero_write_retries = 0;
+    constexpr size_t kMaxZeroWriteRetries = 100U;
+
+    while (bytes_written < total_len)
+    {
+      const ssize_t result = ::write(fd, &tx_buffer_[bytes_written], total_len - bytes_written);
+      if (result < 0)
+      {
+        if (errno == EINTR)
+        {
+          continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        {
+          ++zero_write_retries;
+          if (zero_write_retries > kMaxZeroWriteRetries)
+          {
+            set_error(error, "Feetech packet write timed out (EAGAIN/EWOULDBLOCK retry limit exceeded)");
+            return false;
+          }
+          std::this_thread::yield();
+          continue;
+        }
+        set_error(error, std::string("Feetech packet write failed: ") + std::strerror(errno));
+        return false;
+      }
+      if (result == 0)
+      {
+        ++zero_write_retries;
+        if (zero_write_retries > kMaxZeroWriteRetries)
+        {
+          set_error(error, "Feetech packet write stalled (0 bytes written)");
+          return false;
+        }
+        continue;
+      }
+      bytes_written += static_cast<size_t>(result);
+      zero_write_retries = 0;
+    }
+    return true;
+  }
+
   bool StsProtocol::write_packet(
       const uint8_t id, const uint8_t instruction, const std::vector<uint8_t> &parameters,
       std::string *error)
   {
-    if (!port_.IsOpen() || parameters.size() > 252U)
-    {
-      set_error(error, "Feetech serial port is closed or packet is too large");
-      return false;
-    }
-    std::vector<uint8_t> packet{kHeader, kHeader, id,
-                                static_cast<uint8_t>(parameters.size() + 2U), instruction};
-    packet.insert(packet.end(), parameters.begin(), parameters.end());
-    packet.push_back(checksum(std::vector<uint8_t>(packet.begin() + 2, packet.end())));
-    try
-    {
-      port_.Write(std::string(packet.begin(), packet.end()));
-      return true;
-    }
-    catch (const std::exception &exception)
-    {
-      set_error(error, std::string("Feetech packet write failed: ") + exception.what());
-      return false;
-    }
+    return write_packet(id, instruction, parameters.data(), parameters.size(), error);
   }
 
   bool StsProtocol::read_status(
       const uint8_t expected_id, const size_t expected_data_size, std::vector<uint8_t> *data,
-      std::string *error)
+      std::string *error, const int timeout_ms, uint8_t *status_byte)
   {
+    const size_t effective_timeout = static_cast<size_t>(
+        (timeout_ms > 0) ? timeout_ms : timeout_ms_);
+
     try
     {
       unsigned char previous = 0;
       unsigned char current = 0;
       bool found_header = false;
-      for (size_t index = 0; index < 64U; ++index)
+      for (size_t index = 0; index < sts::protocol::kPreambleSearchLimit; ++index)
       {
-        port_.ReadByte(current, static_cast<size_t>(timeout_ms_));
+        port_.ReadByte(current, effective_timeout);
         if (previous == kHeader && current == kHeader)
         {
           found_header = true;
@@ -193,24 +283,38 @@ namespace lekiwi_ftservo_hardware
       unsigned char id = 0;
       unsigned char length = 0;
       unsigned char status = 0;
-      port_.ReadByte(id, static_cast<size_t>(timeout_ms_));
-      port_.ReadByte(length, static_cast<size_t>(timeout_ms_));
-      port_.ReadByte(status, static_cast<size_t>(timeout_ms_));
-      if (id != expected_id || length != expected_data_size + 2U || status != 0U)
+      port_.ReadByte(id, effective_timeout);
+      port_.ReadByte(length, effective_timeout);
+      port_.ReadByte(status, effective_timeout);
+      if (id != expected_id || length != expected_data_size + 2U)
       {
-        set_error(error, "Feetech response has unexpected ID, size, or status");
+        set_error(error, "Feetech response has unexpected ID or size");
+        return false;
+      }
+      if (status_byte != nullptr)
+      {
+        *status_byte = static_cast<uint8_t>(status);
+      }
+      // For write operations (payload == 0), a non-zero status indicates write rejection
+      if (expected_data_size == 0U && status != 0U)
+      {
+        set_error(error, "Feetech write rejected with hardware status error");
         return false;
       }
       data->assign(expected_data_size, 0U);
       for (auto &byte : *data)
       {
-        port_.ReadByte(byte, static_cast<size_t>(timeout_ms_));
+        port_.ReadByte(byte, effective_timeout);
       }
       unsigned char received_checksum = 0;
-      port_.ReadByte(received_checksum, static_cast<size_t>(timeout_ms_));
-      std::vector<uint8_t> checksum_data{id, length, status};
-      checksum_data.insert(checksum_data.end(), data->begin(), data->end());
-      if (checksum(checksum_data) != received_checksum)
+      port_.ReadByte(received_checksum, effective_timeout);
+
+      uint8_t sum = static_cast<uint8_t>(id + length + status);
+      for (const auto byte : *data)
+      {
+        sum = static_cast<uint8_t>(sum + byte);
+      }
+      if (static_cast<uint8_t>(~sum) != received_checksum)
       {
         set_error(error, "Feetech response checksum mismatch");
         return false;
@@ -236,7 +340,7 @@ namespace lekiwi_ftservo_hardware
 
   bool StsProtocol::read_register(
       const uint8_t id, const uint8_t address, const size_t count, std::vector<uint8_t> *data,
-      std::string *error)
+      std::string *error, uint8_t *status_byte)
   {
     if (data == nullptr || count == 0U || count > 250U)
     {
@@ -245,34 +349,71 @@ namespace lekiwi_ftservo_hardware
     }
     return write_packet(
                id, kInstructionRead, {address, static_cast<uint8_t>(count)}, error) &&
-           read_status(id, count, data, error);
+           read_status(id, count, data, error, -1, status_byte);
   }
 
   bool StsProtocol::sync_read(
       const std::vector<uint8_t> &ids, const uint8_t address, const size_t count,
-      std::vector<std::vector<uint8_t>> *data, std::string *error)
+      std::vector<std::vector<uint8_t>> *data, std::string *error,
+      std::vector<uint8_t> *statuses)
   {
     if (data == nullptr || ids.empty() || count == 0U || count > 250U)
     {
       set_error(error, "Invalid Feetech sync_read request parameters");
       return false;
     }
-    std::vector<uint8_t> parameters{address, static_cast<uint8_t>(count)};
-    parameters.insert(parameters.end(), ids.begin(), ids.end());
+    const size_t param_len = 2U + ids.size();
+    if (param_len > 248U)
+    {
+      set_error(error, "Sync read parameter payload exceeds maximum buffer size");
+      return false;
+    }
+    std::array<uint8_t, 256> param_buf;
+    param_buf[0] = address;
+    param_buf[1] = static_cast<uint8_t>(count);
+    std::memcpy(&param_buf[2], ids.data(), ids.size());
 
-    if (!write_packet(kBroadcastId, kInstructionSyncRead, parameters, error))
+    if (!write_packet(kBroadcastId, kInstructionSyncRead, param_buf.data(), param_len, error))
     {
       return false;
     }
 
+    if (statuses != nullptr)
+    {
+      statuses->assign(ids.size(), 0U);
+    }
     data->resize(ids.size());
     for (size_t i = 0; i < ids.size(); ++i)
     {
-      if (!read_status(ids[i], count, &(*data)[i], error))
+      uint8_t *stat_ptr = (statuses != nullptr) ? &(*statuses)[i] : nullptr;
+      if (!read_status(ids[i], count, &(*data)[i], error, sts::default_config::kPerServoReadTimeoutMs, stat_ptr))
       {
+        flush_input();
         return false;
       }
     }
+    return true;
+  }
+
+  bool StsProtocol::decode_telemetry_payload(
+      const uint8_t id, const std::vector<uint8_t> &feedback, ServoDiagnosticData &diag) noexcept
+  {
+    diag.id = id;
+    if (feedback.size() < sts::protocol::kDiagnosticPayloadSize)
+    {
+      return false;
+    }
+    const auto u_pos = static_cast<uint16_t>(feedback[0]) | (static_cast<uint16_t>(feedback[1]) << 8U);
+    diag.position_ticks = static_cast<int>(u_pos);
+    diag.speed_ticks = decode_velocity_ticks(feedback[2], feedback[3]);
+    const auto u_load = static_cast<uint16_t>(feedback[4]) | (static_cast<uint16_t>(feedback[5]) << 8U);
+    diag.load_raw = static_cast<int>(static_cast<int16_t>(u_load));
+    diag.voltage_v = static_cast<double>(feedback[6]) * sts::telemetry_scale::kVoltsPerUnit;
+    diag.temperature_c = static_cast<double>(feedback[7]);
+    diag.moving = (feedback[10] != 0);
+    const auto u_curr = static_cast<uint16_t>(feedback[13]) | (static_cast<uint16_t>(feedback[14]) << 8U);
+    const int16_t current_ticks = static_cast<int16_t>(u_curr);
+    diag.current_a = static_cast<double>(current_ticks) * sts::telemetry_scale::kAmperesPerUnit;
     return true;
   }
 
@@ -285,7 +426,8 @@ namespace lekiwi_ftservo_hardware
       return false;
     }
     std::vector<std::vector<uint8_t>> raw_data;
-    if (!sync_read(ids, sts::register_addr::kPresentPosition, 4U, &raw_data, error))
+    std::vector<uint8_t> statuses;
+    if (!sync_read(ids, sts::register_addr::kPresentPosition, sts::protocol::kFastStatePayloadSize, &raw_data, error, &statuses))
     {
       return false;
     }
@@ -295,9 +437,10 @@ namespace lekiwi_ftservo_hardware
       const auto &feedback = raw_data[i];
       auto &state = (*states)[i];
       state.id = ids[i];
-      state.position_ticks = static_cast<int>(feedback[0]) | (static_cast<int>(feedback[1]) << 8);
+      const auto u_pos = static_cast<uint16_t>(feedback[0]) | (static_cast<uint16_t>(feedback[1]) << 8U);
+      state.position_ticks = static_cast<int>(u_pos);
       state.speed_ticks = decode_velocity_ticks(feedback[2], feedback[3]);
-      state.status = 0;
+      state.status = statuses[i];
     }
     return true;
   }
@@ -311,26 +454,17 @@ namespace lekiwi_ftservo_hardware
       return false;
     }
     std::vector<std::vector<uint8_t>> raw_data;
-    // 15 bytes from register 56 (kPresentPosition) to 70 (kPresentCurrent + 1)
-    if (!sync_read(ids, sts::register_addr::kPresentPosition, 15U, &raw_data, error))
+    std::vector<uint8_t> statuses;
+    // Read diagnostic register block (15 bytes from kPresentPosition to kPresentCurrent + 1)
+    if (!sync_read(ids, sts::register_addr::kPresentPosition, sts::protocol::kDiagnosticPayloadSize, &raw_data, error, &statuses))
     {
       return false;
     }
     diagnostics->resize(ids.size());
     for (size_t i = 0; i < ids.size(); ++i)
     {
-      const auto &feedback = raw_data[i];
-      auto &diag = (*diagnostics)[i];
-      diag.id = ids[i];
-      diag.position_ticks = static_cast<int>(feedback[0]) | (static_cast<int>(feedback[1]) << 8);
-      diag.speed_ticks = decode_velocity_ticks(feedback[2], feedback[3]);
-      diag.load_raw = static_cast<int>(static_cast<int16_t>(feedback[4] | (feedback[5] << 8)));
-      diag.voltage_v = static_cast<double>(feedback[6]) * sts::telemetry_scale::kVoltsPerUnit;
-      diag.temperature_c = static_cast<double>(feedback[7]);
-      diag.moving = (feedback[10] != 0);
-      const int16_t current_ticks = static_cast<int16_t>(feedback[13] | (feedback[14] << 8));
-      diag.current_a = static_cast<double>(current_ticks) * sts::telemetry_scale::kAmperesPerUnit;
-      diag.status = 0;
+      decode_telemetry_payload(ids[i], raw_data[i], (*diagnostics)[i]);
+      (*diagnostics)[i].status = statuses[i];
     }
     return true;
   }
@@ -344,20 +478,13 @@ namespace lekiwi_ftservo_hardware
       return false;
     }
     std::vector<uint8_t> feedback;
-    if (!read_register(id, sts::register_addr::kPresentPosition, 15U, &feedback, error))
+    uint8_t status_byte = 0;
+    if (!read_register(id, sts::register_addr::kPresentPosition, sts::protocol::kDiagnosticPayloadSize, &feedback, error, &status_byte))
     {
       return false;
     }
-    diagnostic->id = id;
-    diagnostic->position_ticks = static_cast<int>(feedback[0]) | (static_cast<int>(feedback[1]) << 8);
-    diagnostic->speed_ticks = decode_velocity_ticks(feedback[2], feedback[3]);
-    diagnostic->load_raw = static_cast<int>(static_cast<int16_t>(feedback[4] | (feedback[5] << 8)));
-    diagnostic->voltage_v = static_cast<double>(feedback[6]) * sts::telemetry_scale::kVoltsPerUnit;
-    diagnostic->temperature_c = static_cast<double>(feedback[7]);
-    diagnostic->moving = (feedback[10] != 0);
-    const int16_t current_ticks = static_cast<int16_t>(feedback[13] | (feedback[14] << 8));
-    diagnostic->current_a = static_cast<double>(current_ticks) * sts::telemetry_scale::kAmperesPerUnit;
-    diagnostic->status = 0;
+    decode_telemetry_payload(id, feedback, *diagnostic);
+    diagnostic->status = status_byte;
     return true;
   }
 
@@ -384,14 +511,24 @@ namespace lekiwi_ftservo_hardware
       set_error(error, "Velocity sync-write IDs and commands must have equal non-zero size");
       return false;
     }
-    std::vector<uint8_t> parameters{sts::register_addr::kGoalSpeed, 2U};
+    const size_t param_len = 2U + ids.size() * 3U;
+    if (param_len > 248U)
+    {
+      set_error(error, "Sync write velocity payload exceeds maximum buffer size");
+      return false;
+    }
+    std::array<uint8_t, 256> param_buf;
+    param_buf[0] = sts::register_addr::kGoalSpeed;
+    param_buf[1] = 2U;
+    size_t offset = 2U;
     for (size_t index = 0; index < ids.size(); ++index)
     {
       const auto encoded = encode_velocity_ticks(velocity_ticks[index]);
-      parameters.push_back(ids[index]);
-      parameters.insert(parameters.end(), encoded.begin(), encoded.end());
+      param_buf[offset++] = ids[index];
+      param_buf[offset++] = encoded[0];
+      param_buf[offset++] = encoded[1];
     }
-    return write_packet(kBroadcastId, kInstructionSyncWrite, parameters, error);
+    return write_packet(kBroadcastId, kInstructionSyncWrite, param_buf.data(), param_len, error);
   }
 
   bool StsProtocol::sync_write_position(
@@ -402,16 +539,29 @@ namespace lekiwi_ftservo_hardware
       set_error(error, "Position sync-write IDs and commands must have equal non-zero size");
       return false;
     }
-    std::vector<uint8_t> parameters{sts::register_addr::kAcceleration, 7U};
+    const size_t param_len = 2U + ids.size() * 7U;
+    if (param_len > 248U)
+    {
+      set_error(error, "Sync write position payload exceeds maximum buffer size");
+      return false;
+    }
+    std::array<uint8_t, 256> param_buf;
+    param_buf[0] = sts::register_addr::kGoalPosition;
+    param_buf[1] = 6U;
+    size_t offset = 2U;
     for (size_t index = 0; index < ids.size(); ++index)
     {
       const int position = std::clamp(positions[index], 0, sts::resolution::kEncoderResolution - 1);
-      const auto speed = encode_velocity_ticks(2400);
-      parameters.insert(parameters.end(), {ids[index], sts::default_config::kDefaultArmAcceleration,
-                                           static_cast<uint8_t>(position & 0xff), static_cast<uint8_t>((position >> 8) & 0xff),
-                                           0U, 0U, speed[0], speed[1]});
+      const auto speed = encode_velocity_ticks(sts::default_config::kDefaultGoalSpeedTicks);
+      param_buf[offset++] = ids[index];
+      param_buf[offset++] = static_cast<uint8_t>(position & 0xff);
+      param_buf[offset++] = static_cast<uint8_t>((position >> 8) & 0xff);
+      param_buf[offset++] = 0U;
+      param_buf[offset++] = 0U;
+      param_buf[offset++] = speed[0];
+      param_buf[offset++] = speed[1];
     }
-    return write_packet(kBroadcastId, kInstructionSyncWrite, parameters, error);
+    return write_packet(kBroadcastId, kInstructionSyncWrite, param_buf.data(), param_len, error);
   }
 
   bool StsProtocol::sync_write_torque(
@@ -422,13 +572,22 @@ namespace lekiwi_ftservo_hardware
       set_error(error, "Torque sync-write IDs and enable states must have equal non-zero size");
       return false;
     }
-    std::vector<uint8_t> parameters{sts::register_addr::kTorqueEnable, 1U};
+    const size_t param_len = 2U + ids.size() * 2U;
+    if (param_len > 248U)
+    {
+      set_error(error, "Sync write torque payload exceeds maximum buffer size");
+      return false;
+    }
+    std::array<uint8_t, 256> param_buf;
+    param_buf[0] = sts::register_addr::kTorqueEnable;
+    param_buf[1] = 1U;
+    size_t offset = 2U;
     for (size_t index = 0; index < ids.size(); ++index)
     {
-      parameters.push_back(ids[index]);
-      parameters.push_back(static_cast<uint8_t>(enable_states[index] ? 1U : 0U));
+      param_buf[offset++] = ids[index];
+      param_buf[offset++] = static_cast<uint8_t>(enable_states[index] ? 1U : 0U);
     }
-    return write_packet(kBroadcastId, kInstructionSyncWrite, parameters, error);
+    return write_packet(kBroadcastId, kInstructionSyncWrite, param_buf.data(), param_len, error);
   }
 
 } // namespace lekiwi_ftservo_hardware

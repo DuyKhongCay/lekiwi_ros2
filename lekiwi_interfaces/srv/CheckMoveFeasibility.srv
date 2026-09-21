@@ -1,0 +1,38 @@
+# ================= Request =================
+# Điểm gắp quân (Bắt buộc)
+geometry_msgs/Point pick_point
+
+# Điểm đặt quân (Tùy chọn: bỏ qua nếu is_capture == True)
+geometry_msgs/Point place_point
+
+# Cờ báo hiệu nước cờ ăn quân
+# Nếu is_capture == True: Chỉ cần tính toán gắp pick_point (quân bị loại), 
+# thả vào hộp cờ gắn trên thân xe (PLAN_SINGLE_BASE)
+bool is_capture
+
+# Frame chứa tọa độ điểm gửi lên (mặc định: chessboard_frame)
+string target_frame
+
+# Góc pitch gắp đặt yêu cầu (mặc định: -90 deg / thẳng đứng)
+float64 required_pitch_angle
+
+---
+# ================= Response =================
+# Kiểu kế hoạch thực thi cho Task Orchestrator
+uint8 PLAN_ZERO_NAV    = 0   # Robot đứng yên, tay gắp đặt luôn
+uint8 PLAN_SINGLE_BASE = 1   # 1 lần Nav2 tới vị trí chung (hoặc gắp ăn quân)
+uint8 PLAN_DUAL_BASE   = 2   # Cần 2 lần Nav2: B_pick -> Pick -> B_place -> Place
+
+uint8 plan_type
+bool feasible
+
+# Pose đế robot cần di chuyển tới
+geometry_msgs/PoseStamped pick_base_pose
+geometry_msgs/PoseStamped place_base_pose   # Bằng pick_base_pose nếu ZERO_NAV hoặc SINGLE_BASE
+
+# Nghiệm IK cho cánh tay tại từng pha
+sensor_msgs/JointState pick_ik_solution
+sensor_msgs/JointState place_ik_solution
+
+string message
+

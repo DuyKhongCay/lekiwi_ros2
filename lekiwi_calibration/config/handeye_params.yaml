@@ -1,0 +1,27 @@
+/**:
+  ros__parameters:
+    # Camera topics
+    image_topic: "/cameras/stereo_left/image_raw"
+    camera_info_topic: "/cameras/stereo_left/camera_info"
+    camera_frame: ""                   # Auto-detect from CameraInfo/Image msg if left empty
+    
+    # TF frame configuration
+    target_frame: "handeye_target"     # Broadcasted marker TF
+    base_frame: "base_footprint"       # LeKiwi base frame
+    robot_effector_frame: "lower_arm"  # LeKiwi arm link
+    is_eye_in_hand: false              # false for Eye-to-Hand, true for Eye-in-Hand
+
+    # ChArUco Board Specs (matching SO-101 / LeKiwi target)
+    squares_x: 3
+    squares_y: 4
+    square_length_m: 0.008
+    marker_length_m: 0.006
+    dictionary: "DICT_4X4_50"
+    min_markers: 4
+    max_reproj_px: 3.0
+
+    # Controller and Hardware integration (via TorqueManagerNode)
+    auto_disable_arm_torque: true
+    set_torque_service: "/set_torque_enabled"
+    output_yaml_path: "/root/docker_ws/lekiwi_ros2/lekiwi_description/config/calibration/handeye_calib_stereo_left.yaml"
+

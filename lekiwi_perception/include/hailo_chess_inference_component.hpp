@@ -4,6 +4,7 @@
  *
  * Implements a lifecycle node managing camera frame inference through Hailo NPU,
  * publishes piece detections, spatial board states (Full FEN), and optional debug images.
+ * Integrates PerceptionLifecycleHelper for camera mode gating, autostart, and diagnostics.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -30,12 +31,43 @@
 #include <string>
 #include <vector>
 
-#include "hailo/chess_game_state_tracker.hpp"
+#include "hailo/chess_constants.hpp"
 #include "hailo/chess_vision_mapper.hpp"
 #include "hailo/hailo_gst_pipeline.hpp"
+#include "perception_utils.hpp"
 
 namespace lekiwi_perception
 {
+
+  /**
+   * @brief Pipeline state enum class eliminating string data races.
+   */
+  enum class PipelineState : uint8_t
+  {
+    STOPPED,
+    STARTING,
+    RUNNING,
+    STOPPING,
+    ERROR
+  };
+
+  inline const char *to_string(PipelineState s)
+  {
+    switch (s)
+    {
+    case PipelineState::STOPPED:
+      return "STOPPED";
+    case PipelineState::STARTING:
+      return "STARTING";
+    case PipelineState::RUNNING:
+      return "RUNNING";
+    case PipelineState::STOPPING:
+      return "STOPPING";
+    case PipelineState::ERROR:
+      return "ERROR";
+    }
+    return "UNKNOWN";
+  }
 
   /**
    * @brief Lifecycle-managed component running neural network inference on camera frames.
@@ -48,59 +80,50 @@ namespace lekiwi_perception
 
     using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
-    /**
-     * @brief Loads model HEF paths, initializes ROS 2 publishers, services, and Hailo pipeline.
-     */
     CallbackReturn on_configure(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Starts Hailo GStreamer pipeline and activates publishers.
-     */
     CallbackReturn on_activate(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Pauses Hailo pipeline and deactivates publishers.
-     */
     CallbackReturn on_deactivate(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Cleans up Hailo pipeline instance.
-     */
     CallbackReturn on_cleanup(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Handles shutdown transition.
-     */
     CallbackReturn on_shutdown(const rclcpp_lifecycle::State &state) override;
-    /**
-     * @brief Resets pipeline state on lifecycle error.
-     */
     CallbackReturn on_error(const rclcpp_lifecycle::State &state) override;
+
+    [[nodiscard]] uint8_t current_camera_mode() const noexcept
+    {
+      return lifecycle_helper_ ? lifecycle_helper_->get_current_mode() : 0;
+    }
+
+    void handle_set_mode(
+        const std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Request> request,
+        std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Response> response);
 
   private:
     void handle_sample(GstSample *sample, GstElement *pipeline);
     void handle_image_input(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
     void handle_tag_centers(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr &msg);
-    void handle_set_mode(
-        const std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Request> request,
-        std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Response> response);
     void poll_bus_errors();
     void reset_state();
     void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
 
     /// Parameters
     std::string camera_topic_{"/cameras/stereo_left/image_raw"};
-    std::string fen_topic_{"/chess/fen"};
+    std::string fen_topic_{"/chess/raw_fen"};
     std::string detections_topic_{"/chess/detections_2d"};
     std::string tag_centers_topic_{"/chess/tag_centers"};
+    std::string grid_points_topic_{"/chess/grid_points"};
     std::string board_hef_path_;
     std::string pcs_hef_path_;
     std::string vdevice_group_id_{"lekiwi_chess"};
     std::string frame_id_{"stereo_left_optical"};
     double confidence_threshold_{0.35};
+    bool debug_{true};
     std::chrono::milliseconds transition_timeout_{5000};
+    std::map<int, int> tag_offsets_;
 
     std::unique_ptr<HailoGstPipeline> hailo_pipeline_;
-    std::unique_ptr<hailo::ChessGameStateTracker> game_tracker_;
 
     rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::String>::SharedPtr fen_pub_;
     rclcpp_lifecycle::LifecyclePublisher<vision_msgs::msg::Detection2DArray>::SharedPtr detections_pub_;
+    rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PolygonStamped>::SharedPtr grid_points_pub_;
 
     rclcpp::Service<lekiwi_interfaces::srv::SetCamMode>::SharedPtr mode_srv_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
@@ -110,20 +133,31 @@ namespace lekiwi_perception
     std::atomic<int> a1_corner_idx_{0};
     rclcpp::TimerBase::SharedPtr bus_timer_;
 
-    // Diagnostic Updater
-    std::shared_ptr<diagnostic_updater::Updater> updater_;
+    // Composition helper for Lifecycle, Mode Gating, Autostart & Diagnostics
+    std::unique_ptr<utils::PerceptionLifecycleHelper> lifecycle_helper_;
 
-    std::mutex state_mutex_;
-    std::atomic<uint8_t> current_camera_mode_{lekiwi_interfaces::msg::CameraMode::STANDBY};
-    std::string pipeline_state_{"STOPPED"};
+    std::atomic<PipelineState> pipeline_state_{PipelineState::STOPPED};
+    std::mutex error_mutex_;
     std::string last_error_;
     std::string last_logged_fen_;
 
-    std::atomic<uint64_t> frame_counter_{0};
-    std::chrono::steady_clock::time_point last_fps_time_;
-    uint64_t last_fps_frame_count_{0};
-    std::atomic<float> current_fps_{0.0F};
-    std::atomic<double> current_latency_ms_{0.0};
+    /// Structure representing an unmapped or conflicting chess piece detection
+    struct UnmappedPieceInfo
+    {
+      std::string label;
+      std::string square;
+      float confidence{0.0F};
+      bool is_duplicate{false};
+    };
+
+    // YOLO Debug Telemetry (populated when debug_ is true)
+    std::mutex debug_metrics_mutex_;
+    int debug_yolo_detections_{0};
+    int debug_yolo_mapped_{0};
+    float debug_yolo_avg_conf_{0.0F};
+    float debug_yolo_min_conf_{0.0F};
+    std::string debug_yolo_placement_;
+    std::vector<UnmappedPieceInfo> debug_unmapped_pieces_;
   };
 
 } // namespace lekiwi_perception

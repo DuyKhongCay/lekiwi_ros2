@@ -1,6 +1,6 @@
 /**
  * @file lekiwi_feetech_hardware.cpp
- * @brief Implementation of the LeKiwiFeetechHardwareInterface ros2_control plugin.
+ * @brief Implementation of the LeKiwiFeetechHardwareInterface ros2_control plugin adapter.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -9,29 +9,18 @@
 #include "lekiwi_ftservo_hardware/lekiwi_feetech_hardware.hpp"
 
 #include <cmath>
-#include <chrono>
 #include <exception>
-#include <fstream>
-#include <string>
-#include <thread>
-#include <vector>
-
-#include <hardware_interface/types/hardware_interface_type_values.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <yaml-cpp/yaml.h>
-
-#include "lekiwi_ftservo_hardware/velocity_codec.hpp"
 
 namespace lekiwi_ftservo_hardware
 {
 
   LeKiwiFeetechHardwareInterface::~LeKiwiFeetechHardwareInterface()
   {
-    io_running_ = false;
-    if (io_worker_thread_.joinable())
+    if (worker_)
     {
-      io_worker_thread_.join();
+      worker_->stop();
     }
   }
 
@@ -43,6 +32,7 @@ namespace lekiwi_ftservo_hardware
     {
       return hardware_interface::CallbackReturn::ERROR;
     }
+
     const auto &hardware_parameters = info_.hardware_parameters;
     const auto port_it = hardware_parameters.find("usb_port");
     if (port_it == hardware_parameters.end() || port_it->second.empty())
@@ -51,6 +41,7 @@ namespace lekiwi_ftservo_hardware
       return hardware_interface::CallbackReturn::ERROR;
     }
     usb_port_ = port_it->second;
+
     const auto baud_it = hardware_parameters.find("baud_rate");
     if (baud_it != hardware_parameters.end())
     {
@@ -65,6 +56,7 @@ namespace lekiwi_ftservo_hardware
         return hardware_interface::CallbackReturn::ERROR;
       }
     }
+
     const auto timeout_it = hardware_parameters.find("timeout_ms");
     if (timeout_it != hardware_parameters.end())
     {
@@ -79,228 +71,51 @@ namespace lekiwi_ftservo_hardware
         return hardware_interface::CallbackReturn::ERROR;
       }
     }
-    if (configure_joint_runtime() != hardware_interface::CallbackReturn::SUCCESS)
+
+    // Parse and validate joint topology
+    std::string parse_error;
+    if (!JointConfigParser::parse(info_, topology_, &parse_error))
     {
+      RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"), "Joint configuration parsing failed: %s",
+                   parse_error.c_str());
       return hardware_interface::CallbackReturn::ERROR;
     }
-    const auto joint_config_it = hardware_parameters.find("joint_config_file");
-    if (joint_config_it != hardware_parameters.end() && !joint_config_it->second.empty() &&
-        load_joint_configuration(joint_config_it->second) !=
-            hardware_interface::CallbackReturn::SUCCESS)
+
+    // Instantiate background I/O engine
+    worker_ = std::make_unique<FeetechBusWorker>();
+    std::string init_error;
+    if (!worker_->init(topology_, &init_error))
     {
+      RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"), "Worker initialization failed: %s",
+                   init_error.c_str());
       return hardware_interface::CallbackReturn::ERROR;
     }
 
-    // Allocate thread-safe state and command buffers
-    const size_t num_joints = joints_.size();
-    {
-      std::lock_guard<std::mutex> lock(shared_state_.mutex);
-      shared_state_.positions.assign(num_joints, 0.0);
-      shared_state_.velocities.assign(num_joints, 0.0);
-      shared_state_.telemetry.resize(num_joints);
-      for (size_t i = 0; i < num_joints; ++i)
-      {
-        shared_state_.telemetry[i].name = joints_[i].name;
-        shared_state_.telemetry[i].id = joints_[i].id;
-      }
-      shared_state_.valid = false;
-    }
-    {
-      std::lock_guard<std::mutex> lock(shared_command_.mutex);
-      shared_command_.commands.assign(num_joints, 0.0);
-      shared_command_.has_new_command = false;
-    }
-
-    return hardware_interface::CallbackReturn::SUCCESS;
-  }
-
-  hardware_interface::CallbackReturn LeKiwiFeetechHardwareInterface::configure_joint_runtime()
-  {
-    if (info_.joints.size() != 9U)
-    {
-      RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                   "Expected exactly 9 joints in URDF declaration, got %zu", info_.joints.size());
-      return hardware_interface::CallbackReturn::ERROR;
-    }
-    joints_.clear();
-    joint_ids_.clear();
-    wheel_ids_.clear();
-    arm_ids_.clear();
-    for (const auto &joint_info : info_.joints)
-    {
-      const auto id_it = joint_info.parameters.find("id");
-      if (id_it == joint_info.parameters.end())
-      {
-        RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                     "Missing required id parameter on joint %s", joint_info.name.c_str());
-        return hardware_interface::CallbackReturn::ERROR;
-      }
-      int id = 0;
-      try
-      {
-        id = std::stoi(id_it->second);
-      }
-      catch (const std::exception &exception)
-      {
-        RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                     "Invalid id parameter '%s' on joint %s: %s", id_it->second.c_str(),
-                     joint_info.name.c_str(), exception.what());
-        return hardware_interface::CallbackReturn::ERROR;
-      }
-      if (id <= 0 || id > 253)
-      {
-        RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                     "Out-of-range servo id %d on joint %s", id, joint_info.name.c_str());
-        return hardware_interface::CallbackReturn::ERROR;
-      }
-      if (joint_info.command_interfaces.size() != 1U)
-      {
-        RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                     "Joint %s must declare exactly one command interface", joint_info.name.c_str());
-        return hardware_interface::CallbackReturn::ERROR;
-      }
-      const auto &interface_name = joint_info.command_interfaces.front().name;
-      const bool is_velocity = interface_name == hardware_interface::HW_IF_VELOCITY;
-      const bool is_position = interface_name == hardware_interface::HW_IF_POSITION;
-      if (!is_velocity && !is_position)
-      {
-        RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                     "Joint %s declares unsupported command interface '%s'", joint_info.name.c_str(),
-                     interface_name.c_str());
-        return hardware_interface::CallbackReturn::ERROR;
-      }
-      JointRuntime runtime;
-      runtime.name = joint_info.name;
-      runtime.id = static_cast<uint8_t>(id);
-      runtime.velocity_command = is_velocity;
-      runtime.velocity_radians_per_second_per_tick = 0.00785398;
-      runtime.max_velocity_radians_per_second = 25.0;
-      runtime.velocity_direction = 1;
-      runtime.acceleration = is_velocity ? sts::default_config::kWheelAcceleration
-                                         : sts::default_config::kDefaultArmAcceleration;
-
-      // Pre-cache string interface names to guarantee zero heap allocation in real-time read/write loops
-      runtime.position_state_name = runtime.name + "/" + hardware_interface::HW_IF_POSITION;
-      runtime.velocity_state_name = runtime.name + "/" + hardware_interface::HW_IF_VELOCITY;
-      runtime.command_interface_name = runtime.name + "/" + interface_name;
-
-      joints_.push_back(runtime);
-      joint_ids_.push_back(runtime.id);
-      if (is_velocity)
-      {
-        wheel_ids_.push_back(runtime.id);
-      }
-      else
-      {
-        arm_ids_.push_back(runtime.id);
-      }
-    }
-    return hardware_interface::CallbackReturn::SUCCESS;
-  }
-
-  hardware_interface::CallbackReturn LeKiwiFeetechHardwareInterface::load_joint_configuration(
-      const std::string &file_path)
-  {
-    try
-    {
-      const YAML::Node document = YAML::LoadFile(file_path);
-      const auto yaml_joints = document["joints"];
-      if (!yaml_joints)
-      {
-        throw YAML::Exception(document.Mark(), "Missing joints map");
-      }
-      for (auto &joint : joints_)
-      {
-        const auto yaml_joint = yaml_joints[joint.name];
-        if (joint.velocity_command)
-        {
-          if (!yaml_joint)
-          {
-            throw YAML::Exception(yaml_joints.Mark(), "Wheel not found in YAML: " + joint.name);
-          }
-          joint.velocity_radians_per_second_per_tick =
-              yaml_joint["velocity_radians_per_second_per_tick"].as<double>();
-          joint.max_velocity_radians_per_second =
-              yaml_joint["max_velocity_radians_per_second"].as<double>();
-          joint.velocity_direction = yaml_joint["velocity_direction"].as<int>();
-          // Bánh xe mobile_base luôn cố định acceleration = kWheelAcceleration (step response), không nạp từ YAML
-          joint.acceleration = sts::default_config::kWheelAcceleration;
-          if (joint.velocity_radians_per_second_per_tick <= 0.0 ||
-              joint.max_velocity_radians_per_second <= 0.0 ||
-              (joint.velocity_direction != -1 && joint.velocity_direction != 1))
-          {
-            throw YAML::Exception(yaml_joint.Mark(), "Invalid velocity conversion for " + joint.name);
-          }
-        }
-        else
-        {
-          // Động cơ cánh tay: nạp acceleration từ YAML nếu có cấu hình
-          if (yaml_joint && yaml_joint["acceleration"])
-          {
-            const int acc = yaml_joint["acceleration"].as<int>();
-            if (acc < 0 || acc > sts::resolution::kMaxAccelerationRegister)
-            {
-              throw YAML::Exception(yaml_joint.Mark(), "Invalid acceleration [0.." +
-                                                           std::to_string(sts::resolution::kMaxAccelerationRegister) +
-                                                           "] for " + joint.name);
-            }
-            joint.acceleration = static_cast<uint8_t>(acc);
-          }
-        }
-      }
-    }
-    catch (const YAML::Exception &exception)
-    {
-      RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                   "Cannot load joint configuration '%s': %s", file_path.c_str(), exception.what());
-      return hardware_interface::CallbackReturn::ERROR;
-    }
     return hardware_interface::CallbackReturn::SUCCESS;
   }
 
   hardware_interface::CallbackReturn LeKiwiFeetechHardwareInterface::on_configure(
       const rclcpp_lifecycle::State &)
   {
-    protocol_ = std::make_unique<StsProtocol>();
-    std::string error;
-    if (!protocol_->open(usb_port_, baud_rate_, timeout_ms_, &error))
+    if (!worker_)
     {
-      RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"), "%s", error.c_str());
-      (void)protocol_.release();
       return hardware_interface::CallbackReturn::ERROR;
     }
-    for (const auto &joint : joints_)
+
+    std::string config_error;
+    if (!worker_->configure(usb_port_, baud_rate_, timeout_ms_, &config_error))
     {
-      if (!protocol_->write_register(joint.id, kTorqueEnableRegister, {0U}, &error) ||
-          !protocol_->write_register(joint.id, kModeRegister,
-                                     {joint.velocity_command ? kVelocityMode : kPositionMode}, &error))
-      {
-        RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"), "%s", error.c_str());
-        protocol_->close();
-        (void)protocol_.release();
-        return hardware_interface::CallbackReturn::ERROR;
-      }
-      if (!protocol_->write_register(joint.id, sts::register_addr::kAcceleration, {joint.acceleration}, &error))
-      {
-        RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                     "Failed to configure acceleration for joint '%s' (ID %d): %s",
-                     joint.name.c_str(), joint.id, error.c_str());
-        protocol_->close();
-        (void)protocol_.release();
-        return hardware_interface::CallbackReturn::ERROR;
-      }
-      if (joint.velocity_command)
-      {
-        RCLCPP_INFO(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                    "Configured wheel joint '%s' (ID %d) velocity mode with acceleration = %u",
-                    joint.name.c_str(), joint.id, joint.acceleration);
-      }
-      else
-      {
-        RCLCPP_INFO(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                    "Configured arm joint '%s' (ID %d) position mode with acceleration = %u",
-                    joint.name.c_str(), joint.id, joint.acceleration);
-      }
+      RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"), "%s", config_error.c_str());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+
+    for (const auto &joint : topology_.joints)
+    {
+      RCLCPP_INFO(
+          rclcpp::get_logger("LeKiwiFeetechHardware"),
+          "Configured %s joint '%s' (ID %u) with acceleration = %u",
+          joint.velocity_command ? "velocity" : "position",
+          joint.name.c_str(), joint.id, joint.acceleration);
     }
 
     if (get_node())
@@ -313,20 +128,12 @@ namespace lekiwi_ftservo_hardware
       RCLCPP_INFO(
           rclcpp::get_logger("LeKiwiFeetechHardware"),
           "Diagnostic updater initialized for lekiwi_feetech_servos");
-
-      set_torque_srv_ = get_node()->create_service<lekiwi_interfaces::srv::SetTorqueEnabled>(
-          "~/set_torque_enabled",
-          std::bind(&LeKiwiFeetechHardwareInterface::handle_set_torque_enabled, this,
-                    std::placeholders::_1, std::placeholders::_2));
-      RCLCPP_INFO(
-          rclcpp::get_logger("LeKiwiFeetechHardware"),
-          "Service '~/set_torque_enabled' created successfully");
     }
     else
     {
       RCLCPP_WARN(
           rclcpp::get_logger("LeKiwiFeetechHardware"),
-          "Default node is not available. Diagnostic updater and set_torque_enabled service will not be available.");
+          "Default node is not available. Diagnostic updater will not be available.");
     }
 
     return hardware_interface::CallbackReturn::SUCCESS;
@@ -335,275 +142,95 @@ namespace lekiwi_ftservo_hardware
   hardware_interface::CallbackReturn LeKiwiFeetechHardwareInterface::on_activate(
       const rclcpp_lifecycle::State &)
   {
-    if (!protocol_)
+    if (!worker_)
     {
       return hardware_interface::CallbackReturn::ERROR;
     }
 
-    // Perform an initial synchronous read to seed starting positions
-    std::vector<ServoFastState> initial_states;
-    std::string error;
-    if (!protocol_->sync_read_fast_state(joint_ids_, &initial_states, &error))
+    std::string activate_error;
+    if (!worker_->activate(&activate_error))
     {
-      RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                   "Initial sync_read failed on activate: %s", error.c_str());
+      RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"), "Worker activation failed: %s",
+                   activate_error.c_str());
       return hardware_interface::CallbackReturn::ERROR;
     }
 
-    const size_t num_joints = joints_.size();
+    // Seed initial state and command interfaces from initial snapshot
+    const auto *snapshot = worker_->read_state_rt();
+    const size_t num_joints = topology_.size();
+    if (snapshot != nullptr && snapshot->valid &&
+        snapshot->positions.size() >= num_joints &&
+        snapshot->velocities.size() >= num_joints)
     {
-      std::lock_guard<std::mutex> lock(shared_state_.mutex);
       for (size_t i = 0; i < num_joints; ++i)
       {
-        const double pos_rad = (initial_states[i].position_ticks - kEncoderCenterTicks) * kRadiansPerEncoderTick;
-        const double vel_scale = joints_[i].velocity_command ? joints_[i].velocity_radians_per_second_per_tick : 0.0;
-        const double vel_rad_s = initial_states[i].speed_ticks * vel_scale * joints_[i].velocity_direction;
-        shared_state_.positions[i] = pos_rad;
-        shared_state_.velocities[i] = vel_rad_s;
-        shared_state_.telemetry[i].position_radians = pos_rad;
-        shared_state_.telemetry[i].velocity_radians_per_second = vel_rad_s;
+        const auto &joint = topology_.joints[i];
+        set_state(joint.position_state_name, snapshot->positions[i]);
+        set_state(joint.velocity_state_name, snapshot->velocities[i]);
 
-        set_state(joints_[i].position_state_name, pos_rad);
-        set_state(joints_[i].velocity_state_name, vel_rad_s);
-      }
-      shared_state_.valid = true;
-      shared_state_.last_read_time = std::chrono::steady_clock::now();
-    }
+        const double init_cmd = joint.velocity_command ? 0.0 : snapshot->positions[i];
+        set_command(joint.command_interface_name, init_cmd);
 
-    // Seed initial command interfaces to prevent sudden jumps
-    {
-      std::lock_guard<std::mutex> lock(shared_command_.mutex);
-      for (size_t i = 0; i < num_joints; ++i)
-      {
-        if (joints_[i].velocity_command)
+        if (joint.has_torque_enable_command)
         {
-          set_command(joints_[i].command_interface_name, 0.0);
-          shared_command_.commands[i] = 0.0;
-        }
-        else
-        {
-          const double initial_pos = shared_state_.positions[i];
-          set_command(joints_[i].command_interface_name, initial_pos);
-          shared_command_.commands[i] = initial_pos;
+          set_command(joint.torque_enable_command_name, 1.0);
         }
       }
-      shared_command_.has_new_command = false;
     }
 
-    // Stop wheels and enable torque before launching async worker thread
-    if (!stop_wheels(&error) || !set_all_torque(true, &error))
-    {
-      RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"), "%s", error.c_str());
-      return hardware_interface::CallbackReturn::ERROR;
-    }
-
-    // Start Async I/O Worker Thread
-    io_running_ = true;
-    io_worker_thread_ = std::thread(&LeKiwiFeetechHardwareInterface::io_worker_loop, this);
-
-    RCLCPP_INFO(rclcpp::get_logger("LeKiwiFeetechHardware"),
-                "Async I/O Worker Thread started successfully for 9 STS servos.");
+    RCLCPP_INFO(
+        rclcpp::get_logger("LeKiwiFeetechHardware"),
+        "Async I/O Worker started successfully for %zu STS servos.", topology_.size());
     return hardware_interface::CallbackReturn::SUCCESS;
   }
 
   hardware_interface::CallbackReturn LeKiwiFeetechHardwareInterface::on_deactivate(
       const rclcpp_lifecycle::State &)
   {
-    // 1. Stop Async I/O Worker Thread first
-    io_running_ = false;
-    if (io_worker_thread_.joinable())
+    if (!worker_)
     {
-      io_worker_thread_.join();
+      return hardware_interface::CallbackReturn::SUCCESS;
     }
 
-    // 2. Stop wheels and disable torque
     std::string error;
-    const bool stopped = stop_wheels(&error);
-    const bool torque_disabled = set_all_torque(false, &error);
-    if (!stopped || !torque_disabled)
+    const bool success = worker_->deactivate(&error);
+    if (!success)
     {
       RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"), "%s", error.c_str());
     }
-    if (protocol_)
-    {
-      protocol_->close();
-      protocol_.reset();
-    }
-    return stopped && torque_disabled ? hardware_interface::CallbackReturn::SUCCESS : hardware_interface::CallbackReturn::ERROR;
+    return success ? hardware_interface::CallbackReturn::SUCCESS : hardware_interface::CallbackReturn::ERROR;
   }
 
-  bool LeKiwiFeetechHardwareInterface::set_all_torque(const bool enabled, std::string *error)
+  hardware_interface::CallbackReturn LeKiwiFeetechHardwareInterface::on_cleanup(
+      const rclcpp_lifecycle::State &)
   {
-    if (!protocol_)
+    if (worker_)
     {
-      if (error != nullptr)
-      {
-        *error = "Feetech protocol is not configured";
-      }
-      return false;
+      worker_->cleanup();
     }
-    const std::vector<bool> enable_states(joint_ids_.size(), enabled);
-    if (!protocol_->sync_write_torque(joint_ids_, enable_states, error))
-    {
-      return false;
-    }
-    arm_torque_enabled_ = enabled;
-    base_torque_enabled_ = enabled;
-    return true;
-  }
-
-  bool LeKiwiFeetechHardwareInterface::set_joints_torque(
-      const std::vector<uint8_t> &ids, const bool enabled, std::string *error)
-  {
-    if (!protocol_)
-    {
-      if (error != nullptr)
-      {
-        *error = "Feetech protocol is not configured";
-      }
-      return false;
-    }
-    if (ids.empty())
-    {
-      return true;
-    }
-    const std::vector<bool> enable_states(ids.size(), enabled);
-    return protocol_->sync_write_torque(ids, enable_states, error);
-  }
-
-  void LeKiwiFeetechHardwareInterface::handle_set_torque_enabled(
-      const std::shared_ptr<lekiwi_interfaces::srv::SetTorqueEnabled::Request> request,
-      std::shared_ptr<lekiwi_interfaces::srv::SetTorqueEnabled::Response> response)
-  {
-    using SrvReq = lekiwi_interfaces::srv::SetTorqueEnabled::Request;
-
-    if (!protocol_)
-    {
-      response->success = false;
-      response->message = "Feetech protocol is not configured or port is closed";
-      return;
-    }
-
-    const uint8_t target = request->target;
-    const bool enabled = request->enabled;
-
-    if (target != SrvReq::TARGET_ALL && target != SrvReq::TARGET_ARM && target != SrvReq::TARGET_BASE)
-    {
-      response->success = false;
-      response->message = "Invalid target: " + std::to_string(target) + " (use 0=ALL, 1=ARM, 2=BASE)";
-      return;
-    }
-
-    const bool affects_arm = (target == SrvReq::TARGET_ALL || target == SrvReq::TARGET_ARM);
-    const bool affects_base = (target == SrvReq::TARGET_ALL || target == SrvReq::TARGET_BASE);
-
-    // 1. If re-enabling torque, latch current feedback into command buffer first (anti-jerk)
-    if (enabled)
-    {
-      std::lock_guard<std::mutex> lock_state(shared_state_.mutex);
-      std::lock_guard<std::mutex> lock_cmd(shared_command_.mutex);
-      for (size_t i = 0; i < joints_.size(); ++i)
-      {
-        const bool is_base_joint = joints_[i].velocity_command;
-        if (is_base_joint && affects_base)
-        {
-          set_command(joints_[i].command_interface_name, 0.0);
-          shared_command_.commands[i] = 0.0;
-        }
-        else if (!is_base_joint && affects_arm)
-        {
-          const double cur_pos = shared_state_.positions[i];
-          if (std::isfinite(cur_pos))
-          {
-            set_command(joints_[i].command_interface_name, cur_pos);
-            shared_command_.commands[i] = cur_pos;
-          }
-        }
-      }
-      shared_command_.has_new_command = false;
-    }
-
-    // 2. Select target servo IDs using pre-cached lists
-    std::vector<uint8_t> target_ids;
-    if (target == SrvReq::TARGET_ALL)
-    {
-      target_ids = joint_ids_;
-    }
-    else if (target == SrvReq::TARGET_ARM)
-    {
-      target_ids = arm_ids_;
-    }
-    else if (target == SrvReq::TARGET_BASE)
-    {
-      target_ids = wheel_ids_;
-    }
-
-    // 3. Atomically perform serial operations protected by serial_mutex_
-    std::string error;
-    {
-      std::lock_guard<std::mutex> lock_serial(serial_mutex_);
-      if (!enabled && affects_base)
-      {
-        (void)stop_wheels(&error);
-      }
-      if (!set_joints_torque(target_ids, enabled, &error))
-      {
-        response->success = false;
-        response->message = "Failed to update torque register: " + error;
-        return;
-      }
-    }
-
-    // 4. Update software gating flags
-    if (affects_arm)
-    {
-      arm_torque_enabled_ = enabled;
-    }
-    if (affects_base)
-    {
-      base_torque_enabled_ = enabled;
-    }
-
-    const std::string name = (target == SrvReq::TARGET_ARM) ? "Arm" : (target == SrvReq::TARGET_BASE) ? "Base"
-                                                                                                      : "All";
-    response->success = true;
-    response->message = name + " torque " + (enabled ? "enabled" : "disabled");
-    RCLCPP_INFO(rclcpp::get_logger("LeKiwiFeetechHardware"), "%s", response->message.c_str());
-  }
-
-  bool LeKiwiFeetechHardwareInterface::stop_wheels(std::string *error)
-  {
-    if (!protocol_)
-    {
-      if (error != nullptr)
-      {
-        *error = "Feetech protocol is not configured";
-      }
-      return false;
-    }
-    if (wheel_ids_.empty())
-    {
-      return true;
-    }
-    const std::vector<int> commands(wheel_ids_.size(), 0);
-    return protocol_->sync_write_velocity(wheel_ids_, commands, error);
+    updater_.reset();
+    RCLCPP_INFO(rclcpp::get_logger("LeKiwiFeetechHardware"),
+                "LeKiwiFeetechHardwareInterface cleaned up serial bus and resources successfully.");
+    return hardware_interface::CallbackReturn::SUCCESS;
   }
 
   hardware_interface::return_type LeKiwiFeetechHardwareInterface::read(
       const rclcpp::Time &, const rclcpp::Duration &)
   {
-    // Fast memory read from shared buffer (executes in < 5 us, zero heap allocation)
-    std::lock_guard<std::mutex> lock(shared_state_.mutex);
-    if (!shared_state_.valid)
+    // Wait-free read from RealtimeBuffer (< 50 ns, zero heap allocation)
+    const auto *snapshot = worker_->read_state_rt();
+    const size_t num_joints = topology_.size();
+    if (snapshot == nullptr || !snapshot->valid ||
+        snapshot->positions.size() < num_joints ||
+        snapshot->velocities.size() < num_joints)
     {
       return hardware_interface::return_type::OK;
     }
 
-    const size_t num_joints = joints_.size();
     for (size_t i = 0; i < num_joints; ++i)
     {
-      set_state(joints_[i].position_state_name, shared_state_.positions[i]);
-      set_state(joints_[i].velocity_state_name, shared_state_.velocities[i]);
+      set_state(topology_.joints[i].position_state_name, snapshot->positions[i]);
+      set_state(topology_.joints[i].velocity_state_name, snapshot->velocities[i]);
     }
     return hardware_interface::return_type::OK;
   }
@@ -611,325 +238,99 @@ namespace lekiwi_ftservo_hardware
   hardware_interface::return_type LeKiwiFeetechHardwareInterface::write(
       const rclcpp::Time &, const rclcpp::Duration &)
   {
-    // Fast memory push to command buffer (executes in < 5 us, zero heap allocation)
-    const size_t num_joints = joints_.size();
-    std::lock_guard<std::mutex> lock(shared_command_.mutex);
+    // Wait-free push to atomic command buffer (< 50 ns, zero heap allocation)
+    const size_t num_joints = topology_.size();
+    bool torque_cmd_changed = false;
+
     for (size_t i = 0; i < num_joints; ++i)
     {
-      const double cmd = get_command(joints_[i].command_interface_name);
-      if (std::isfinite(cmd))
+      const auto &joint = topology_.joints[i];
+      double t_cmd = 1.0;
+      bool just_enabled_torque = false;
+
+      if (joint.has_torque_enable_command)
       {
-        shared_command_.commands[i] = cmd;
-      }
-      else if (joints_[i].velocity_command)
-      {
-        // Defensive reset to zero velocity if command is NaN or Inf
-        shared_command_.commands[i] = 0.0;
-      }
-    }
-    shared_command_.has_new_command = true;
-    return hardware_interface::return_type::OK;
-  }
-
-  void LeKiwiFeetechHardwareInterface::io_worker_loop()
-  {
-    const size_t num_joints = joints_.size();
-    uint64_t iteration_count = 0;
-
-    // Use pre-cached velocity (wheel) and position (arm) ID vectors
-    const auto &velocity_ids = wheel_ids_;
-    const auto &position_ids = arm_ids_;
-
-    std::vector<ServoFastState> fast_states;
-    std::vector<ServoDiagnosticData> diag_states;
-    std::string error;
-
-    // Pre-allocated scratch vectors to guarantee zero dynamic heap reallocations at 100 Hz
-    std::vector<double> current_cmds;
-    current_cmds.reserve(num_joints);
-    std::vector<int> velocity_commands;
-    velocity_commands.reserve(velocity_ids.size());
-    std::vector<int> position_commands;
-    position_commands.reserve(position_ids.size());
-
-    while (io_running_)
-    {
-      const auto loop_start = std::chrono::steady_clock::now();
-
-      // 1. Hardware Read Phase:
-      // Every 10 iterations (~10 Hz), perform full diagnostic sync_read (15 bytes),
-      // otherwise perform fast state sync_read (4 bytes).
-      const bool do_full_diagnostic = (iteration_count % 10 == 0);
-      bool read_success = false;
-
-      {
-        std::lock_guard<std::mutex> lock_serial(serial_mutex_);
-        if (do_full_diagnostic)
+        const double raw_t_cmd = get_command(joint.torque_enable_command_name);
+        if (std::isfinite(raw_t_cmd))
         {
-          read_success = protocol_->sync_read_diagnostics(joint_ids_, &diag_states, &error);
-        }
-        else
-        {
-          read_success = protocol_->sync_read_fast_state(joint_ids_, &fast_states, &error);
-        }
-      }
-
-      if (read_success)
-      {
-        std::lock_guard<std::mutex> lock(shared_state_.mutex);
-        if (do_full_diagnostic)
-        {
-          for (size_t i = 0; i < num_joints; ++i)
+          t_cmd = raw_t_cmd;
+          const double old_cmd = worker_->exchange_torque_enable(i, t_cmd);
+          const bool is_en = (t_cmd >= 0.5);
+          const bool was_en = (old_cmd >= 0.5);
+          if (is_en != was_en)
           {
-            const double pos_rad = (diag_states[i].position_ticks - kEncoderCenterTicks) * kRadiansPerEncoderTick;
-            const double vel_scale = joints_[i].velocity_command ? joints_[i].velocity_radians_per_second_per_tick : 0.0;
-            const double vel_rad_s = diag_states[i].speed_ticks * vel_scale * joints_[i].velocity_direction;
-
-            shared_state_.positions[i] = pos_rad;
-            shared_state_.velocities[i] = vel_rad_s;
-
-            auto &telem = shared_state_.telemetry[i];
-            telem.name = joints_[i].name;
-            telem.id = joints_[i].id;
-            telem.position_radians = pos_rad;
-            telem.velocity_radians_per_second = vel_rad_s;
-            telem.load_ratio = static_cast<double>(diag_states[i].load_raw) * sts::telemetry_scale::kLoadNormalizedPerUnit;
-            telem.voltage_v = diag_states[i].voltage_v;
-            telem.temperature_c = diag_states[i].temperature_c;
-            telem.current_a = diag_states[i].current_a;
-            telem.moving = diag_states[i].moving;
-            telem.status_flags = diag_states[i].status;
-          }
-        }
-        else
-        {
-          for (size_t i = 0; i < num_joints; ++i)
-          {
-            const double pos_rad = (fast_states[i].position_ticks - kEncoderCenterTicks) * kRadiansPerEncoderTick;
-            const double vel_scale = joints_[i].velocity_command ? joints_[i].velocity_radians_per_second_per_tick : 0.0;
-            const double vel_rad_s = fast_states[i].speed_ticks * vel_scale * joints_[i].velocity_direction;
-
-            shared_state_.positions[i] = pos_rad;
-            shared_state_.velocities[i] = vel_rad_s;
-            shared_state_.telemetry[i].position_radians = pos_rad;
-            shared_state_.telemetry[i].velocity_radians_per_second = vel_rad_s;
-          }
-        }
-        shared_state_.valid = true;
-        shared_state_.last_read_time = std::chrono::steady_clock::now();
-        ++shared_state_.update_count;
-      }
-      else
-      {
-        std::lock_guard<std::mutex> lock(shared_state_.mutex);
-        ++shared_state_.read_error_count;
-      }
-
-      // 2. Hardware Write Phase:
-      bool has_cmd = false;
-      {
-        std::lock_guard<std::mutex> lock(shared_command_.mutex);
-        if (shared_command_.has_new_command)
-        {
-          current_cmds = shared_command_.commands;
-          has_cmd = true;
-          shared_command_.has_new_command = false;
-        }
-      }
-
-      if (has_cmd && current_cmds.size() == num_joints)
-      {
-        velocity_commands.clear();
-        position_commands.clear();
-
-        for (size_t i = 0; i < num_joints; ++i)
-        {
-          if (joints_[i].velocity_command)
-          {
-            const double vel = current_cmds[i];
-            const double safe_vel = std::isfinite(vel) ? vel : 0.0;
-            velocity_commands.push_back(radians_per_second_to_ticks(
-                safe_vel,
-                joints_[i].velocity_radians_per_second_per_tick,
-                joints_[i].max_velocity_radians_per_second,
-                joints_[i].velocity_direction));
-          }
-          else
-          {
-            const double pos = current_cmds[i];
-            if (std::isfinite(pos))
+            torque_cmd_changed = true;
+            if (is_en && !was_en)
             {
-              position_commands.push_back(
-                  static_cast<int>(std::lround(pos * kEncoderTicksPerRadian)) + kEncoderCenterTicks);
+              just_enabled_torque = true;
             }
           }
         }
-
-        std::lock_guard<std::mutex> lock_serial(serial_mutex_);
-        if (base_torque_enabled_ && !velocity_ids.empty() && !velocity_commands.empty())
-        {
-          protocol_->sync_write_velocity(velocity_ids, velocity_commands, &error);
-        }
-        if (arm_torque_enabled_ && !position_ids.empty() && !position_commands.empty())
-        {
-          protocol_->sync_write_position(position_ids, position_commands, &error);
-        }
       }
 
-      ++iteration_count;
-
-      // 3. Pacing: Target ~100 Hz (10 ms period)
-      const auto loop_elapsed = std::chrono::steady_clock::now() - loop_start;
-      const auto target_period = std::chrono::milliseconds(sts::default_config::kDefaultLoopPeriodMs);
-      if (loop_elapsed < target_period && io_running_)
+      if (joint.velocity_command)
       {
-        std::this_thread::sleep_for(target_period - loop_elapsed);
+        const double cmd = get_command(joint.command_interface_name);
+        worker_->push_command(i, std::isfinite(cmd) ? cmd : 0.0);
+      }
+      else
+      {
+        // Position-controlled joint: Anti-Jerk & Lead-Through synchronization
+        const bool torque_enabled = (t_cmd >= 0.5);
+        if (!torque_enabled || just_enabled_torque)
+        {
+          // While torque is disabled OR at the exact transition when torque is re-enabled,
+          // follow physical joint state to prevent violent snapping towards outdated targets.
+          const double current_pos = get_state(joint.position_state_name);
+          if (std::isfinite(current_pos))
+          {
+            set_command(joint.command_interface_name, current_pos);
+            worker_->push_command(i, current_pos);
+          }
+        }
+        else
+        {
+          const double cmd = get_command(joint.command_interface_name);
+          if (std::isfinite(cmd))
+          {
+            worker_->push_command(i, cmd);
+          }
+        }
       }
     }
+
+    if (torque_cmd_changed)
+    {
+      worker_->notify_torque_command_changed();
+    }
+    worker_->notify_new_command();
+
+    return hardware_interface::return_type::OK;
   }
 
   std::vector<JointTelemetry> LeKiwiFeetechHardwareInterface::get_telemetry() const
   {
-    std::lock_guard<std::mutex> lock(shared_state_.mutex);
-    return shared_state_.telemetry;
+    if (!worker_)
+    {
+      return {};
+    }
+    const auto *snapshot = worker_->read_state_non_rt();
+    return (snapshot != nullptr) ? snapshot->telemetry : std::vector<JointTelemetry>{};
   }
 
   void LeKiwiFeetechHardwareInterface::produce_diagnostics(
       diagnostic_updater::DiagnosticStatusWrapper &stat)
   {
-    std::vector<JointTelemetry> telem_list;
-    uint64_t total_updates = 0;
-    uint64_t total_errors = 0;
-    bool is_valid = false;
-    std::chrono::steady_clock::time_point last_read;
+    const JointStateSnapshot *snapshot = worker_ ? worker_->read_state_non_rt() : nullptr;
+    const bool is_running = worker_ ? worker_->is_running() : false;
 
-    {
-      std::lock_guard<std::mutex> lock(shared_state_.mutex);
-      telem_list = shared_state_.telemetry;
-      total_updates = shared_state_.update_count;
-      total_errors = shared_state_.read_error_count;
-      is_valid = shared_state_.valid;
-      last_read = shared_state_.last_read_time;
-    }
-
-    if (!protocol_ || !is_valid || telem_list.empty())
-    {
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "STS Serial bus offline or unconfigured");
-      stat.add("USB Port", usb_port_);
-      stat.add("Baud Rate", baud_rate_);
-      stat.add("Worker Running", io_running_ ? "True" : "False");
-      return;
-    }
-
-    // Check freshness of last read
-    const auto now = std::chrono::steady_clock::now();
-    const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_read).count();
-    const bool is_stale = (age_ms > sts::default_config::kTelemetryStaleTimeoutMs);
-
-    // Telemetry aggregations
-    double min_v = 999.0;
-    double max_v = 0.0;
-    double max_temp = 0.0;
-    std::string hottest_joint;
-    double max_curr = 0.0;
-    std::string high_curr_joint;
-    std::vector<std::string> error_joints;
-    std::vector<std::string> warn_joints;
-
-    for (const auto &telem : telem_list)
-    {
-      if (telem.voltage_v > 0.1)
-      {
-        min_v = std::min(min_v, telem.voltage_v);
-        max_v = std::max(max_v, telem.voltage_v);
-      }
-      if (telem.temperature_c > max_temp)
-      {
-        max_temp = telem.temperature_c;
-        hottest_joint = telem.name;
-      }
-      if (telem.current_a > max_curr)
-      {
-        max_curr = telem.current_a;
-        high_curr_joint = telem.name;
-      }
-
-      // Check temperature limits
-      if (telem.temperature_c >= sts::default_config::kServoTempErrorLimitC)
-      {
-        error_joints.push_back(telem.name + " (Overheat: " + std::to_string(static_cast<int>(telem.temperature_c)) + "C)");
-      }
-      else if (telem.temperature_c >= sts::default_config::kServoTempWarnLimitC)
-      {
-        warn_joints.push_back(telem.name + " (Warm: " + std::to_string(static_cast<int>(telem.temperature_c)) + "C)");
-      }
-
-      // Check status flags (STS hardware protection flags)
-      if (telem.status_flags != 0)
-      {
-        error_joints.push_back(telem.name + " (Hardware Flag: 0x" + std::to_string(telem.status_flags) + ")");
-      }
-    }
-
-    // Check voltage safety (Nominal 11.1V - 12.6V for 3S LiPo)
-    const bool low_voltage = (min_v < sts::default_config::kBatteryLowVoltageLimitV && min_v > 1.0);
-    const bool high_voltage = (max_v > sts::default_config::kBatteryHighVoltageLimitV);
-
-    // 1. Overall Status Evaluation
-    if (is_stale)
-    {
-      stat.summaryf(
-          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
-          "STS telemetry stale (last read %ld ms ago)", age_ms);
-    }
-    else if (!error_joints.empty())
-    {
-      std::string err_str;
-      for (size_t i = 0; i < error_joints.size(); ++i)
-      {
-        err_str += (i > 0 ? ", " : "") + error_joints[i];
-      }
-      stat.summaryf(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Servo errors: %s", err_str.c_str());
-    }
-    else if (low_voltage || high_voltage || !warn_joints.empty())
-    {
-      if (low_voltage)
-      {
-        stat.summaryf(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Low battery voltage: %.1f V", min_v);
-      }
-      else if (high_voltage)
-      {
-        stat.summaryf(diagnostic_msgs::msg::DiagnosticStatus::WARN, "High voltage: %.1f V", max_v);
-      }
-      else
-      {
-        stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Servos operating at high temperature");
-      }
-    }
-    else
-    {
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "All 9 STS servos healthy");
-    }
-
-    // 2. Add Key-Value Metrics (Minimal & Non-overlapping with JointStates)
-    stat.add("Serial Port", usb_port_);
-    stat.add("Baud Rate", baud_rate_);
-    stat.add("Active Servos Count", std::to_string(telem_list.size()) + " / 9");
-    stat.add("Worker I/O Loops", total_updates);
-    stat.add("Worker Read Errors", total_errors);
-
-    if (total_updates + total_errors > 0)
-    {
-      const double err_rate = (static_cast<double>(total_errors) / (total_updates + total_errors)) * 100.0;
-      stat.addf("Serial Error Rate (%)", "%.2f", err_rate);
-    }
-
-    if (min_v < 900.0)
-    {
-      stat.addf("Bus Voltage (Min / Max)", "%.2f V / %.2f V", min_v, max_v);
-    }
-    stat.addf("Max Temperature", "%.1f C (%s)", max_temp, hottest_joint.c_str());
-    stat.addf("Max Current", "%.2f A (%s)", max_curr, high_curr_joint.c_str());
+    FeetechDiagnostics::evaluate(
+        snapshot,
+        usb_port_,
+        baud_rate_,
+        topology_.size(),
+        is_running,
+        stat);
   }
 
 } // namespace lekiwi_ftservo_hardware
