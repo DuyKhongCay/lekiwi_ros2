@@ -218,36 +218,7 @@
     <child link="baseframe"/>
     <axis xyz="0 0 0"/>
   </joint>
-  <!-- Frame stereo_left_optical (dummy link + fixed joint) -->
-  <link name="stereo_left_optical">
-    <origin xyz="0 0 0" rpy="0 -0 0"/>
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0"/>
-      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
-    </inertial>
-  </link>
-  <joint name="stereo_left_optical_frame" type="fixed">
-    <origin xyz="-0.0381026 -0.0300367 0.401858" rpy="-2.35619 0 -1.5708"/>
-    <parent link="base_footprint"/>
-    <child link="stereo_left_optical"/>
-    <axis xyz="0 0 0"/>
-  </joint>
-  <!-- Frame stereo_right_optical (dummy link + fixed joint) -->
-  <link name="stereo_right_optical">
-    <origin xyz="0 0 0" rpy="0 -0 0"/>
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0"/>
-      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
-    </inertial>
-  </link>
-  <joint name="stereo_right_optical_frame" type="fixed">
-    <origin xyz="-0.0381026 0.0300633 0.401858" rpy="-2.35619 0 -1.5708"/>
-    <parent link="base_footprint"/>
-    <child link="stereo_right_optical"/>
-    <axis xyz="0 0 0"/>
-  </joint>
+
   <!-- Frame icm20948_imu (dummy link + fixed joint) -->
   <link name="icm20948_imu">
     <origin xyz="0 0 0" rpy="0 -0 0"/>
