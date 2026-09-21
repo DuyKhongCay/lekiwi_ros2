@@ -228,3 +228,5 @@ class CalibratorVisualizer:
 
         cv2.imshow(self.window_name, canvas)
         return cv2.waitKey(1) & 0xFF
+
+    render = draw

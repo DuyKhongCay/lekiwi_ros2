@@ -23,9 +23,20 @@ def resolve_path(path_str: str) -> str:
     if path_str.startswith("package://"):
         stripped = path_str[len("package://") :]
         parts = stripped.split("/", 1)
+        pkg_name = parts[0]
+        subpath = parts[1] if len(parts) > 1 else ""
+
+        # Check source package directory in current workspace first
+        ws_pkg = os.path.join("/root/docker_ws/lekiwi_ros2", pkg_name)
+        if os.path.isdir(ws_pkg):
+            return os.path.abspath(os.path.join(ws_pkg, subpath))
+
         if get_package_share_directory is not None:
-            pkg_share = get_package_share_directory(parts[0])
-            return os.path.join(pkg_share, parts[1] if len(parts) > 1 else "")
+            try:
+                pkg_share = get_package_share_directory(pkg_name)
+                return os.path.abspath(os.path.join(pkg_share, subpath))
+            except Exception:
+                pass
     return os.path.abspath(os.path.expanduser(path_str))
 
 
@@ -355,3 +366,51 @@ class ChessboardTagCalibSolver:
             "rms_err": float(np.sqrt(np.mean(residuals**2))),
             "num_frames": len(valid_frames),
         }
+
+
+def format_calibration_report(res: Dict[str, Any], tag_ids: List[int]) -> str:
+    """Formats planar Bundle Adjustment results into a readable terminal report."""
+    lines = [
+        "\n" + "=" * 64,
+        "          CALIBRATION RESULTS REPORT (PLANAR)",
+        "=" * 64,
+        (
+            f"Frames: {res['num_frames']} | "
+            f"Mean Error: {res['mean_err']:.4f}px | "
+            f"RMS Error: {res['rms_err']:.4f}px\n"
+        ),
+        "ID | Name |    X (m)   |    Y (m)   |    Z (m)   |  Yaw (deg)",
+        "-" * 64,
+    ]
+
+    tags = res.get("tags", {})
+    for tid in tag_ids:
+        if tid in tags:
+            t = tags[tid]
+            lines.append(
+                f"{tid:2d} | {t['name']:4s} | "
+                f"{t['x']:10.4f} | {t['y']:10.4f} | {t['z']:10.4f} | "
+                f"{math.degrees(t['yaw']):9.2f}"
+            )
+
+    coords = {
+        tid: np.array([tags[tid]["x"], tags[tid]["y"], tags[tid]["z"]])
+        for tid in tag_ids
+        if tid in tags
+    }
+    if len(tag_ids) >= 4:
+        edges = [
+            ("A1->H1", tag_ids[0], tag_ids[1]),
+            ("H1->H8", tag_ids[1], tag_ids[2]),
+            ("H8->A8", tag_ids[2], tag_ids[3]),
+            ("A8->A1", tag_ids[3], tag_ids[0]),
+        ]
+        lines.append("\nCorner Distances:")
+        for label, u, v in edges:
+            if u in coords and v in coords:
+                dist = float(np.linalg.norm(coords[u] - coords[v]))
+                lines.append(f"  - {label:6s}: {dist * 1000.0:6.2f} mm ({dist:.4f} m)")
+
+    lines.append("=" * 64 + "\n")
+    return "\n".join(lines)
+

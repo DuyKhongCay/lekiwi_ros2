@@ -22,8 +22,8 @@ import tf2_ros
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 
 from lekiwi_calibration.handeye.charuco_detector import CharucoDetectorHelper
-from lekiwi_calibration.handeye.robot_controller_client import RobotArmManager
 from lekiwi_calibration.handeye.handeye_solver import HandEyeSolver
+from lekiwi_interfaces.srv import SetTorqueEnabled
 
 
 class HandEyeCalibrationNode(Node):
@@ -48,11 +48,8 @@ class HandEyeCalibrationNode(Node):
         self.declare_parameter("min_markers", 1)
         self.declare_parameter("max_reproj_px", 3.0)
 
-        # Controller / Torque management
+        # Controller / Torque management (via TorqueManagerNode)
         self.declare_parameter("auto_disable_arm_torque", True)
-        self.declare_parameter(
-            "switch_controller_service", "/controller_manager/switch_controller"
-        )
         self.declare_parameter("set_torque_service", "/set_torque_enabled")
         self.declare_parameter(
             "output_yaml_path", "~/.ros/lekiwi_handeye_calibration.yaml"
@@ -83,14 +80,17 @@ class HandEyeCalibrationNode(Node):
         self.cbg = rclpy.callback_groups.ReentrantCallbackGroup()
 
         self.solver = HandEyeSolver(is_eye_in_hand=self.is_eye_in_hand)
-        self.arm_manager = RobotArmManager(
-            self,
-            switch_controller_service=str(
-                self.get_parameter("switch_controller_service").value
-            ),
-            set_torque_service=str(self.get_parameter("set_torque_service").value),
+
+        # Direct client to TorqueManagerNode (controllers.launch.py)
+        self.set_torque_service_name = str(
+            self.get_parameter("set_torque_service").value
+        )
+        self._torque_client = self.create_client(
+            SetTorqueEnabled,
+            self.set_torque_service_name,
             callback_group=self.cbg,
         )
+        self.arm_torque_enabled = True
 
         # State variables
         self.bridge = CvBridge()
@@ -140,9 +140,49 @@ class HandEyeCalibrationNode(Node):
 
         # Auto-disable arm torque on startup if configured
         if self.get_parameter("auto_disable_arm_torque").value:
-            threading.Timer(
-                1.0, self.arm_manager.disable_arm_for_manual_leadthrough
-            ).start()
+            threading.Timer(2.5, lambda: self.set_arm_torque(False)).start()
+
+    def set_arm_torque(self, enabled: bool, timeout_sec: float = 3.0):
+        """Send torque request directly to TorqueManagerNode (controllers.launch.py)."""
+        if not self._torque_client.wait_for_service(timeout_sec=timeout_sec):
+            msg = (
+                f"Service '{self.set_torque_service_name}' not available. "
+                "Ensure controllers.launch.py / torque_manager is running."
+            )
+            self.get_logger().warn(msg)
+            self.status_msg = "⚠️ Torque service unavailable. Press [T] to retry."
+            return
+
+        req = SetTorqueEnabled.Request()
+        req.target = SetTorqueEnabled.Request.TARGET_ARM
+        req.enabled = enabled
+        req.toggle = False
+
+        self.get_logger().info(
+            f"Requesting arm torque {'ON' if enabled else 'OFF'} via TorqueManagerNode..."
+        )
+        future = self._torque_client.call_async(req)
+
+        def _on_done(f):
+            try:
+                res = f.result()
+                if res.success:
+                    self.arm_torque_enabled = enabled
+                    state_str = "ENABLED (LOCKED)" if enabled else "DISABLED (FREE)"
+                    self.status_msg = f"Arm torque {state_str}"
+                    self.get_logger().info(f"✅ TorqueManager: {res.message}")
+                else:
+                    self.status_msg = f"❌ Torque failed: {res.message}"
+                    self.get_logger().error(self.status_msg)
+            except Exception as e:
+                self.status_msg = f"❌ Torque call failed: {e}"
+                self.get_logger().error(self.status_msg)
+
+        future.add_done_callback(_on_done)
+
+    def toggle_arm_torque(self):
+        """Toggle arm torque between enabled and disabled."""
+        self.set_arm_torque(not self.arm_torque_enabled)
 
     def _on_camera_info(self, msg: CameraInfo):
         if self.K is None:
@@ -350,10 +390,8 @@ class HandEyeCalibrationNode(Node):
 
         # Header info
         samples_cnt = len(self.solver.samples)
-        torque_str = "FREE" if not self.arm_manager.torque_is_enabled else "LOCKED"
-        torque_col = (
-            (0, 255, 0) if not self.arm_manager.torque_is_enabled else (0, 0, 255)
-        )
+        torque_str = "FREE" if not self.arm_torque_enabled else "LOCKED"
+        torque_col = (0, 255, 0) if not self.arm_torque_enabled else (0, 0, 255)
 
         cv2.putText(
             banner,
@@ -422,12 +460,7 @@ class HandEyeCalibrationNode(Node):
         elif key in (ord("s"), ord("S")):
             self._save_result()
         elif key in (ord("t"), ord("T")):
-            if self.arm_manager.torque_is_enabled:
-                self.arm_manager.disable_arm_for_manual_leadthrough()
-                self.status_msg = "Arm torque disabled (lead-through ready)."
-            else:
-                self.arm_manager.enable_arm_torque()
-                self.status_msg = "Arm torque enabled."
+            self.toggle_arm_torque()
         elif key in (ord("r"), ord("R")):
             self.solver.clear_samples()
             self.last_computed_result = None

@@ -20,9 +20,8 @@
     min_markers: 4
     max_reproj_px: 3.0
 
-    # Controller and Hardware integration
+    # Controller and Hardware integration (via TorqueManagerNode)
     auto_disable_arm_torque: true
-    switch_controller_service: "/controller_manager/switch_controller"
-    set_torque_service: "/lekiwisystem/set_torque_enabled"
-    output_yaml_path: "/root/docker_ws/lekiwi_ros2/lekiwi_bringup/config/calibration/handeye_stereo_left.yaml"
+    set_torque_service: "/set_torque_enabled"
+    output_yaml_path: "/root/docker_ws/lekiwi_ros2/lekiwi_description/config/calibration/handeye_calib_stereo_left.yaml"
 

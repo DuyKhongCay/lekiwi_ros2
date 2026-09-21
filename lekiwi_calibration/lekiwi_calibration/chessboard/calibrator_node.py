@@ -1,5 +1,4 @@
-"""Chessboard AprilTag Calibrator Node for LeKiwi."""
-
+import json
 import math
 import os
 import threading
@@ -17,7 +16,9 @@ from sensor_msgs.msg import CameraInfo, Image
 
 from lekiwi_calibration.chessboard.solver import (
     ChessboardTagCalibSolver,
+    format_calibration_report,
     parse_camera_info,
+    resolve_path,
     save_to_chessboard_yaml,
 )
 from lekiwi_calibration.chessboard.visualizer import (
@@ -25,53 +26,6 @@ from lekiwi_calibration.chessboard.visualizer import (
     CalibState,
     Notification,
 )
-
-
-def format_calibration_report(res: Dict[str, Any], tag_ids: List[int]) -> str:
-    """Formats planar Bundle Adjustment results into a readable terminal report."""
-    lines = [
-        "\n" + "=" * 64,
-        "          CALIBRATION RESULTS REPORT (PLANAR)",
-        "=" * 64,
-        (
-            f"Frames: {res['num_frames']} | "
-            f"Mean Error: {res['mean_err']:.4f}px | "
-            f"RMS Error: {res['rms_err']:.4f}px\n"
-        ),
-        "ID | Name |    X (m)   |    Y (m)   |    Z (m)   |  Yaw (deg)",
-        "-" * 64,
-    ]
-
-    tags = res.get("tags", {})
-    for tid in tag_ids:
-        if tid in tags:
-            t = tags[tid]
-            lines.append(
-                f"{tid:2d} | {t['name']:4s} | "
-                f"{t['x']:10.4f} | {t['y']:10.4f} | {t['z']:10.4f} | "
-                f"{math.degrees(t['yaw']):9.2f}"
-            )
-
-    coords = {
-        tid: np.array([tags[tid]["x"], tags[tid]["y"], tags[tid]["z"]])
-        for tid in tag_ids
-        if tid in tags
-    }
-    if len(tag_ids) >= 4:
-        edges = [
-            ("A1->H1", tag_ids[0], tag_ids[1]),
-            ("H1->H8", tag_ids[1], tag_ids[2]),
-            ("H8->A8", tag_ids[2], tag_ids[3]),
-            ("A8->A1", tag_ids[3], tag_ids[0]),
-        ]
-        lines.append("\nCorner Distances:")
-        for label, u, v in edges:
-            if u in coords and v in coords:
-                dist = float(np.linalg.norm(coords[u] - coords[v]))
-                lines.append(f"  - {label:6s}: {dist * 1000.0:6.2f} mm ({dist:.4f} m)")
-
-    lines.append("=" * 64 + "\n")
-    return "\n".join(lines)
 
 
 class ChessboardTagCalibratorNode(Node):
@@ -98,12 +52,37 @@ class ChessboardTagCalibratorNode(Node):
             "auto_cap_interval_sec": 1.0,
             "window_name": "LeKiwi Chessboard Tag Calibrator",
             "disp_scale": 1.0,
+            "enable_dataset_dump": True,
+            "dataset_dump_dir": "package://lekiwi_calibration/data/chessboard_dataset",
+            "save_overlay_image": True,
         }
         for name, val in defaults.items():
             self.declare_parameter(name, val)
             setattr(self, name, self.get_parameter(name).value)
 
-        # 2. Camera matrix fallback from file
+        # 2. Concurrency Lock & Shared State
+        self._data_lock = threading.RLock()
+        self._solve_epoch: int = 0
+        self.latest_img: Optional[np.ndarray] = None
+        self.latest_dets: Dict[int, np.ndarray] = {}
+        self.captured_frames: List[Dict[int, np.ndarray]] = []
+        self.auto_cap_enabled: bool = False
+        self.last_auto_cap_time: float = 0.0
+        self.calib_res: Optional[Dict[str, Any]] = None
+        self.calib_state: CalibState = CalibState.IDLE
+        self.notification: Notification = Notification()
+        self.cam_info_received: bool = False
+        self.bridge: Optional[CvBridge] = CvBridge()
+
+        # 3. Dataset dump directory setup
+        if self.enable_dataset_dump:
+            self.resolved_dataset_dir = resolve_path(self.dataset_dump_dir)
+            os.makedirs(self.resolved_dataset_dir, exist_ok=True)
+            self.get_logger().info(
+                f"Dataset auto-dump enabled -> {self.resolved_dataset_dir}"
+            )
+
+        # 4. Camera matrix fallback from file
         try:
             self.cam_mat, self.dist_coeffs = parse_camera_info(self.cam_info_path)
             self.get_logger().info(
@@ -115,20 +94,8 @@ class ChessboardTagCalibratorNode(Node):
             )
             self.cam_mat, self.dist_coeffs = None, None
 
-        self.cam_info_received: bool = False
-        self.bridge: Optional[CvBridge] = CvBridge()
-
-        # 3. Concurrency Lock & Shared State
-        self._data_lock = threading.RLock()
-        self._solve_epoch: int = 0
-        self.latest_img: Optional[np.ndarray] = None
-        self.latest_dets: Dict[int, np.ndarray] = {}
-        self.captured_frames: List[Dict[int, np.ndarray]] = []
-        self.auto_cap_enabled: bool = False
-        self.last_auto_cap_time: float = 0.0
-        self.calib_res: Optional[Dict[str, Any]] = None
-        self.calib_state: CalibState = CalibState.IDLE
-        self.notification: Notification = Notification()
+        if self.enable_dataset_dump and self.cam_mat is not None:
+            self._save_dataset_metadata()
 
         # 4. Pure Modules
         self.solver = ChessboardTagCalibSolver(
@@ -143,38 +110,69 @@ class ChessboardTagCalibratorNode(Node):
             tag_ids=self.tag_ids,
             tag_names=self.tag_names,
             target_caps_cnt=self.target_caps_cnt,
-            min_tags_cnt=self.min_tags_cnt,
         )
 
-        # 5. ROS 2 Subscriptions
-        qos = QoSProfile(
+        # 5. Subscribers and Timers
+        qos_cam = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=5,
-        )
-        self.img_sub = self.create_subscription(
-            Image, self.img_topic, self._img_cb, qos
+            depth=1,
         )
         self.cam_info_sub = self.create_subscription(
-            CameraInfo, self.cam_info_topic, self._cam_info_cb, qos
+            CameraInfo, self.cam_info_topic, self._cam_info_cb, qos_cam
         )
-        self.tag_dets_sub = self.create_subscription(
-            AprilTagDetectionArray, self.tag_dets_topic, self._tag_dets_cb, qos
+        self.img_sub = self.create_subscription(
+            Image, self.img_topic, self._img_cb, qos_cam
+        )
+        self.tag_sub = self.create_subscription(
+            AprilTagDetectionArray, self.tag_dets_topic, self._tag_dets_cb, qos_cam
         )
 
-        # 6. Main Loop Timer (~30 Hz)
         self.gui_timer = self.create_timer(0.033, self._gui_timer_cb)
+
         self.get_logger().info(
-            f"Calibrator initialized. Topics: {self.img_topic}, {self.tag_dets_topic}"
+            f"ChessboardTagCalibrator initialized:\n"
+            f"  Image topic:    {self.img_topic}\n"
+            f"  Camera Info:    {self.cam_info_topic}\n"
+            f"  Tags topic:     {self.tag_dets_topic}\n"
+            f"  Target Tags:    {self.tag_ids} ({self.tag_names})\n"
+            f"  Min tags/frame: {self.min_tags_cnt}\n"
+            f"  Target frames:  {self.target_caps_cnt}"
         )
+
+    def _save_dataset_metadata(self) -> None:
+        """Saves or updates dataset metadata file with camera & chessboard specifications."""
+        if not getattr(self, "enable_dataset_dump", False) or not hasattr(
+            self, "resolved_dataset_dir"
+        ):
+            return
+        with self._data_lock:
+            k_list = self.cam_mat.tolist() if self.cam_mat is not None else None
+            d_list = self.dist_coeffs.tolist() if self.dist_coeffs is not None else None
+            cnt = len(self.captured_frames)
+
+        meta = {
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "tag_ids": list(self.tag_ids),
+            "tag_names": list(self.tag_names),
+            "tag_sz": float(self.tag_sz),
+            "nominal_dist": float(self.nominal_dist),
+            "z_height": float(self.z_height),
+            "camera_matrix": k_list,
+            "distortion_coefficients": d_list,
+            "total_captured_frames": cnt,
+        }
+        meta_path = os.path.join(self.resolved_dataset_dir, "dataset_meta.json")
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+        except Exception as e:
+            self.get_logger().error(f"Failed to write dataset_meta.json: {e}")
 
     def _set_notification(
-        self,
-        msg: str,
-        color: Tuple[int, int, int] = (0, 255, 0),
-        duration_sec: float = 1.0,
+        self, msg: str, color: Tuple[int, int, int], duration_sec: float = 3.0
     ) -> None:
-        """Helper to post thread-safe temporary notification messages."""
+        """Helper to post a non-blocking temporary visual banner."""
         with self._data_lock:
             self.notification = Notification(
                 message=msg,
@@ -201,6 +199,7 @@ class ChessboardTagCalibratorNode(Node):
                 f"fx={cam_mat[0, 0]:.1f}, fy={cam_mat[1, 1]:.1f} "
                 f"({msg.width}x{msg.height})"
             )
+            self._save_dataset_metadata()
 
     def _img_cb(self, msg: Image) -> None:
         """Callback to convert and update latest camera frame."""
@@ -261,6 +260,7 @@ class ChessboardTagCalibratorNode(Node):
 
     def capture_current_frame(self) -> bool:
         """Captures valid chessboard tag detections from the current frame."""
+        curr_raw = None
         with self._data_lock:
             valid = {
                 tid: pts.copy()
@@ -272,6 +272,8 @@ class ChessboardTagCalibratorNode(Node):
             if success:
                 self.captured_frames.append(valid)
                 captured_cnt = len(self.captured_frames)
+                if self.latest_img is not None:
+                    curr_raw = self.latest_img.copy()
 
         if success:
             self.get_logger().info(
@@ -280,6 +282,8 @@ class ChessboardTagCalibratorNode(Node):
             self._set_notification(
                 f"Captured #{captured_cnt} ({valid_cnt} tags)", (0, 255, 0)
             )
+            if self.enable_dataset_dump:
+                self._dump_frame_to_dataset(captured_cnt, valid, curr_raw)
             return True
 
         self._set_notification(
@@ -287,6 +291,91 @@ class ChessboardTagCalibratorNode(Node):
             (0, 100, 255),
         )
         return False
+
+    def _dump_frame_to_dataset(
+        self,
+        frame_idx: int,
+        detections: Dict[int, np.ndarray],
+        raw_bgr: Optional[np.ndarray],
+    ) -> None:
+        """Saves raw image, rendered overlay image, and tag detections JSON."""
+        prefix = f"frame_{frame_idx:03d}"
+
+        # 1. Save detections JSON
+        try:
+            tag_dict = {}
+            for tid, pts in detections.items():
+                name = (
+                    self.tag_names[self.tag_ids.index(tid)]
+                    if tid in self.tag_ids
+                    and self.tag_ids.index(tid) < len(self.tag_names)
+                    else str(tid)
+                )
+                pts_list = pts.tolist() if isinstance(pts, np.ndarray) else list(pts)
+                cx = (
+                    float(np.mean(pts[:, 0]))
+                    if isinstance(pts, np.ndarray) and len(pts) > 0
+                    else 0.0
+                )
+                cy = (
+                    float(np.mean(pts[:, 1]))
+                    if isinstance(pts, np.ndarray) and len(pts) > 0
+                    else 0.0
+                )
+                tag_dict[str(tid)] = {
+                    "id": int(tid),
+                    "name": name,
+                    "corners_2d": pts_list,
+                    "center_2d": [cx, cy],
+                }
+
+            dets_data = {
+                "frame_idx": frame_idx,
+                "timestamp": time.time(),
+                "valid_tags_count": len(detections),
+                "tags": tag_dict,
+            }
+            dets_path = os.path.join(self.resolved_dataset_dir, f"{prefix}_dets.json")
+            with open(dets_path, "w", encoding="utf-8") as f:
+                json.dump(dets_data, f, indent=2)
+        except Exception as e:
+            self.get_logger().error(f"Failed to dump detections JSON #{frame_idx}: {e}")
+
+        # 2. Save raw image
+        try:
+            if raw_bgr is not None:
+                raw_path = os.path.join(self.resolved_dataset_dir, f"{prefix}_raw.png")
+                cv2.imwrite(raw_path, raw_bgr)
+        except Exception as e:
+            self.get_logger().error(f"Failed to dump raw image #{frame_idx}: {e}")
+
+        # 3. Save overlay image
+        try:
+            if self.save_overlay_image and raw_bgr is not None:
+                rms = self.calib_res["rms_err"] if self.calib_res is not None else None
+                overlay_bgr = self.visualizer.draw(
+                    base_img=raw_bgr,
+                    detections=detections,
+                    captured_cnt=frame_idx,
+                    is_auto=self.auto_cap_enabled,
+                    calib_state=self.calib_state,
+                    rms_err=rms,
+                    notification=self.notification,
+                )
+                overlay_path = os.path.join(
+                    self.resolved_dataset_dir, f"{prefix}_overlay.png"
+                )
+                cv2.imwrite(overlay_path, overlay_bgr)
+        except Exception as e:
+            self.get_logger().error(f"Failed to dump overlay image #{frame_idx}: {e}")
+
+        # 4. Update dataset metadata
+        try:
+            self._save_dataset_metadata()
+        except Exception as e:
+            self.get_logger().error(f"Failed to update dataset metadata: {e}")
+
+        self.get_logger().info(f"[DUMP] Saved {prefix} to {self.resolved_dataset_dir}")
 
     def _check_prerequisites(self) -> Optional[Tuple[str, bool]]:
         """Validates prerequisites under lock. Returns (message, is_warning) or None."""
@@ -439,6 +528,7 @@ class ChessboardTagCalibratorNode(Node):
             self.calib_res = None
             self.calib_state = CalibState.IDLE
             self._solve_epoch += 1
+        self._save_dataset_metadata()
         self._set_notification("Samples reset", (0, 200, 255))
         self.get_logger().info("Reset all captured frames.")
 

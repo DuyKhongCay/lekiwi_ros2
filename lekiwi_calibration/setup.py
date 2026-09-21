@@ -27,6 +27,7 @@ setup(
             "calibrate_omni_base = lekiwi_calibration.omni.omni_base_calibrator_node:main",
             "calibrate_handeye = lekiwi_calibration.handeye.handeye_calibration_node:main",
             "generate_charuco = lekiwi_calibration.handeye.generate_charuco:main",
+            "calibrate_standoff = lekiwi_calibration.standoff.standoff_calibrator_node:main",
         ],
     },
 )

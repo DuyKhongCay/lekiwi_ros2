@@ -109,8 +109,7 @@ lekiwi_calibration/
 │   │   ├── charuco_detector.py
 │   │   ├── generate_charuco.py
 │   │   ├── handeye_calibration_node.py
-│   │   ├── handeye_solver.py
-│   │   └── robot_controller_client.py
+│   │   └── handeye_solver.py
 │   └── omni/
 │       ├── kinematics_calib.py
 │       └── omni_base_calibrator_node.py
