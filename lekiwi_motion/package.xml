@@ -26,6 +26,7 @@
   <depend>tf2_geometry_msgs</depend>
   <depend>rclcpp_components</depend>
   <depend>urdf</depend>
+  <depend>eigen</depend>
   <depend>lekiwi_interfaces</depend>
   <depend>controller_manager_msgs</depend>
 
@@ -34,6 +35,18 @@
   <depend>rcl_interfaces</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>kdl_parser</test_depend>
+  <test_depend>orocos_kdl</test_depend>
+  <test_depend>lekiwi_description</test_depend>
+  <test_depend>xacro</test_depend>
+  <test_depend>yaml-cpp</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>ament_index_python</test_depend>
+  <test_depend>python3-yaml</test_depend>
+  <test_depend>tf2_msgs</test_depend>
+  <test_depend>composition_interfaces</test_depend>
+  <test_depend>rmw_fastrtps_cpp</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

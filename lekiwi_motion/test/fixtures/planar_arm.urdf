@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!-- Exact planar fixture: dimensions are test data, never a production fallback. -->
+<robot name="planar_test_arm">
+  <link name="base"/><link name="pan"/><link name="shoulder"/>
+  <link name="elbow"/><link name="wrist"/><link name="roll"/><link name="tcp"/>
+  <joint name="pan_joint" type="revolute">
+    <parent link="base"/><child link="pan"/>
+    <origin xyz="0.0461807 0.0000127994 0.1696"/>
+    <axis xyz="0 0 1"/><limit lower="-1.74919" upper="1.74147" effort="1" velocity="1"/>
+  </joint>
+  <joint name="lift_joint" type="revolute">
+    <parent link="pan"/><child link="shoulder"/><axis xyz="0 -1 0"/>
+    <limit lower="-1.74533" upper="1.74533" effort="1" velocity="1"/>
+  </joint>
+  <joint name="elbow_joint" type="revolute">
+    <parent link="shoulder"/><child link="elbow"/><origin xyz="0.115998 0 0"/>
+    <axis xyz="0 -1 0"/><limit lower="-1.65765" upper="1.57121" effort="1" velocity="1"/>
+  </joint>
+  <joint name="wrist_joint" type="revolute">
+    <parent link="elbow"/><child link="wrist"/><origin xyz="0.135 0 0"/>
+    <axis xyz="0 -1 0"/><limit lower="-1.56161" upper="1.57999" effort="1" velocity="1"/>
+  </joint>
+  <joint name="roll_joint" type="revolute">
+    <parent link="wrist"/><child link="roll"/><axis xyz="1 0 0"/>
+    <limit lower="-2.64577" upper="2.76475" effort="1" velocity="1"/>
+  </joint>
+  <joint name="tcp_fixed" type="fixed">
+    <parent link="roll"/><child link="tcp"/><origin xyz="0.105368 0 0"/>
+  </joint>
+</robot>

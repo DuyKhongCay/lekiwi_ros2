@@ -24,6 +24,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(urdf REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(lekiwi_interfaces REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 
@@ -56,6 +57,12 @@ rclcpp_components_register_node(tf_gatekeeper_component
 )
 
 # ── C++ Component & Executable: workspace_checker ─────────────────────────────
+add_library(workspace_model STATIC src/workspace_kinematics.cpp)
+set_target_properties(workspace_model PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(workspace_model PUBLIC cxx_std_17)
+target_include_directories(workspace_model PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(workspace_model PUBLIC Eigen3::Eigen urdf::urdf)
+
 add_library(workspace_checker_component SHARED
   src/workspace_checker_node.cpp
 )
@@ -65,6 +72,7 @@ target_include_directories(workspace_checker_component PUBLIC
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
 target_link_libraries(workspace_checker_component
+  workspace_model
   rclcpp::rclcpp
   rclcpp_components::component
   diagnostic_updater::diagnostic_updater
@@ -119,6 +127,22 @@ install(TARGETS
 if(BUILD_TESTING)
   # C++ pure logic unit tests (không cần ROS runtime)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(kdl_parser REQUIRED)
+  find_package(orocos_kdl REQUIRED)
+  find_package(lekiwi_description REQUIRED)
+  find_package(yaml-cpp REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+  find_program(XACRO_EXECUTABLE xacro REQUIRED)
+  get_filename_component(DESCRIPTION_SHARE "${lekiwi_description_DIR}/.." ABSOLUTE)
+  file(GLOB DESCRIPTION_INPUTS CONFIGURE_DEPENDS
+    "${DESCRIPTION_SHARE}/urdf/*" "${DESCRIPTION_SHARE}/config/calibration/*.yaml")
+  set(WORKSPACE_URDF "${CMAKE_CURRENT_BINARY_DIR}/lekiwi_test.urdf")
+  add_custom_command(OUTPUT "${WORKSPACE_URDF}"
+    COMMAND "${XACRO_EXECUTABLE}" "${DESCRIPTION_SHARE}/urdf/lekiwi_robot.urdf.xacro"
+      hardware_type:=mock -o "${WORKSPACE_URDF}"
+    DEPENDS ${DESCRIPTION_INPUTS}
+    VERBATIM)
+  add_custom_target(workspace_urdf_fixture DEPENDS "${WORKSPACE_URDF}")
   ament_add_gtest(test_torque_command_state test/test_torque_command_state.cpp)
   target_compile_features(test_torque_command_state PUBLIC cxx_std_17)
   target_include_directories(test_torque_command_state PUBLIC
@@ -134,17 +158,24 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
-  ament_add_gtest(test_workspace_planner_pure
-    test/test_workspace_planner_pure.cpp
+  ament_add_gtest(test_workspace_kinematics
+    test/test_workspace_kinematics.cpp
   )
-  target_compile_features(test_workspace_planner_pure PUBLIC cxx_std_17)
-  target_include_directories(test_workspace_planner_pure PUBLIC
+  target_compile_features(test_workspace_kinematics PUBLIC cxx_std_17)
+  target_include_directories(test_workspace_kinematics PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
-  target_link_libraries(test_workspace_planner_pure
-    urdf::urdf
-    ${lekiwi_interfaces_TARGETS}
+  target_link_libraries(test_workspace_kinematics
+    workspace_model
   )
+  add_dependencies(test_workspace_kinematics workspace_urdf_fixture)
+  target_compile_definitions(test_workspace_kinematics PRIVATE
+    WORKSPACE_URDF_PATH="${WORKSPACE_URDF}")
+
+  ament_add_pytest_test(test_workspace_node_contract test/test_workspace_node_contract.py
+    TIMEOUT 60)
+  set_tests_properties(test_workspace_node_contract PROPERTIES
+    ENVIRONMENT "RMW_IMPLEMENTATION=rmw_fastrtps_cpp;ROS_DOMAIN_ID=188;ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST;WORKSPACE_URDF_PATH=${WORKSPACE_URDF};CONTROL_CONFIG_PATH=${CMAKE_CURRENT_SOURCE_DIR}/../lekiwi_bringup/config/control/control.yaml")
 endif()
 
 ament_package()
