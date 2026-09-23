@@ -14,6 +14,7 @@ def generate_launch_description():
     """Top-level Bringup: Compose LeKiwi robot subsystems with streamlined configuration."""
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")
+    orchestrator_share = FindPackageShare("lekiwi_orchestrator")
 
     # Global and Subsystem Arguments
     declared_arguments = [
@@ -117,31 +118,19 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("cameras")),
     )
 
-    control = IncludeLaunchDescription(
+    orchestrator = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution([bringup_share, "launch", "control.launch.py"])
+            PathJoinSubstitution(
+                [orchestrator_share, "launch", "orchestrator.launch.py"]
+            )
         ),
         launch_arguments={
-            "enable_readiness_checks": LaunchConfiguration("enable_readiness_checks"),
-            "use_sim_time": LaunchConfiguration("use_sim_time"),
-        }.items(),
-    )
-
-    # Preserve camera orchestration outside the control-only subsystem launch.
-    task_orchestrator = Node(
-        package="lekiwi_orchestrator",
-        executable="task_orchestrator",
-        name="task_orchestrator",
-        output="screen",
-        parameters=[
-            PathJoinSubstitution(
+            "params_file": PathJoinSubstitution(
                 [bringup_share, "config", "control", "orchestrator.yaml"]
             ),
-            {
-                "use_sim_time": LaunchConfiguration("use_sim_time"),
-                "start_navigation": LaunchConfiguration("navigation"),
-            },
-        ],
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "start_mission": "false",
+        }.items(),
     )
 
     diagnostics = IncludeLaunchDescription(
@@ -203,8 +192,7 @@ def generate_launch_description():
             localization,
             cameras,
             diagnostics,
-            control,
-            task_orchestrator,
+            orchestrator,
             teleop_gamepad,
             teleop_uarm,
             navigation,

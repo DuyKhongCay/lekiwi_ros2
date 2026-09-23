@@ -24,7 +24,7 @@ def generate_launch_description():
         [description_share, "urdf", "lekiwi_robot.urdf.xacro"]
     )
     controller_config = PathJoinSubstitution(
-        [bringup_share, "config", "control", "lekiwi_controllers.yaml"]
+        [bringup_share, "config", "control", "controllers.yaml"]
     )
     twist_mux_config = PathJoinSubstitution(
         [bringup_share, "config", "control", "twist_mux.yaml"]
@@ -177,18 +177,13 @@ def generate_launch_description():
         ],
         output="screen",
     )
-
-    control_config = PathJoinSubstitution(
-        [bringup_share, "config", "control", "control.yaml"]
-    )
-
     torque_manager_node = Node(
-        package="lekiwi_control",
+        package="lekiwi_motion",
         executable="torque_manager_node",
         name="torque_manager",
         output="screen",
         parameters=[
-            control_config,
+            controller_config,
             {"use_sim_time": use_sim_time},
         ],
     )

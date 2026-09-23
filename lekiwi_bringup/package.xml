@@ -28,7 +28,7 @@
   <test_depend>tf2_ros</test_depend>
   <test_depend>lekiwi_interfaces</test_depend>
   <test_depend>composition_interfaces</test_depend>
-  <exec_depend>lekiwi_control</exec_depend>
+  <exec_depend>lekiwi_motion</exec_depend>
   <exec_depend>lekiwi_manipulation</exec_depend>
   <exec_depend>lekiwi_orchestrator</exec_depend>
   <exec_depend>lekiwi_description</exec_depend>

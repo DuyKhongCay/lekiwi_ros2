@@ -2,18 +2,16 @@
 
 Robot launch files and deployment configuration for LeKiwi.
 
-## Control migration
+## Orchestration & Readiness Subsystem
 
-`control.launch.py` is the single entry point for `lekiwi_control`: torque manager always runs, while `enable_readiness_checks` enables both TF gatekeeper and workspace checker. It contains no orchestrator or manipulation nodes.
+The readiness and orchestration subsystem (`tf_gatekeeper_node`, `workspace_checker`, `task_orchestrator`, and optional `chess_mission_orchestrator`) is consolidated in `lekiwi_orchestrator/launch/orchestrator.launch.py`. Parameters are configured centrally in `lekiwi_orchestrator/config/orchestrator_params.yaml`.
 
 ```bash
-ros2 launch lekiwi_bringup control.launch.py
-ros2 launch lekiwi_bringup control.launch.py enable_readiness_checks:=false use_sim_time:=true
+ros2 launch lekiwi_orchestrator orchestrator.launch.py
+ros2 launch lekiwi_orchestrator orchestrator.launch.py start_mission:=false use_sim_time:=true
 ```
 
-These commands launch the control services and monitors only; they do not start ros2_control or hardware. Replace old launches from `lekiwi_control` and separate workspace/gatekeeper switches with this entry point and combined switch.
-
-`robot.launch.py` forwards `enable_readiness_checks` and `use_sim_time`. It starts task orchestration separately. When navigation is enabled, task orchestration starts Nav2 after a fresh readiness heartbeat. Disabling readiness checks does not bypass that readiness requirement.
+`robot.launch.py` automatically includes `orchestrator.launch.py` with `start_mission:=false`, providing the full readiness gatekeeper, workspace feasibility service, and lifecycle management. Torque manager is managed via `controllers.launch.py`.
 
 Use the installed launch descriptions to inspect the complete top-level interface:
 
@@ -25,7 +23,7 @@ The top-level default hardware type is `real`; explicitly choose deployment argu
 
 ## Configuration
 
-`config/control/lekiwi_controllers.yaml` contains controller parameters and the workspace checker, torque manager, and TF gatekeeper sections. The control launch derives shared base frame, wheel-center radius, arm/base joint lists, and torque command order directly from the controller sections before starting nodes. No runtime parameter discovery is required.
+`config/control/controllers.yaml` contains ros2_control controller parameters and the torque manager configuration. `config/control/orchestrator.yaml` contains the workspace checker, TF gatekeeper, and task orchestrator sections. The bringup launch files pass these configurations directly before starting nodes. No runtime parameter discovery is required.
 
 Geometry, thresholds, timeouts, and topic configuration belong in YAML. Wheel-center radius, footprint padding, and planning clearance have distinct meanings. See [control documentation](../lekiwi_control/README.md) for model and torque startup contracts.
 

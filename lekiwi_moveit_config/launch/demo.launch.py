@@ -30,17 +30,20 @@ def generate_launch_description():
         get_package_share_directory("lekiwi_bringup"),
         "config",
         "control",
-        "lekiwi_controllers.yaml",
+        "controllers.yaml",
     )
 
     # 1. Robot description for robot_state_publisher and ros2_control
     robot_description_content = ParameterValue(
-        Command([
-            "xacro ", xacro_path,
-            " use_ros2_control:=true",
-            " hardware_type:=mock",
-            " enable_imu:=false",
-        ]),
+        Command(
+            [
+                "xacro ",
+                xacro_path,
+                " use_ros2_control:=true",
+                " hardware_type:=mock",
+                " enable_imu:=false",
+            ]
+        ),
         value_type=str,
     )
 
@@ -48,10 +51,12 @@ def generate_launch_description():
         package="robot_state_publisher",
         executable="robot_state_publisher",
         output="screen",
-        parameters=[{
-            "robot_description": robot_description_content,
-            "use_sim_time": use_sim_time,
-        }],
+        parameters=[
+            {
+                "robot_description": robot_description_content,
+                "use_sim_time": use_sim_time,
+            }
+        ],
     )
 
     # 2. ros2_control controller_manager
@@ -69,14 +74,22 @@ def generate_launch_description():
     joint_state_broadcaster_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
+        arguments=[
+            "joint_state_broadcaster",
+            "--controller-manager",
+            "/controller_manager",
+        ],
         output="screen",
     )
 
     arm_controller_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["arm_trajectory_controller", "--controller-manager", "/controller_manager"],
+        arguments=[
+            "arm_trajectory_controller",
+            "--controller-manager",
+            "/controller_manager",
+        ],
         output="screen",
     )
 
@@ -134,13 +147,15 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    return LaunchDescription([
-        DeclareLaunchArgument("use_rviz", default_value="false"),
-        DeclareLaunchArgument("use_sim_time", default_value="false"),
-        robot_state_publisher_node,
-        ros2_control_node,
-        joint_state_broadcaster_spawner,
-        arm_controller_spawner,
-        move_group_node,
-        rviz_node,
-    ])
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("use_rviz", default_value="false"),
+            DeclareLaunchArgument("use_sim_time", default_value="false"),
+            robot_state_publisher_node,
+            ros2_control_node,
+            joint_state_broadcaster_spawner,
+            arm_controller_spawner,
+            move_group_node,
+            rviz_node,
+        ]
+    )
