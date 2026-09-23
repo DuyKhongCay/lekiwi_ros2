@@ -15,6 +15,7 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>lekiwi_interfaces</exec_depend>
+  <exec_depend>lekiwi_motion</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>

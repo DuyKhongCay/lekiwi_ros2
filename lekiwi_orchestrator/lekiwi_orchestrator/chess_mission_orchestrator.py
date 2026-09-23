@@ -7,7 +7,7 @@ Central Mission Orchestrator for LeKiwi Mobile Manipulation Chess Robot.
 Acts as a Mediator and Facade coordinating:
 1. TF readiness & EKF convergence (/system/tf_ready) via TfReadinessGatekeeper
 2. Game status, FIDE legality & Stockfish best move (/chess/game_status) from lekiwi_chess_master
-3. Reachability & base standoff queries (/workspace/check_move_feasibility) from lekiwi_control
+3. Reachability & base standoff queries (/workspace/check_move_feasibility) from lekiwi_motion
 4. Navigation goals to chessboard perimeter standoff via Nav2 (NavigateToPose)
 5. Physical manipulation pick & place via /manipulation/execute_chess_move
 6. Dynamic operational camera modes (/camera_mode)
@@ -16,11 +16,12 @@ Acts as a Mediator and Facade coordinating:
 from __future__ import annotations
 
 import math
+import re
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Point, PoseStamped
 from lekiwi_interfaces.msg import CameraMode, ChessGameStatus
 from lekiwi_interfaces.srv import CheckMoveFeasibility, SetCamMode
 import rclpy
@@ -98,19 +99,19 @@ class ChessMissionOrchestrator(Node):
         self._action_timeout = float(self.get_parameter("action_timeout_sec").value)
         self._skip_nav = bool(self.get_parameter("skip_navigation").value)
 
-        # Dependency Injection for coordinate mapper
-        self._mapper = (
-            coordinate_mapper
-            if coordinate_mapper is not None
-            else ChessboardCoordinateMapper(board_width=board_w, board_height=board_h)
-        )
+        # Spatial chess square mapping is now handled centrally in lekiwi_motion
+        # (via /workspace/check_move_feasibility). coordinate_mapper is maintained
+        # for backwards compatibility.
+        self._mapper = coordinate_mapper
 
         # Internal State Machine tracking
         self._mission_state = MissionState.BOOT_INITIALIZING
         self._camera_mode = CameraMode.STANDBY
         self._tf_ready = False
         self._last_readiness_heartbeat = None
-        self._readiness_timeout = self.declare_parameter("readiness_timeout_sec", 1.0).value
+        self._readiness_timeout = self.declare_parameter(
+            "readiness_timeout_sec", 1.0
+        ).value
         if not math.isfinite(self._readiness_timeout) or self._readiness_timeout <= 0:
             raise ValueError("readiness_timeout_sec must be finite and positive")
         self._current_goal_move: Optional[str] = None
@@ -186,9 +187,11 @@ class ChessMissionOrchestrator(Node):
         # Periodic Diagnostic Timer (1 Hz)
         self._diag_timer = self.create_timer(1.0, self._publish_diagnostics)
         self._readiness_timer = self.create_timer(
-            min(0.2, self._readiness_timeout / 2), self._expire_readiness,
+            min(0.2, self._readiness_timeout / 2),
+            self._expire_readiness,
             callback_group=self._cb_group_sub,
-            clock=Clock(clock_type=ClockType.STEADY_TIME))
+            clock=Clock(clock_type=ClockType.STEADY_TIME),
+        )
 
         # Initial State transition to WAITING_FOR_TF_READY
         self.transition_to(MissionState.WAITING_FOR_TF_READY)
@@ -207,8 +210,12 @@ class ChessMissionOrchestrator(Node):
 
     @property
     def is_tf_ready(self) -> bool:
-        return (self._tf_ready and self._last_readiness_heartbeat is not None
-                and time.monotonic() - self._last_readiness_heartbeat <= self._readiness_timeout)
+        return (
+            self._tf_ready
+            and self._last_readiness_heartbeat is not None
+            and time.monotonic() - self._last_readiness_heartbeat
+            <= self._readiness_timeout
+        )
 
     # ================= State Machine Management =================
 
@@ -343,13 +350,30 @@ class ChessMissionOrchestrator(Node):
         """Begin autonomous execution of a single chess move."""
         if not self.is_tf_ready:
             return
-        try:
-            details = self._mapper.parse_uci_move(uci_move)
-            self._current_move_details = details
-        except ValueError as exc:
-            self.get_logger().error(f"Failed to parse UCI move '{uci_move}': {exc}")
+
+        cleaned_move = uci_move.strip().lower()
+        match = re.match(r"^([a-h][1-8])([a-h][1-8])([qrbn])?$", cleaned_move)
+        if not match:
+            self.get_logger().error(
+                f"Failed to parse UCI move '{uci_move}': Expected format like 'e2e4' or 'e7e8q'."
+            )
             self.transition_to(MissionState.ERROR_FALLBACK)
             return
+
+        from_square = match.group(1)
+        to_square = match.group(2)
+        promo = match.group(3)
+
+        details = UciMoveDetails(
+            uci=cleaned_move,
+            from_square=from_square,
+            to_square=to_square,
+            promotion=promo,
+            pick_point=Point(),
+            place_point=Point(),
+            is_capture=False,
+        )
+        self._current_move_details = details
 
         if not self.transition_to(MissionState.CHECKING_REACHABILITY):
             return
@@ -362,19 +386,17 @@ class ChessMissionOrchestrator(Node):
             return
 
         req = CheckMoveFeasibility.Request()
-        req.pick_point = details.pick_point
-        req.place_point = details.place_point
-        req.is_capture = details.is_capture
-        req.target_frame = self._board_frame
+        req.uci_move = cleaned_move
+        req.is_capture = False
 
         self.get_logger().info(
-            f"Querying reachability feasibility for {details.from_square} -> {details.to_square}..."
+            f"Querying reachability feasibility for {from_square} -> {to_square} ({cleaned_move})..."
         )
         future = self._feasibility_client.call_async(req)
         future.add_done_callback(lambda f: self._on_feasibility_response(f, details))
 
     def _on_feasibility_response(self, future, details: UciMoveDetails) -> None:
-        """Handle feasibility calculation result from lekiwi_control."""
+        """Handle feasibility calculation result from lekiwi_motion."""
         try:
             resp: CheckMoveFeasibility.Response = future.result()
         except Exception as exc:
@@ -487,12 +509,31 @@ class ChessMissionOrchestrator(Node):
             self._finalize_turn()
             return
 
+        # Resolve pick and place 3D coordinates (from lekiwi_motion response or details fallback)
+        has_resp_pick = hasattr(feasibility_resp, "pick_point") and (
+            feasibility_resp.pick_point.x != 0.0
+            or feasibility_resp.pick_point.y != 0.0
+            or feasibility_resp.pick_point.z != 0.0
+        )
+        pick_point = (
+            feasibility_resp.pick_point if has_resp_pick else details.pick_point
+        )
+
+        has_resp_place = hasattr(feasibility_resp, "place_point") and (
+            feasibility_resp.place_point.x != 0.0
+            or feasibility_resp.place_point.y != 0.0
+            or feasibility_resp.place_point.z != 0.0
+        )
+        place_point = (
+            feasibility_resp.place_point if has_resp_place else details.place_point
+        )
+
         goal = ExecuteChessMove.Goal()
         goal.instruction = f"Pick {details.from_square}, place {details.to_square}"
         goal.from_square = details.from_square
         goal.to_square = details.to_square
-        goal.pick_point = details.pick_point
-        goal.place_point = details.place_point
+        goal.pick_point = pick_point
+        goal.place_point = place_point
         goal.is_capture = details.is_capture
         goal.target_frame = self._board_frame
         goal.pick_ik_hint = feasibility_resp.pick_ik_solution

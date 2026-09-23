@@ -154,12 +154,53 @@ def test_workflow_dispatch_zero_nav_simulation(ros_context):
 def test_readiness_lease_expires_without_ros_time(ros_context):
     """A stopped gatekeeper cannot leave cached readiness valid indefinitely."""
     import time
+
     node = ChessMissionOrchestrator()
     try:
         node._on_tf_ready(Bool(data=True))
-        node._last_readiness_heartbeat = time.monotonic() - node._readiness_timeout - 0.1
+        node._last_readiness_heartbeat = (
+            time.monotonic() - node._readiness_timeout - 0.1
+        )
         assert not node.is_tf_ready
         node._expire_readiness()
         assert not node._tf_ready
+    finally:
+        node.destroy_node()
+
+
+def test_workflow_dispatch_uci_with_motion_response(ros_context):
+    """Test that orchestrator delegates spatial mapping to lekiwi_motion and adopts response points."""
+    node = ChessMissionOrchestrator()  # No coordinate_mapper injected
+    try:
+        node._on_tf_ready(Bool(data=True))
+        assert node.mission_state == MissionState.WAITING_FOR_PLAYER_MOVE
+
+        # Mock feasibility response from lekiwi_motion
+        resp = CheckMoveFeasibility.Response()
+        resp.feasible = True
+        resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
+        resp.message = "Feasible in lekiwi_motion"
+
+        from lekiwi_orchestrator.chessboard_coordinate_mapper import UciMoveDetails
+        from geometry_msgs.msg import Point
+
+        details = UciMoveDetails(
+            uci="e2e4",
+            from_square="e2",
+            to_square="e4",
+            promotion=None,
+            pick_point=Point(),
+            place_point=Point(),
+            is_capture=False,
+        )
+
+        class _MockFuture:
+            def result(self):
+                return resp
+
+        node.transition_to(MissionState.CHECKING_REACHABILITY)
+        node._on_feasibility_response(_MockFuture(), details)
+
+        assert node.mission_state == MissionState.WAITING_FOR_PLAYER_MOVE
     finally:
         node.destroy_node()
