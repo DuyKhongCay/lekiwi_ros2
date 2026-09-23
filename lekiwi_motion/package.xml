@@ -1,12 +1,11 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>lekiwi_control</name>
+  <name>lekiwi_motion</name>
   <version>0.2.0</version>
   <description>
-    LeKiwi Motion Arbiter and Safety Gate.
-    Provides: TF/localization readiness gating (C++ Lifecycle Node),
-    arm workspace reachability checking and motor torque management (C++ components).
+    LeKiwi Motion Subsystem: Workspace reachability planning, chess move kinematics,
+    TF readiness gatekeeper, and torque lifecycle management.
   </description>
   <maintainer email="duykhongcay@todo.todo">duykhongcay</maintainer>
   <license>Apache-2.0</license>

@@ -9,8 +9,8 @@
 //
 // Quyền kích hoạt/reset EKF toàn cục thuộc về Gamepad Teleop hoặc Orchestrator.
 
-#ifndef LEKIWI_CONTROL__TF_GATEKEEPER_NODE_HPP_
-#define LEKIWI_CONTROL__TF_GATEKEEPER_NODE_HPP_
+#ifndef LEKIWI_MOTION__TF_GATEKEEPER_NODE_HPP_
+#define LEKIWI_MOTION__TF_GATEKEEPER_NODE_HPP_
 
 #include <chrono>
 #include <cmath>
@@ -29,11 +29,35 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
-#include "lekiwi_control/readiness_policy.hpp"
-
-namespace lekiwi_control
+namespace lekiwi_motion
 {
 
+  // ================= Pure Mathematical Readiness Policies =================
+  namespace policy
+  {
+    // Reject missing, stale and future samples against the same ROS clock.
+    inline bool fresh(double now, double stamp, double max_age)
+    {
+      return std::isfinite(now) && std::isfinite(stamp) && stamp > 0.0 &&
+             now >= stamp && now - stamp <= max_age;
+    }
+
+    // Check measured planar velocities only after the caller verifies freshness.
+    inline bool stationary(double vx, double vy, double wz, double linear, double angular)
+    {
+      return std::isfinite(vx) && std::isfinite(vy) && std::isfinite(wz) &&
+             std::hypot(vx, vy) <= linear && std::abs(wz) <= angular;
+    }
+
+    // Validate each variance before summing so negative terms cannot cancel.
+    inline bool converged(double x, double y, double yaw, double max_pos, double max_yaw)
+    {
+      return std::isfinite(x) && std::isfinite(y) && std::isfinite(yaw) &&
+             x >= 0.0 && y >= 0.0 && yaw >= 0.0 && x + y <= max_pos && yaw <= max_yaw;
+    }
+  } // namespace policy
+
+  // ================= TfGatekeeperNode =================
   class TfGatekeeperNode : public rclcpp::Node
   {
   public:
@@ -50,9 +74,14 @@ namespace lekiwi_control
     void on_joint_states(sensor_msgs::msg::JointState::ConstSharedPtr msg);
 
     // Verification predicates
-    bool check_covariance_converged(double &pos_var_out, double &yaw_var_out) const;
-    bool check_robot_stationary(double &speed_out, double &ang_speed_out) const;
-    bool check_joints_complete(std::set<std::string> &missing_out) const;
+    bool check_ekf_readiness(
+        double now_sec,
+        double &pos_var_out,
+        double &yaw_var_out,
+        bool &is_fresh_out) const;
+    bool check_robot_stationary(double &speed_out) const;
+    bool check_joints_complete() const;
+    std::vector<std::string> get_missing_joints() const;
     bool check_tf_chains_fresh(double now_sec) const;
     bool is_transform_fresh(
         const std::string &target,
@@ -108,6 +137,6 @@ namespace lekiwi_control
     diagnostic_updater::Updater diagnostic_updater_;
   };
 
-} // namespace lekiwi_control
+} // namespace lekiwi_motion
 
-#endif // LEKIWI_CONTROL__TF_GATEKEEPER_NODE_HPP_
+#endif // LEKIWI_MOTION__TF_GATEKEEPER_NODE_HPP_

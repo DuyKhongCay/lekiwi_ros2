@@ -1,7 +1,7 @@
 // Copyright 2026 LeKiwi Labs
 // Licensed under the Apache License, Version 2.0.
 
-#include "lekiwi_control/workspace_checker_node.hpp"
+#include "lekiwi_motion/workspace_checker_node.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -11,7 +11,7 @@
 #include <rclcpp_components/register_node_macro.hpp>
 #include <urdf_parser/urdf_parser.h>
 
-namespace lekiwi_control
+namespace lekiwi_motion
 {
 
   namespace
@@ -142,6 +142,7 @@ namespace lekiwi_control
 
     workspace_.default_pitch = declare_number(*this, "planning.default_pitch", -M_PI_2, -M_PI, M_PI, "Approach pitch (rad)");
     workspace_.default_roll = declare_number(*this, "planning.default_roll", 0.0, -M_PI, M_PI, "Approach roll (rad)");
+    grasp_z_ = declare_number(*this, "planning.grasp_z", DEFAULT_PIECE_GRASP_Z_M, 0.001, 0.50, "Grasp z elevation above board (m)");
   }
 
   void WorkspaceCheckerNode::init_workspace_bounds()
@@ -163,8 +164,12 @@ namespace lekiwi_control
       throw std::invalid_argument("Invalid workspace configuration bounds");
     }
 
-    RCLCPP_INFO(get_logger(), "Workspace bounds: half_w=%.4f m, half_h=%.4f m (envelope: %.3f x %.3f m)",
-                workspace_.half_w, workspace_.half_h, workspace_.half_w * 2.0, workspace_.half_h * 2.0);
+    const double board_w = workspace_.half_w * 2.0;
+    const double board_h = workspace_.half_h * 2.0;
+    chessboard_mapper_.emplace(board_w, board_h, grasp_z_, true);
+
+    RCLCPP_INFO(get_logger(), "Workspace bounds: half_w=%.4f m, half_h=%.4f m (envelope: %.3f x %.3f m, grasp_z: %.4f m)",
+                workspace_.half_w, workspace_.half_h, board_w, board_h, grasp_z_);
   }
 
   void WorkspaceCheckerNode::init_kinematics()
@@ -195,9 +200,6 @@ namespace lekiwi_control
 
   void WorkspaceCheckerNode::accept_robot_description(const std::string &xml, const std::string &source)
   {
-    model_source_ = source;
-    kinematics_.reset();
-
     try
     {
       auto urdf_model = urdf::parseURDF(xml);
@@ -206,53 +208,51 @@ namespace lekiwi_control
         throw std::runtime_error("Failed to parse robot_description XML");
       }
 
-      workspace::KinematicsModel model;
+      auto new_model = std::make_shared<workspace::KinematicsModel>();
       std::string err;
       if (!workspace::extract_kinematics_from_urdf(*urdf_model, base_frame_, tip_frame_,
-                                                   arm_joint_names_, model, err, safety_margin_rad_))
+                                                   arm_joint_names_, *new_model, err, safety_margin_rad_))
       {
         throw std::runtime_error("Kinematics extraction failed: " + err);
       }
 
-      kinematics_ = model;
-      model_status_ = "URDF model ready: " + base_frame_ + " -> " + tip_frame_;
+      auto solver = std::make_shared<workspace::SO101AnalyticalSolver>(*new_model);
+      auto new_planner = std::make_shared<workspace::WorkspacePlanner>(new_model, solver, workspace_);
+
+      double reach = solver->reach_bound();
+      std::string status = "URDF model ready: " + base_frame_ + " -> " + tip_frame_;
+      {
+        std::unique_lock<std::shared_mutex> lock(kinematics_mutex_);
+        kinematics_model_ = new_model;
+        workspace_planner_ = std::move(new_planner);
+        model_source_ = source;
+        model_status_ = status;
+        last_feasible_ = true;
+        last_status_ = status;
+      }
       RCLCPP_INFO(get_logger(), "%s (source: %s, reach: %.3f m)",
-                  model_status_.c_str(), source.c_str(), model.reach_bound);
+                  status.c_str(), source.c_str(), reach);
     }
     catch (const std::exception &e)
     {
-      model_status_ = e.what();
-      RCLCPP_ERROR(get_logger(), "Kinematics unavailable: %s", e.what());
+      std::string err_msg = e.what();
+      {
+        std::unique_lock<std::shared_mutex> lock(kinematics_mutex_);
+        kinematics_model_.reset();
+        workspace_planner_.reset();
+        model_source_ = source;
+        model_status_ = err_msg;
+        last_feasible_ = false;
+        last_status_ = err_msg;
+      }
+      RCLCPP_ERROR(get_logger(), "Kinematics unavailable: %s", err_msg.c_str());
     }
-    last_feasible_ = kinematics_.has_value();
-    last_status_ = model_status_;
-  }
-
-  workspace::Point3D WorkspaceCheckerNode::transform_point(
-      const geometry_msgs::msg::Point &pt,
-      const std::string &src_frame,
-      const rclcpp::Time &stamp)
-  {
-    if (src_frame == board_frame_)
-    {
-      return workspace::Point3D{pt.x, pt.y, pt.z};
-    }
-
-    geometry_msgs::msg::PointStamped in_pt;
-    in_pt.header.frame_id = src_frame;
-    in_pt.header.stamp = stamp;
-    in_pt.point = pt;
-
-    auto tf = tf_buffer_->lookupTransform(board_frame_, src_frame, stamp);
-    geometry_msgs::msg::PointStamped out_pt;
-    tf2::doTransform(in_pt, out_pt, tf);
-    return workspace::Point3D{out_pt.point.x, out_pt.point.y, out_pt.point.z};
   }
 
   geometry_msgs::msg::PoseStamped WorkspaceCheckerNode::make_pose_stamped(
       const workspace::BasePose &base,
       const geometry_msgs::msg::TransformStamped &board_to_map,
-      const rclcpp::Time &stamp)
+      const rclcpp::Time &stamp) const
   {
     geometry_msgs::msg::PoseStamped board_pose;
     board_pose.header.frame_id = board_frame_;
@@ -269,95 +269,228 @@ namespace lekiwi_control
     return map_pose;
   }
 
-  sensor_msgs::msg::JointState WorkspaceCheckerNode::make_joint_state(
-      const std::array<double, 5> &joints,
-      const rclcpp::Time &stamp)
+  std::shared_ptr<const workspace::WorkspacePlanner> WorkspaceCheckerNode::get_planner_snapshot() const
   {
-    sensor_msgs::msg::JointState msg;
-    msg.header.frame_id = base_frame_;
-    msg.header.stamp = stamp;
-    msg.name.assign(kinematics_->joint_names.begin(), kinematics_->joint_names.end());
-    msg.position.assign(joints.begin(), joints.end());
-    return msg;
+    std::shared_lock<std::shared_mutex> lock(kinematics_mutex_);
+    return workspace_planner_;
+  }
+
+  void WorkspaceCheckerNode::set_error_response(
+      lekiwi_interfaces::srv::CheckMoveFeasibility::Response &response,
+      workspace::FeasibilityStatus status,
+      const std::string &message)
+  {
+    response.feasible = false;
+    response.message = message;
+    last_feasible_ = false;
+    last_status_ = std::string(workspace::to_string(status)) + ": " + message;
+  }
+
+  std::optional<std::string> WorkspaceCheckerNode::validate_request(
+      const lekiwi_interfaces::srv::CheckMoveFeasibility::Request &request) const noexcept
+  {
+    if (request.uci_move.empty())
+    {
+      return "Malformed request: uci_move cannot be empty";
+    }
+    return std::nullopt;
+  }
+
+  std::optional<WorkspaceCheckerNode::TransformContext> WorkspaceCheckerNode::resolve_base_transforms(
+      const rclcpp::Time &now,
+      workspace::FeasibilityStatus &out_status,
+      std::string &out_error) const
+  {
+    geometry_msgs::msg::TransformStamped base_tf;
+    try
+    {
+      base_tf = tf_buffer_->lookupTransform(
+          board_frame_, base_frame_, tf2::TimePointZero, tf2::durationFromSec(0.1));
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      out_status = workspace::FeasibilityStatus::TF_STALE;
+      out_error = std::string("Base TF lookup failed: ") + ex.what();
+      return std::nullopt;
+    }
+
+    rclcpp::Time stamp = base_tf.header.stamp;
+    double age = (now - stamp).seconds();
+
+    if (stamp.nanoseconds() == 0 || age < -CLOCK_JITTER_TOLERANCE_SEC || age > max_tf_age_sec_)
+    {
+      out_status = workspace::FeasibilityStatus::TF_STALE;
+      out_error = "Base TF is stale (age: " + std::to_string(age) + "s)";
+      return std::nullopt;
+    }
+
+    geometry_msgs::msg::TransformStamped board_to_map;
+    try
+    {
+      board_to_map = tf_buffer_->lookupTransform(
+          map_frame_, board_frame_, stamp, tf2::durationFromSec(0.05));
+    }
+    catch (const tf2::TransformException &)
+    {
+      try
+      {
+        board_to_map = tf_buffer_->lookupTransform(
+            map_frame_, board_frame_, tf2::TimePointZero);
+      }
+      catch (const tf2::TransformException &ex)
+      {
+        out_status = workspace::FeasibilityStatus::TF_STALE;
+        out_error = std::string("Board-to-map TF lookup failed: ") + ex.what();
+        return std::nullopt;
+      }
+    }
+
+    double base_yaw{0.0};
+    try
+    {
+      extract_planar_yaw(board_to_map.transform.rotation, planar_tolerance_rad_);
+      base_yaw = extract_planar_yaw(base_tf.transform.rotation, planar_tolerance_rad_);
+    }
+    catch (const std::exception &ex)
+    {
+      out_status = workspace::FeasibilityStatus::MALFORMED_REQUEST;
+      out_error = ex.what();
+      return std::nullopt;
+    }
+
+    double base_z = base_tf.transform.translation.z;
+    workspace::BasePose current_base{
+        base_tf.transform.translation.x,
+        base_tf.transform.translation.y,
+        base_z,
+        base_yaw};
+
+    return TransformContext{base_tf, board_to_map, current_base, base_z, stamp};
+  }
+
+  std::optional<WorkspaceCheckerNode::TargetPoints> WorkspaceCheckerNode::resolve_target_points(
+      const lekiwi_interfaces::srv::CheckMoveFeasibility::Request &request,
+      std::string &out_error)
+  {
+    workspace::Point3D pick;
+    workspace::Point3D place;
+
+    try
+    {
+      if (!chessboard_mapper_)
+      {
+        throw std::runtime_error("Chessboard mapper not initialized");
+      }
+      auto details = chessboard_mapper_->parse_uci_move(request.uci_move, request.is_capture);
+      if (request.is_capture)
+      {
+        pick = workspace::Point3D{details.place_coord.x, details.place_coord.y, details.place_coord.z};
+        place = pick;
+      }
+      else
+      {
+        pick = workspace::Point3D{details.pick_coord.x, details.pick_coord.y, details.pick_coord.z};
+        place = workspace::Point3D{details.place_coord.x, details.place_coord.y, details.place_coord.z};
+      }
+    }
+    catch (const std::exception &ex)
+    {
+      out_error = ex.what();
+      return std::nullopt;
+    }
+
+    return TargetPoints{pick, place};
+  }
+
+  void WorkspaceCheckerNode::populate_success_response(
+      const workspace::PlanResult &plan,
+      const TransformContext &tf_ctx,
+      lekiwi_interfaces::srv::CheckMoveFeasibility::Response &response) const
+  {
+    response.feasible = true;
+    response.plan_type = plan.plan_type;
+    response.pick_base_pose = make_pose_stamped(plan.pick_base, tf_ctx.board_to_map, tf_ctx.stamp);
+    response.place_base_pose = make_pose_stamped(plan.place_base, tf_ctx.board_to_map, tf_ctx.stamp);
+    response.message = plan.message;
   }
 
   void WorkspaceCheckerNode::handle_check_move_feasibility(
       const std::shared_ptr<lekiwi_interfaces::srv::CheckMoveFeasibility::Request> request,
       std::shared_ptr<lekiwi_interfaces::srv::CheckMoveFeasibility::Response> response)
   {
-    try
+    auto planner = get_planner_snapshot();
+    if (!planner)
     {
-      if (!kinematics_)
+      std::string current_model_status;
       {
-        throw std::runtime_error(model_status_);
+        std::shared_lock<std::shared_mutex> lock(kinematics_mutex_);
+        current_model_status = model_status_;
       }
-
-      auto now = get_clock()->now();
-      auto base_tf = tf_buffer_->lookupTransform(board_frame_, base_frame_, tf2::TimePointZero);
-      rclcpp::Time stamp = base_tf.header.stamp;
-      double age = (now - stamp).seconds();
-
-      if (stamp.nanoseconds() == 0 || age < 0.0 || age > max_tf_age_sec_)
-      {
-        throw std::runtime_error("Base TF is stale (age: " + std::to_string(age) + "s)");
-      }
-
-      auto board_to_map = tf_buffer_->lookupTransform(map_frame_, board_frame_, stamp);
-      extract_planar_yaw(board_to_map.transform.rotation, planar_tolerance_rad_);
-
-      double base_yaw = extract_planar_yaw(base_tf.transform.rotation, planar_tolerance_rad_);
-      double base_z = base_tf.transform.translation.z;
-
-      workspace::BasePose current_base{
-          base_tf.transform.translation.x,
-          base_tf.transform.translation.y,
-          base_z,
-          base_yaw};
-
-      std::string src = request->target_frame.empty() ? board_frame_ : request->target_frame;
-      workspace::Point3D pick = transform_point(request->pick_point, src, stamp);
-      workspace::Point3D place = request->is_capture ? pick : transform_point(request->place_point, src, stamp);
-      double pitch = (request->required_pitch_angle != 0.0) ? request->required_pitch_angle : workspace_.default_pitch;
-
-      workspace::PlanningRequest query{pick, place, pitch, request->is_capture};
-      workspace::PlanningContext context{current_base};
-
-      workspace::PlanResult plan = workspace::plan_move(query, context, base_z, *kinematics_, workspace_);
-
-      if (!plan.feasible)
-      {
-        throw std::runtime_error(plan.message);
-      }
-
-      response->feasible = true;
-      response->plan_type = plan.plan_type;
-      response->pick_base_pose = make_pose_stamped(plan.pick_base, board_to_map, stamp);
-      response->place_base_pose = make_pose_stamped(plan.place_base, board_to_map, stamp);
-      response->pick_ik_solution = make_joint_state(plan.pick_joints, stamp);
-      if (plan.place_joints.has_value())
-      {
-        response->place_ik_solution = make_joint_state(plan.place_joints.value(), stamp);
-      }
-      response->message = plan.message;
-    }
-    catch (const std::exception &err)
-    {
-      response->feasible = false;
-      response->message = err.what();
+      set_error_response(*response, workspace::FeasibilityStatus::MODEL_NOT_READY, current_model_status);
+      return;
     }
 
-    last_feasible_ = response->feasible;
+    if (auto err = validate_request(*request); err.has_value())
+    {
+      set_error_response(*response, workspace::FeasibilityStatus::MALFORMED_REQUEST, *err);
+      return;
+    }
+
+    workspace::FeasibilityStatus tf_status{workspace::FeasibilityStatus::TF_STALE};
+    std::string tf_err;
+    auto tf_ctx = resolve_base_transforms(get_clock()->now(), tf_status, tf_err);
+    if (!tf_ctx)
+    {
+      set_error_response(*response, tf_status, tf_err);
+      return;
+    }
+
+    std::string target_err;
+    auto targets = resolve_target_points(*request, target_err);
+    if (!targets)
+    {
+      set_error_response(*response, workspace::FeasibilityStatus::MALFORMED_REQUEST, target_err);
+      return;
+    }
+
+    double pitch = workspace_.default_pitch;
+    workspace::PlanningRequest query{targets->pick, targets->place, pitch, request->is_capture};
+    workspace::PlanningContext context{tf_ctx->current_base};
+
+    workspace::PlanResult plan = planner->plan(query, context, tf_ctx->base_z);
+    if (!plan.feasible)
+    {
+      set_error_response(*response, plan.status, plan.message);
+      return;
+    }
+
+    populate_success_response(plan, *tf_ctx, *response);
+    last_feasible_ = true;
     last_status_ = response->message;
   }
 
   void WorkspaceCheckerNode::produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat)
   {
+    std::shared_ptr<const workspace::KinematicsModel> model;
+    std::string current_model_status;
+    std::string current_model_source;
+    bool is_feasible{false};
+    std::string status_msg;
+    {
+      std::shared_lock<std::shared_mutex> lock(kinematics_mutex_);
+      model = kinematics_model_;
+      current_model_status = model_status_;
+      current_model_source = model_source_;
+      is_feasible = last_feasible_;
+      status_msg = last_status_;
+    }
+
     stat.summary(
-        !kinematics_ ? diagnostic_msgs::msg::DiagnosticStatus::ERROR : (last_feasible_ ? diagnostic_msgs::msg::DiagnosticStatus::OK : diagnostic_msgs::msg::DiagnosticStatus::WARN),
-        kinematics_ ? last_status_ : model_status_);
-    stat.add("Kinematics Loaded", kinematics_ ? "true" : "false");
-    stat.add("Model Source", model_source_);
-    stat.add("Model Status", model_status_);
+        !model ? diagnostic_msgs::msg::DiagnosticStatus::ERROR : (is_feasible ? diagnostic_msgs::msg::DiagnosticStatus::OK : diagnostic_msgs::msg::DiagnosticStatus::WARN),
+        model ? status_msg : current_model_status);
+    stat.add("Kinematics Loaded", model ? "true" : "false");
+    stat.add("Model Source", current_model_source);
+    stat.add("Model Status", current_model_status);
     stat.add("Base Frame", base_frame_);
     stat.add("TCP Frame", tip_frame_);
     stat.add("Board Half Width (m)", std::to_string(workspace_.half_w));
@@ -365,6 +498,6 @@ namespace lekiwi_control
     stat.add("Edge Clearance (m)", std::to_string(workspace_.edge_clearance));
   }
 
-} // namespace lekiwi_control
+} // namespace lekiwi_motion
 
-RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_control::WorkspaceCheckerNode)
+RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_motion::WorkspaceCheckerNode)

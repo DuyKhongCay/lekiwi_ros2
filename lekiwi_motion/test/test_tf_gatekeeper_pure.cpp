@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 #include <limits>
-#include "lekiwi_control/readiness_policy.hpp"
+#include "lekiwi_motion/tf_gatekeeper_node.hpp"
 
-namespace policy = lekiwi_control::policy;
+namespace policy = lekiwi_motion::policy;
 
 TEST(ReadinessPolicy, RejectsMissingStaleAndFutureSamples)
 {

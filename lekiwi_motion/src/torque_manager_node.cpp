@@ -1,12 +1,12 @@
 // Copyright 2026 LeKiwi Labs
 // Licensed under the Apache License, Version 2.0.
-#include "lekiwi_control/torque_manager_node.hpp"
+#include "lekiwi_motion/torque_manager_node.hpp"
 
 #include <functional>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 
-namespace lekiwi_control
+namespace lekiwi_motion
 {
   TorqueManagerNode::TorqueManagerNode(const rclcpp::NodeOptions &options)
       : Node("torque_manager", options)
@@ -15,11 +15,9 @@ namespace lekiwi_control
     desc.description = "Static torque adapter configuration";
     desc.read_only = true;
 
-    const auto joints = declare_parameter<std::vector<std::string>>("joint_names", {}, desc);
     const auto arm = declare_parameter<std::vector<std::string>>("arm_joints", {}, desc);
     const auto base = declare_parameter<std::vector<std::string>>("base_joints", {}, desc);
     const auto topic = declare_parameter<std::string>("torque_controller_topic", "", desc);
-    const auto policy = declare_parameter<std::string>("startup_policy", "enabled", desc);
 
     manage_controllers_ = declare_parameter<bool>("manage_controllers", true, desc);
     const auto switch_service = declare_parameter<std::string>(
@@ -29,16 +27,12 @@ namespace lekiwi_control
     base_controllers_ = declare_parameter<std::vector<std::string>>(
         "base_controllers", {"omni_base_controller"}, desc);
 
-    if (policy != "preserve" && policy != "enabled")
-    {
-      throw std::invalid_argument("startup_policy must be 'preserve' or 'enabled'");
-    }
     if (topic.empty())
     {
       throw std::invalid_argument("Torque topic must be nonempty");
     }
 
-    state_ = std::make_unique<TorqueCommandState>(joints, arm, base);
+    state_ = TorqueCommandState(arm, base);
     cmd_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(
         topic, rclcpp::QoS(1).reliable().durability_volatile());
 
@@ -59,8 +53,8 @@ namespace lekiwi_control
 
     RCLCPP_INFO(
         get_logger(),
-        "TorqueManagerNode initialized (manage_controllers: %s, switch_service: %s)",
-        manage_controllers_ ? "true" : "false", switch_service.c_str());
+        "TorqueManagerNode initialized with %zu joints (manage_controllers: %s, switch_service: %s)",
+        state_.total_count(), manage_controllers_ ? "true" : "false", switch_service.c_str());
   }
 
   std::vector<std::string> TorqueManagerNode::get_target_controllers(uint8_t target) const
@@ -77,12 +71,81 @@ namespace lekiwi_control
     return list;
   }
 
+  void TorqueManagerNode::switch_controllers_async(
+      const std::vector<std::string> &controllers,
+      bool activate,
+      std::function<void(bool ok, const std::string &msg)> on_complete)
+  {
+    if (!manage_controllers_ || controllers.empty() ||
+        !switch_controller_client_ || !switch_controller_client_->service_is_ready())
+    {
+      const std::string reason = (!manage_controllers_) ? "disabled" : controllers.empty() ? "no target controllers"
+                                                                                           : "service unavailable";
+      on_complete(false, "Controller switch skipped (" + reason + "). ");
+      return;
+    }
+
+    switch_in_progress_.store(true, std::memory_order_release);
+    auto switch_req = std::make_shared<SwitchController::Request>();
+    if (activate)
+    {
+      switch_req->activate_controllers = controllers;
+      switch_req->activate_asap = false;
+    }
+    else
+    {
+      switch_req->deactivate_controllers = controllers;
+    }
+    switch_req->strictness = SwitchController::Request::BEST_EFFORT;
+    switch_req->timeout = rclcpp::Duration::from_seconds(2.0);
+
+    std::weak_ptr<TorqueManagerNode> weak_self =
+        std::static_pointer_cast<TorqueManagerNode>(shared_from_this());
+    switch_controller_client_->async_send_request(
+        switch_req,
+        [weak_self, activate, on_complete](rclcpp::Client<SwitchController>::SharedFuture future)
+        {
+          auto self = weak_self.lock();
+          if (!self)
+          {
+            return;
+          }
+          self->switch_in_progress_.store(false, std::memory_order_release);
+
+          try
+          {
+            auto switch_res = future.get();
+            if (switch_res && switch_res->ok)
+            {
+              on_complete(true, activate ? "Controllers activated. " : "Controllers deactivated. ");
+            }
+            else
+            {
+              const std::string err = switch_res ? switch_res->message : "null response";
+              RCLCPP_WARN(
+                  self->get_logger(), "SwitchController %s warning: %s",
+                  activate ? "activation" : "deactivation", err.c_str());
+              on_complete(
+                  false,
+                  "Controller " + std::string(activate ? "activation" : "deactivation") +
+                      " warning (" + err + "). ");
+            }
+          }
+          catch (const std::exception &err)
+          {
+            RCLCPP_ERROR(
+                self->get_logger(), "SwitchController exception: %s", err.what());
+            on_complete(false, "Controller switch exception (" + std::string(err.what()) + "). ");
+          }
+        });
+  }
+
   void TorqueManagerNode::handle_request(
       std::shared_ptr<rclcpp::Service<SetTorque>> service,
       std::shared_ptr<rmw_request_id_t> header,
       SetTorque::Request::SharedPtr req)
   {
-    if (switch_in_progress_)
+    if (switch_in_progress_.load(std::memory_order_acquire))
     {
       SetTorque::Response res;
       res.success = false;
@@ -103,7 +166,7 @@ namespace lekiwi_control
 
     if (cmd_pub_->get_subscription_count() == 0)
     {
-      state_->reset();
+      state_.reset();
       SetTorque::Response res;
       res.success = false;
       res.message = "Torque controller subscriber unavailable; command state invalidated";
@@ -113,7 +176,7 @@ namespace lekiwi_control
 
     if (req->toggle)
     {
-      req->enabled = !state_->is_group_enabled(req->target);
+      req->enabled = !state_.is_group_enabled(req->target);
     }
 
     const auto target_controllers = get_target_controllers(req->target);
@@ -122,132 +185,68 @@ namespace lekiwi_control
     // Deactivate controllers FIRST so they stop commanding setpoints, then disable motor torque.
     if (!req->enabled)
     {
-      if (manage_controllers_ && !target_controllers.empty() &&
-          switch_controller_client_ && switch_controller_client_->service_is_ready())
-      {
-        switch_in_progress_ = true;
-        auto switch_req = std::make_shared<SwitchController::Request>();
-        switch_req->deactivate_controllers = target_controllers;
-        switch_req->strictness = SwitchController::Request::BEST_EFFORT;
-        switch_req->timeout = rclcpp::Duration::from_seconds(2.0);
-
-        switch_controller_client_->async_send_request(
-            switch_req,
-            [this, service, header, req](rclcpp::Client<SwitchController>::SharedFuture future)
-            {
-              switch_in_progress_ = false;
-              auto switch_res = future.get();
-              std::string extra_msg;
-              if (switch_res && switch_res->ok)
-              {
-                extra_msg = "Controllers deactivated. ";
-              }
-              else
-              {
-                const std::string err = switch_res ? switch_res->message : "null response";
-                RCLCPP_WARN(get_logger(), "SwitchController deactivation warning: %s", err.c_str());
-                extra_msg = "Controllers deactivation warning (" + err + "). ";
-              }
-              execute_torque_publish_and_respond(service, header, req, extra_msg);
-            });
-        return;
-      }
-
-      if (manage_controllers_ && !target_controllers.empty())
-      {
-        RCLCPP_WARN(
-            get_logger(),
-            "SwitchController service unavailable; skipping controller deactivation.");
-      }
-      execute_torque_publish_and_respond(
-          service, header, req,
-          manage_controllers_ ? "Controller deactivation skipped (service unavailable). " : "");
-      return;
-    }
-
-    // Case 2: Enabling Torque (enabled == true)
-    // Enable motor torque FIRST so hardware is powered, then reactivate controllers.
-    std_msgs::msg::Float64MultiArray command;
-    try
-    {
-      command.data = state_->apply(req->target, true, true);
-      cmd_pub_->publish(command);
-    }
-    catch (const std::exception &err)
-    {
-      state_->reset();
-      SetTorque::Response res;
-      res.success = false;
-      res.message = std::string("Failed to enable torque: ") + err.what();
-      service->send_response(*header, res);
-      return;
-    }
-
-    if (manage_controllers_ && !target_controllers.empty() &&
-        switch_controller_client_ && switch_controller_client_->service_is_ready())
-    {
-      switch_in_progress_ = true;
-      auto switch_req = std::make_shared<SwitchController::Request>();
-      switch_req->activate_controllers = target_controllers;
-      switch_req->strictness = SwitchController::Request::BEST_EFFORT;
-      switch_req->activate_asap = false;
-      switch_req->timeout = rclcpp::Duration::from_seconds(2.0);
-
-      switch_controller_client_->async_send_request(
-          switch_req,
-          [this, service, header](rclcpp::Client<SwitchController>::SharedFuture future)
+      std::weak_ptr<TorqueManagerNode> weak_self =
+          std::static_pointer_cast<TorqueManagerNode>(shared_from_this());
+      switch_controllers_async(
+          target_controllers, false,
+          [weak_self, service, header, req](bool /*ok*/, const std::string &extra_msg)
           {
-            switch_in_progress_ = false;
-            auto switch_res = future.get();
-            SetTorque::Response res;
-            if (switch_res && switch_res->ok)
+            auto self = weak_self.lock();
+            if (!self)
             {
-              res.success = true;
-              res.message = "Torque enabled and controllers reactivated successfully";
+              return;
             }
-            else
+
+            SetTorque::Response res;
+            try
             {
-              const std::string err = switch_res ? switch_res->message : "null response";
-              RCLCPP_WARN(get_logger(), "SwitchController activation warning: %s", err.c_str());
+              std_msgs::msg::Float64MultiArray command;
+              command.data = self->state_.apply(req->target, false);
+              self->cmd_pub_->publish(command);
               res.success = true;
-              res.message = "Torque enabled, but controller activation warning: " + err;
+              res.message = extra_msg + "Torque disabled successfully";
+            }
+            catch (const std::exception &err)
+            {
+              self->state_.reset();
+              res.success = false;
+              res.message = extra_msg + "Failed to publish torque command: " + err.what();
+              RCLCPP_ERROR(self->get_logger(), "%s", res.message.c_str());
             }
             service->send_response(*header, res);
           });
       return;
     }
 
-    SetTorque::Response res;
-    res.success = true;
-    res.message = "Torque enabled" +
-                  std::string(manage_controllers_ ? "; controller activation skipped (service unavailable)" : "");
-    service->send_response(*header, res);
-  }
-
-  void TorqueManagerNode::execute_torque_publish_and_respond(
-      std::shared_ptr<rclcpp::Service<SetTorque>> service,
-      std::shared_ptr<rmw_request_id_t> header,
-      const SetTorque::Request::SharedPtr req,
-      const std::string &extra_message)
-  {
-    std_msgs::msg::Float64MultiArray command;
-    SetTorque::Response res;
+    // Case 2: Enabling Torque (enabled == true)
+    // Enable motor torque FIRST so hardware is powered, then reactivate controllers.
+    SetTorque::Response early_res;
     try
     {
-      command.data = state_->apply(req->target, req->enabled, cmd_pub_->get_subscription_count() > 0);
+      std_msgs::msg::Float64MultiArray command;
+      command.data = state_.apply(req->target, true);
       cmd_pub_->publish(command);
-      res.success = true;
-      res.message = extra_message + "Torque disabled successfully";
     }
     catch (const std::exception &err)
     {
-      state_->reset();
-      res.success = false;
-      res.message = extra_message + "Torque command failed: " + err.what();
-      RCLCPP_ERROR(get_logger(), "%s", res.message.c_str());
+      state_.reset();
+      early_res.success = false;
+      early_res.message = std::string("Failed to enable torque: ") + err.what();
+      service->send_response(*header, early_res);
+      return;
     }
-    service->send_response(*header, res);
-  }
-} // namespace lekiwi_control
 
-RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_control::TorqueManagerNode)
+    switch_controllers_async(
+        target_controllers, true,
+        [service, header](bool ok, const std::string &extra_msg)
+        {
+          SetTorque::Response res;
+          res.success = true;
+          res.message = ok ? "Torque enabled and controllers reactivated successfully"
+                           : "Torque enabled, but " + extra_msg;
+          service->send_response(*header, res);
+        });
+  }
+} // namespace lekiwi_motion
+
+RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_motion::TorqueManagerNode)

@@ -12,10 +12,9 @@ ros2 launch lekiwi_bringup control.launch.py enable_readiness_checks:=false
 Only `enable_readiness_checks` and `use_sim_time` are launch arguments. Torque manager always starts; the combined switch controls both workspace checker and TF gatekeeper within the multithreaded component container `lekiwi_control_container`. This launch does not start hardware, orchestration, or manipulation.
 
 | Component | Generated executable |
-|---|---|
-| `lekiwi_control::TorqueManagerNode` | `torque_manager` |
-| `lekiwi_control::WorkspaceCheckerNode` | `workspace_checker_node` |
-| `lekiwi_control::TfGatekeeperNode` | `tf_gatekeeper_node` |
+| `lekiwi_motion::TorqueManagerNode` | `torque_manager` |
+| `lekiwi_motion::WorkspaceCheckerNode` | `workspace_checker_node` |
+| `lekiwi_motion::TfGatekeeperNode` | `tf_gatekeeper_node` |
 
 `rclcpp_components_register_node` generates executable entry points using a single-threaded executor. All components can be loaded into an `rclcpp_components` container with intra-process communication.
 
@@ -23,16 +22,12 @@ For composition, load either plugin into an `rclcpp_components` container and pa
 
 ## Configuration and boundaries
 
-Edit `lekiwi_bringup/config/control/lekiwi_controllers.yaml`. The launch loader supplies wheel-center radius, base frame, and joint ordering from controller configuration to the relevant nodes. Nodes do not query controller parameters at runtime. Configuration is immutable for each node lifetime.
+Edit `lekiwi_bringup/config/control/controllers.yaml`. The launch loader supplies wheel-center radius, base frame, and joint ordering from controller configuration to the relevant nodes. Nodes do not query controller parameters at runtime. Configuration is immutable for each node lifetime.
 
-- `workspace/types.hpp`: configuration and planning values.
-- `workspace/kinematics_model.hpp` and `src/workspace/kinematics_model.cpp`: strict URDF-chain extraction, typed extraction errors, full-chain FK, and analytical-model compatibility checks.
-- `workspace/kinematics_engine.hpp`: analytical IK with both pan/elbow branches, URDF joint mapping, FK residual checks, and two-dimensional edge sampling.
-- `workspace/workspace_planner.hpp`: pure zero-navigation, single-base, dual-base, and capture decisions.
-- `workspace_checker_node.cpp`: ROS parameters, a consistent TF snapshot, service conversion, and diagnostics; installed as `workspace_checker_node` and the `lekiwi_control::WorkspaceCheckerNode` component.
-- `readiness_policy.hpp`: pure freshness, standstill, and covariance predicates used by the lifecycle node.
-- `torque_command_state.hpp`: validates joint groups and tracks complete requested command vectors.
-- `torque_manager_node.cpp`: read-only configuration, torque service and reliable, volatile depth-one command publisher.
+- `workspace_kinematics.hpp`: URDF chain model, closed-form analytical IK solver, and pure 3-tier move planner.
+- `workspace_checker_node.hpp` and `workspace_checker_node.cpp`: ROS parameters, a consistent TF snapshot, service conversion, and diagnostics; installed as `workspace_checker_node` and the `lekiwi_motion::WorkspaceCheckerNode` component.
+- `tf_gatekeeper_node.hpp`: pure freshness, standstill, and covariance predicates (`policy::fresh`, `policy::stationary`, `policy::converged`) along with the TF Gatekeeper node.
+- `torque_manager_node.hpp` & `torque_manager_node.cpp`: pure joint group tracking with precomputed indexing, read-only configuration, torque service, controller lifecycle management, and reliable command publisher.
 
 The analytical arm supports a vertical pan, three parallel horizontal pitch axes, and a wrist-roll axis aligned with the configured TCP approach axis. The extractor retains all fixed transforms, shoulder/lateral offsets, joint axes, and URDF angle conventions. Unsupported chains and invalid limits are rejected; no nominal arm model or tool length is substituted. Small CAD axis rounding is bounded by `kinematics.axis_tolerance`, and every successful IK result must pass full-chain position and orientation residual checks. This remains an endpoint feasibility checker, not a collision or trajectory checker.
 

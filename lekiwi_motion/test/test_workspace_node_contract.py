@@ -88,8 +88,8 @@ def test_workspace_node_service_contract():
 
         # 1. Load component plugin
         req = LoadNode.Request()
-        req.package_name = "lekiwi_control"
-        req.plugin_name = "lekiwi_control::WorkspaceCheckerNode"
+        req.package_name = "lekiwi_motion"
+        req.plugin_name = "lekiwi_motion::WorkspaceCheckerNode"
         req.node_name = "workspace_checker"
         req.parameters = [
             Parameter(k, value=v).to_parameter_msg() for k, v in parameters.items()
@@ -105,13 +105,7 @@ def test_workspace_node_service_contract():
         assert client.wait_for_service(timeout_sec=5.0)
 
         move_req = CheckMoveFeasibility.Request()
-        move_req.pick_point.x = 0.05
-        move_req.pick_point.y = 0.05
-        move_req.pick_point.z = 0.02
-        move_req.place_point.x = 0.05
-        move_req.place_point.y = 0.10
-        move_req.place_point.z = 0.02
-        move_req.required_pitch_angle = -math.pi / 2.0
+        move_req.uci_move = "e2e4"
 
         deadline = time.monotonic() + 8.0
         response = None
@@ -126,7 +120,33 @@ def test_workspace_node_service_contract():
         ), f"Service failed: {response.message if response else 'None'}"
         assert response.pick_base_pose.header.frame_id == "map"
         assert response.place_base_pose.header.frame_id == "map"
-        assert len(response.pick_ik_solution.position) == 5
+
+        # 4. Call CheckMoveFeasibility with another uci_move string
+        uci_req = CheckMoveFeasibility.Request()
+        uci_req.uci_move = "d2d4"
+        uci_resp = wait(client.call_async(uci_req), timeout=2.0)
+        assert uci_resp is not None, "UCI move request timed out"
+        assert uci_resp.feasible, f"UCI move d2d4 failed: {uci_resp.message}"
+        assert uci_resp.pick_base_pose.header.frame_id == "map"
+        assert uci_resp.place_base_pose.header.frame_id == "map"
+
+        # 5. Poka-yoke validation: empty uci_move must fail fast
+        bad_req = CheckMoveFeasibility.Request()
+        bad_req.uci_move = ""
+        bad_resp = wait(client.call_async(bad_req), timeout=2.0)
+        assert bad_resp is not None
+        assert not bad_resp.feasible
+        assert "Malformed request" in bad_resp.message
+
+        # 6. Capture move test: "e4d5" with is_capture=True
+        cap_req = CheckMoveFeasibility.Request()
+        cap_req.uci_move = "e4d5"
+        cap_req.is_capture = True
+        cap_resp = wait(client.call_async(cap_req), timeout=2.0)
+        assert cap_resp is not None
+        assert cap_resp.feasible
+        assert cap_resp.pick_base_pose.header.frame_id == "map"
+        assert cap_resp.place_base_pose.header.frame_id == "map"
 
     finally:
         if loaded_id is not None:

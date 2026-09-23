@@ -1,20 +1,22 @@
 // Copyright 2026 LeKiwi Labs
 // Licensed under the Apache License, Version 2.0.
 
-#include "lekiwi_control/tf_gatekeeper_node.hpp"
+#include "lekiwi_motion/tf_gatekeeper_node.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 
 using namespace std::chrono_literals;
 
-namespace lekiwi_control
+namespace lekiwi_motion
 {
 
   TfGatekeeperNode::TfGatekeeperNode(const rclcpp::NodeOptions &options)
@@ -148,13 +150,29 @@ namespace lekiwi_control
     }
   }
 
-  bool TfGatekeeperNode::check_covariance_converged(
-      double &pos_var_out, double &yaw_var_out) const
+  bool TfGatekeeperNode::check_ekf_readiness(
+      double now_sec,
+      double &pos_var_out,
+      double &yaw_var_out,
+      bool &is_fresh_out) const
   {
+    is_fresh_out = false;
+    pos_var_out = std::numeric_limits<double>::infinity();
+    yaw_var_out = std::numeric_limits<double>::infinity();
+
     if (!last_global_odom_)
     {
-      pos_var_out = std::numeric_limits<double>::infinity();
-      yaw_var_out = std::numeric_limits<double>::infinity();
+      return false;
+    }
+
+    const auto &stamp = last_global_odom_->header.stamp;
+    const double ekf_stamp_sec = stamp.sec + stamp.nanosec * 1e-9;
+    is_fresh_out = (last_global_odom_->header.frame_id == map_frame_) &&
+                   (last_global_odom_->child_frame_id == base_frame_) &&
+                   policy::fresh(now_sec, ekf_stamp_sec, max_transform_age_sec_);
+
+    if (!is_fresh_out)
+    {
       return false;
     }
 
@@ -162,19 +180,10 @@ namespace lekiwi_control
     pos_var_out = cov[0] + cov[7]; // var(x) + var(y)
     yaw_var_out = cov[35];         // var(yaw)
 
-    if (std::isnan(pos_var_out) || std::isnan(yaw_var_out) ||
-        pos_var_out < 0.0 || yaw_var_out < 0.0)
-    {
-      pos_var_out = std::numeric_limits<double>::infinity();
-      yaw_var_out = std::numeric_limits<double>::infinity();
-      return false;
-    }
-
     return policy::converged(cov[0], cov[7], cov[35], max_pos_var_, max_yaw_var_);
   }
 
-  bool TfGatekeeperNode::check_robot_stationary(
-      double &speed_out, double &ang_speed_out) const
+  bool TfGatekeeperNode::check_robot_stationary(double &speed_out) const
   {
     if (!last_local_odom_ || last_local_odom_->header.frame_id != odom_frame_ ||
         last_local_odom_->child_frame_id != base_frame_ ||
@@ -183,19 +192,16 @@ namespace lekiwi_control
                        max_transform_age_sec_))
     {
       speed_out = 0.0;
-      ang_speed_out = 0.0;
       return false;
     }
     const auto &twist = last_local_odom_->twist.twist;
     speed_out = std::hypot(twist.linear.x, twist.linear.y);
-    ang_speed_out = std::abs(twist.angular.z);
     return policy::stationary(twist.linear.x, twist.linear.y, twist.angular.z,
                               max_stop_velocity_, max_stop_angular_vel_);
   }
 
-  bool TfGatekeeperNode::check_joints_complete(std::set<std::string> &missing_out) const
+  bool TfGatekeeperNode::check_joints_complete() const
   {
-    missing_out.clear();
     if (last_joint_time_sec_ <= 0.0)
     {
       return false;
@@ -207,12 +213,25 @@ namespace lekiwi_control
     }
     for (const auto &j : required_arm_joints_)
     {
-      if (received_joints_.count(j) == 0)
+      if (received_joints_.find(j) == received_joints_.end())
       {
-        missing_out.insert(j);
+        return false;
       }
     }
-    return missing_out.empty();
+    return true;
+  }
+
+  std::vector<std::string> TfGatekeeperNode::get_missing_joints() const
+  {
+    std::vector<std::string> missing;
+    for (const auto &j : required_arm_joints_)
+    {
+      if (received_joints_.find(j) == received_joints_.end())
+      {
+        missing.push_back(j);
+      }
+    }
+    return missing;
   }
 
   bool TfGatekeeperNode::is_transform_fresh(
@@ -223,10 +242,6 @@ namespace lekiwi_control
   {
     try
     {
-      if (!tf_buffer_->canTransform(target, source, tf2::TimePointZero, tf2::durationFromSec(0.0)))
-      {
-        return false;
-      }
       auto tf = tf_buffer_->lookupTransform(target, source, tf2::TimePointZero);
       if (is_static)
       {
@@ -258,28 +273,18 @@ namespace lekiwi_control
     }
     last_eval_time_sec_ = now_sec;
 
-    // 1. Joint completeness + freshness
-    std::set<std::string> missing_joints;
-    const bool joints_ok = check_joints_complete(missing_joints);
+    // 1. Joint completeness + freshness (Zero heap-allocation on hot path)
+    const bool joints_ok = check_joints_complete();
 
     // 2. Stationary check (local odometry)
-    double speed{0.0}, ang_speed{0.0};
-    const bool is_stationary = check_robot_stationary(speed, ang_speed);
+    double speed{0.0};
+    const bool is_stationary = check_robot_stationary(speed);
 
-    // 3. EKF covariance convergence & freshness
+    // 3. EKF covariance convergence & freshness (Single-pass evaluation)
     double pos_var{std::numeric_limits<double>::infinity()};
     double yaw_var{std::numeric_limits<double>::infinity()};
-    const bool ekf_converged = check_covariance_converged(pos_var, yaw_var);
-
-    bool ekf_fresh = false;
-    if (last_global_odom_)
-    {
-      const auto &stamp = last_global_odom_->header.stamp;
-      const double ekf_stamp_sec = stamp.sec + stamp.nanosec * 1e-9;
-      ekf_fresh = last_global_odom_->header.frame_id == map_frame_ &&
-                  last_global_odom_->child_frame_id == base_frame_ &&
-                  policy::fresh(now_sec, ekf_stamp_sec, max_transform_age_sec_);
-    }
+    bool ekf_fresh{false};
+    const bool ekf_converged = check_ekf_readiness(now_sec, pos_var, yaw_var, ekf_fresh);
 
     // 4. TF chain completeness & freshness
     const bool tf_ok = check_tf_chains_fresh(now_sec);
@@ -306,8 +311,9 @@ namespace lekiwi_control
                     "[TF GATEKEEPER] SYSTEM UNREADY → "
                     "stationary=%d | ekf_conv=%d | ekf_fresh=%d | joints=%d | tf=%d",
                     is_stationary, ekf_converged, ekf_fresh, joints_ok, tf_ok);
-        if (!missing_joints.empty())
+        if (!joints_ok)
         {
+          auto missing_joints = get_missing_joints();
           std::string missing_str;
           for (const auto &j : missing_joints)
           {
@@ -348,15 +354,22 @@ namespace lekiwi_control
 
     stat.add("tf_ready", is_tf_ready_ ? "true" : "false");
 
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%.6f (limit: %.4f m^2)", diag_pos_var_, max_pos_var_);
-    stat.add("pos_variance", std::string(buf));
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(6) << diag_pos_var_ << " (limit: "
+       << std::setprecision(4) << max_pos_var_ << " m^2)";
+    stat.add("pos_variance", ss.str());
 
-    snprintf(buf, sizeof(buf), "%.6f (limit: %.4f rad^2)", diag_yaw_var_, max_yaw_var_);
-    stat.add("yaw_variance", std::string(buf));
+    ss.str("");
+    ss.clear();
+    ss << std::fixed << std::setprecision(6) << diag_yaw_var_ << " (limit: "
+       << std::setprecision(4) << max_yaw_var_ << " rad^2)";
+    stat.add("yaw_variance", ss.str());
 
-    snprintf(buf, sizeof(buf), "%.4f (limit: %.3f m/s)", diag_speed_, max_stop_velocity_);
-    stat.add("linear_speed", std::string(buf));
+    ss.str("");
+    ss.clear();
+    ss << std::fixed << std::setprecision(4) << diag_speed_ << " (limit: "
+       << std::setprecision(3) << max_stop_velocity_ << " m/s)";
+    stat.add("linear_speed", ss.str());
   }
 
   void TfGatekeeperNode::handle_readiness_query(
@@ -369,6 +382,6 @@ namespace lekiwi_control
                        : "NOT ready: check /diagnostics for details (topic /system/tf_ready)";
   }
 
-} // namespace lekiwi_control
+} // namespace lekiwi_motion
 
-RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_control::TfGatekeeperNode)
+RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_motion::TfGatekeeperNode)

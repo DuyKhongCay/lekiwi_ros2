@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(lekiwi_control)
+project(lekiwi_motion)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -52,16 +52,23 @@ target_link_libraries(tf_gatekeeper_component
   ${tf2_geometry_msgs_TARGETS}
 )
 rclcpp_components_register_node(tf_gatekeeper_component
-  PLUGIN "lekiwi_control::TfGatekeeperNode"
+  PLUGIN "lekiwi_motion::TfGatekeeperNode"
   EXECUTABLE tf_gatekeeper_node
 )
 
 # ── C++ Component & Executable: workspace_checker ─────────────────────────────
-add_library(workspace_model STATIC src/workspace_kinematics.cpp)
+add_library(workspace_model STATIC
+  src/workspace_kinematics.cpp
+  src/chessboard_mapper.cpp
+)
 set_target_properties(workspace_model PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(workspace_model PUBLIC cxx_std_17)
 target_include_directories(workspace_model PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(workspace_model PUBLIC Eigen3::Eigen urdf::urdf)
+target_link_libraries(workspace_model PUBLIC
+  Eigen3::Eigen
+  urdf::urdf
+  ${geometry_msgs_TARGETS}
+)
 
 add_library(workspace_checker_component SHARED
   src/workspace_checker_node.cpp
@@ -87,7 +94,7 @@ target_link_libraries(workspace_checker_component
   ${lekiwi_interfaces_TARGETS}
 )
 rclcpp_components_register_node(workspace_checker_component
-  PLUGIN "lekiwi_control::WorkspaceCheckerNode"
+  PLUGIN "lekiwi_motion::WorkspaceCheckerNode"
   EXECUTABLE workspace_checker_node
 )
 
@@ -107,7 +114,7 @@ target_link_libraries(torque_manager_component
   ${controller_manager_msgs_TARGETS}
 )
 rclcpp_components_register_node(torque_manager_component
-  PLUGIN "lekiwi_control::TorqueManagerNode"
+  PLUGIN "lekiwi_motion::TorqueManagerNode"
   EXECUTABLE torque_manager_node
 )
 
@@ -121,6 +128,10 @@ install(TARGETS
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY include/
+  DESTINATION include/${PROJECT_NAME}
 )
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -143,12 +154,28 @@ if(BUILD_TESTING)
     DEPENDS ${DESCRIPTION_INPUTS}
     VERBATIM)
   add_custom_target(workspace_urdf_fixture DEPENDS "${WORKSPACE_URDF}")
+
+  ament_add_gtest(test_chessboard_mapper test/test_chessboard_mapper.cpp)
+  target_compile_features(test_chessboard_mapper PUBLIC cxx_std_17)
+  target_include_directories(test_chessboard_mapper PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  target_link_libraries(test_chessboard_mapper
+    workspace_model
+    ${geometry_msgs_TARGETS}
+  )
+
   ament_add_gtest(test_torque_command_state test/test_torque_command_state.cpp)
   target_compile_features(test_torque_command_state PUBLIC cxx_std_17)
   target_include_directories(test_torque_command_state PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
-  target_link_libraries(test_torque_command_state ${lekiwi_interfaces_TARGETS})
+  target_link_libraries(test_torque_command_state
+    rclcpp::rclcpp
+    ${lekiwi_interfaces_TARGETS}
+    ${controller_manager_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+  )
 
   ament_add_gtest(test_tf_gatekeeper_pure
     test/test_tf_gatekeeper_pure.cpp
@@ -156,6 +183,9 @@ if(BUILD_TESTING)
   target_compile_features(test_tf_gatekeeper_pure PUBLIC cxx_std_17)
   target_include_directories(test_tf_gatekeeper_pure PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  target_link_libraries(test_tf_gatekeeper_pure
+    tf_gatekeeper_component
   )
 
   ament_add_gtest(test_workspace_kinematics
@@ -175,7 +205,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_workspace_node_contract test/test_workspace_node_contract.py
     TIMEOUT 60)
   set_tests_properties(test_workspace_node_contract PROPERTIES
-    ENVIRONMENT "RMW_IMPLEMENTATION=rmw_fastrtps_cpp;ROS_DOMAIN_ID=188;ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST;WORKSPACE_URDF_PATH=${WORKSPACE_URDF};CONTROL_CONFIG_PATH=${CMAKE_CURRENT_SOURCE_DIR}/../lekiwi_bringup/config/control/control.yaml")
+    ENVIRONMENT "RMW_IMPLEMENTATION=rmw_fastrtps_cpp;ROS_DOMAIN_ID=188;ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST;WORKSPACE_URDF_PATH=${WORKSPACE_URDF};CONTROL_CONFIG_PATH=${CMAKE_CURRENT_SOURCE_DIR}/../lekiwi_bringup/config/control/orchestrator.yaml")
 endif()
 
 ament_package()

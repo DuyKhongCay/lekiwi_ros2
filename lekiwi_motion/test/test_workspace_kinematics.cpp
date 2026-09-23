@@ -5,9 +5,9 @@
 #include <gtest/gtest.h>
 #include <urdf_parser/urdf_parser.h>
 
-#include "lekiwi_control/workspace_kinematics.hpp"
+#include "lekiwi_motion/workspace_kinematics.hpp"
 
-namespace ws = lekiwi_control::workspace;
+namespace ws = lekiwi_motion::workspace;
 
 class WorkspaceKinematicsTest : public ::testing::Test
 {
@@ -31,22 +31,29 @@ protected:
     workspace_.edge_clearance = 0.147;
     workspace_.sample_step = 0.025;
     workspace_.max_samples = 257;
+
+    solver_ = std::make_shared<ws::SO101AnalyticalSolver>(model_);
+    planner_ = std::make_shared<ws::WorkspacePlanner>(
+        std::make_shared<ws::KinematicsModel>(model_), solver_, workspace_);
   }
 
   urdf::ModelInterfaceSharedPtr urdf_;
   std::vector<std::string> joint_names_;
   ws::KinematicsModel model_;
   ws::WorkspaceConfig workspace_;
+  std::shared_ptr<ws::SO101AnalyticalSolver> solver_;
+  std::shared_ptr<ws::WorkspacePlanner> planner_;
 };
 
 // Contract 1: URDF extracts valid link dimensions and Analytical IK matches Forward Kinematics
 TEST_F(WorkspaceKinematicsTest, URDFExtractionAndAnalyticalIK)
 {
-  EXPECT_GT(model_.link_lengths[0], 0.08);
-  EXPECT_LT(model_.link_lengths[0], 0.20);
-  EXPECT_GT(model_.link_lengths[1], 0.08);
-  EXPECT_LT(model_.link_lengths[1], 0.20);
+  EXPECT_GT(solver_->link_lengths()[0], 0.08);
+  EXPECT_LT(solver_->link_lengths()[0], 0.20);
+  EXPECT_GT(solver_->link_lengths()[1], 0.08);
+  EXPECT_LT(solver_->link_lengths()[1], 0.20);
   EXPECT_GT(model_.reach_bound, 0.25);
+  EXPECT_GT(solver_->reach_bound(), 0.25);
 
   std::array<double, 5> test_joints{0.0, 0.3, -0.4, 0.1, 0.0};
   const Eigen::Isometry3d fk = ws::forward_kinematics(model_, test_joints);
@@ -55,7 +62,7 @@ TEST_F(WorkspaceKinematicsTest, URDFExtractionAndAnalyticalIK)
   const double ty = fk.translation().y();
   const double tz = fk.translation().z();
 
-  const ws::IkResult ik = ws::solve_analytical_ik(tx, ty, tz, model_, 0.0, 0.0);
+  const ws::IkResult ik = solver_->solve(tx, ty, tz, 0.0, 0.0);
   ASSERT_TRUE(ik.success) << "IK failed for FK reachable pose. Reason: " << ik.reason;
 
   const Eigen::Isometry3d fk_from_ik = ws::forward_kinematics(model_, ik.joints);
@@ -75,8 +82,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerTierZero_ZeroNav)
   ws::BasePose current{0.0, -workspace_.half_h - workspace_.edge_clearance, -0.004, M_PI_2};
   ws::PlanningContext ctx{current};
 
-  const ws::PlanResult plan = ws::plan_move(req, ctx, current.z, model_, workspace_);
+  const ws::PlanResult plan = planner_->plan(req, ctx, current.z);
   EXPECT_TRUE(plan.feasible);
+  EXPECT_EQ(plan.status, ws::FeasibilityStatus::SUCCESS);
   EXPECT_EQ(plan.plan_type, ws::PLAN_ZERO_NAV);
   EXPECT_EQ(plan.evaluated_candidates, 1);
   EXPECT_DOUBLE_EQ(plan.pick_base.x, current.x);
@@ -96,8 +104,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerTierOne_SingleBase)
   ws::PlanningContext ctx;
   const double base_z = -0.004;
 
-  const ws::PlanResult plan = ws::plan_move(req, ctx, base_z, model_, workspace_);
+  const ws::PlanResult plan = planner_->plan(req, ctx, base_z);
   EXPECT_TRUE(plan.feasible);
+  EXPECT_EQ(plan.status, ws::FeasibilityStatus::SUCCESS);
   EXPECT_EQ(plan.plan_type, ws::PLAN_SINGLE_BASE);
   EXPECT_DOUBLE_EQ(plan.pick_base.x, plan.place_base.x);
   EXPECT_DOUBLE_EQ(plan.pick_base.y, plan.place_base.y);
@@ -117,8 +126,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerTierTwo_DualBase)
   ws::PlanningContext ctx;
   const double base_z = -0.004;
 
-  const ws::PlanResult plan = ws::plan_move(req, ctx, base_z, model_, workspace_);
+  const ws::PlanResult plan = planner_->plan(req, ctx, base_z);
   EXPECT_TRUE(plan.feasible);
+  EXPECT_EQ(plan.status, ws::FeasibilityStatus::SUCCESS);
   EXPECT_EQ(plan.plan_type, ws::PLAN_DUAL_BASE);
   // Pick base and place base must be distinct standoff locations
   EXPECT_NE(plan.pick_base.x, plan.place_base.x);
@@ -136,8 +146,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerCapture_PickOnly)
   ws::PlanningContext ctx;
   const double base_z = -0.004;
 
-  const ws::PlanResult plan = ws::plan_move(req, ctx, base_z, model_, workspace_);
+  const ws::PlanResult plan = planner_->plan(req, ctx, base_z);
   EXPECT_TRUE(plan.feasible);
+  EXPECT_EQ(plan.status, ws::FeasibilityStatus::SUCCESS);
   EXPECT_EQ(plan.plan_type, ws::PLAN_SINGLE_BASE);
   EXPECT_FALSE(plan.place_joints.has_value());
   EXPECT_NE(plan.message.find("Capture"), std::string::npos);
@@ -154,7 +165,8 @@ TEST_F(WorkspaceKinematicsTest, PlannerInfeasible)
   ws::PlanningContext ctx;
   const double base_z = -0.004;
 
-  const ws::PlanResult plan = ws::plan_move(req, ctx, base_z, model_, workspace_);
+  const ws::PlanResult plan = planner_->plan(req, ctx, base_z);
   EXPECT_FALSE(plan.feasible);
+  EXPECT_EQ(plan.status, ws::FeasibilityStatus::BASE_STANDOFF_EXHAUSTED);
   EXPECT_NE(plan.message.find("No feasible"), std::string::npos);
 }

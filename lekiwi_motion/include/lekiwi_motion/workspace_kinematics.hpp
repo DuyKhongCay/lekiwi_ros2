@@ -1,20 +1,22 @@
 // Copyright 2026 LeKiwi Labs
 // Licensed under the Apache License, Version 2.0.
 
-#ifndef LEKIWI_CONTROL__WORKSPACE_KINEMATICS_HPP_
-#define LEKIWI_CONTROL__WORKSPACE_KINEMATICS_HPP_
+#ifndef LEKIWI_MOTION__WORKSPACE_KINEMATICS_HPP_
+#define LEKIWI_MOTION__WORKSPACE_KINEMATICS_HPP_
 
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <Eigen/Geometry>
 #include <urdf_model/model.h>
 
-namespace lekiwi_control::workspace
+namespace lekiwi_motion::workspace
 {
 
   // Plan types matching service contract
@@ -93,11 +95,43 @@ namespace lekiwi_control::workspace
     std::string reason;
   };
 
+  // Strongly-typed feasibility status replacing stringly-typed messages
+  enum class FeasibilityStatus : uint8_t
+  {
+    SUCCESS = 0,
+    UNREACHABLE_KINEMATICS,
+    BASE_STANDOFF_EXHAUSTED,
+    TF_STALE,
+    MODEL_NOT_READY,
+    MALFORMED_REQUEST
+  };
+
+  constexpr std::string_view to_string(FeasibilityStatus status) noexcept
+  {
+    switch (status)
+    {
+    case FeasibilityStatus::SUCCESS:
+      return "SUCCESS";
+    case FeasibilityStatus::UNREACHABLE_KINEMATICS:
+      return "UNREACHABLE_KINEMATICS";
+    case FeasibilityStatus::BASE_STANDOFF_EXHAUSTED:
+      return "BASE_STANDOFF_EXHAUSTED";
+    case FeasibilityStatus::TF_STALE:
+      return "TF_STALE";
+    case FeasibilityStatus::MODEL_NOT_READY:
+      return "MODEL_NOT_READY";
+    case FeasibilityStatus::MALFORMED_REQUEST:
+      return "MALFORMED_REQUEST";
+    }
+    return "UNKNOWN";
+  }
+
   // Complete move plan result
   struct PlanResult
   {
     bool feasible{false};
     uint8_t plan_type{0};
+    FeasibilityStatus status{FeasibilityStatus::MODEL_NOT_READY};
     BasePose pick_base;
     BasePose place_base;
     std::array<double, 5> pick_joints{};
@@ -115,34 +149,117 @@ namespace lekiwi_control::workspace
     int joint_index{-1};
   };
 
-  // Extracted SO-101 analytical kinematics representation
+  // Pure URDF kinematic representation (links, joints, limits, frames)
   struct KinematicsModel
   {
     std::string base_frame;
     std::string tip_frame;
     std::vector<ChainSegment> chain;
-    std::array<std::string, 5> joint_names;
+    std::array<std::string, 5> joint_names{};
     std::array<double, 5> lower_limits{};
     std::array<double, 5> upper_limits{};
-    std::array<double, 5> signs{};
-    Eigen::Vector3d pan_origin{Eigen::Vector3d::Zero()};
-    Eigen::Matrix3d plane_basis{Eigen::Matrix3d::Identity()};
-    Eigen::Matrix3d tool_basis{Eigen::Matrix3d::Identity()};
-    Eigen::Vector3d shoulder{Eigen::Vector3d::Zero()};
-    Eigen::Vector3d first_link{Eigen::Vector3d::Zero()};
-    Eigen::Vector3d second_link{Eigen::Vector3d::Zero()};
-    Eigen::Vector3d wrist_origin{Eigen::Vector3d::Zero()};
-    std::array<double, 2> link_lengths{};
-    std::array<double, 2> link_angles{};
-    double yaw_offset{0.0};
-    double tool_pitch_offset{0.0};
-    double tool_roll_offset{0.0};
     double reach_bound{0.0};
   };
 
-  // ================= Core API Declarations =================
+  // Forward kinematics evaluated directly across the URDF chain
+  Eigen::Isometry3d forward_kinematics(
+      const KinematicsModel &model,
+      const std::array<double, 5> &joints);
 
-  // Extract SO-101 5-DoF kinematic parameters directly from URDF model
+  // ================= Inverse Kinematics Solvers (Strategy Pattern) =================
+
+  // Generic IK Solver Interface (Open-Closed Principle)
+  class IIkSolver
+  {
+  public:
+    virtual ~IIkSolver() = default;
+    virtual IkResult solve(double x, double y, double z, double pitch, double roll) const = 0;
+    virtual double reach_bound() const = 0;
+  };
+
+  // SO-101 5-DoF Closed-form Analytical IK Solver
+  class SO101AnalyticalSolver : public IIkSolver
+  {
+  public:
+    explicit SO101AnalyticalSolver(const KinematicsModel &model);
+
+    IkResult solve(double x, double y, double z, double pitch, double roll) const override;
+    double reach_bound() const override { return reach_bound_; }
+
+    const std::array<double, 2> &link_lengths() const noexcept { return link_lengths_; }
+    const std::array<double, 2> &link_angles() const noexcept { return link_angles_; }
+
+  private:
+    void init_geometry(const KinematicsModel &model);
+
+    KinematicsModel model_;
+    std::array<double, 5> signs_{};
+    Eigen::Vector3d pan_origin_{Eigen::Vector3d::Zero()};
+    Eigen::Matrix3d plane_basis_{Eigen::Matrix3d::Identity()};
+    Eigen::Matrix3d tool_basis_{Eigen::Matrix3d::Identity()};
+    Eigen::Vector3d shoulder_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d first_link_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d second_link_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d wrist_origin_{Eigen::Vector3d::Zero()};
+    std::array<double, 2> link_lengths_{};
+    std::array<double, 2> link_angles_{};
+    double yaw_offset_{0.0};
+    double tool_pitch_offset_{0.0};
+    double tool_roll_offset_{0.0};
+    double reach_bound_{0.0};
+  };
+
+  // ================= Pure Domain Service =================
+
+  // Domain service for mobile standoff candidate search and 3-tier move planning
+  class WorkspacePlanner
+  {
+  public:
+    WorkspacePlanner(
+        std::shared_ptr<const KinematicsModel> model,
+        std::shared_ptr<const IIkSolver> solver,
+        WorkspaceConfig config);
+
+    PlanResult plan(
+        const PlanningRequest &req,
+        const PlanningContext &ctx,
+        double base_z) const;
+
+    std::vector<BasePose> generate_standoff_candidates(
+        const Point3D &pick,
+        const Point3D &place,
+        double base_z) const;
+
+    const WorkspaceConfig &config() const noexcept { return config_; }
+    const KinematicsModel &model() const noexcept { return *model_; }
+    const IIkSolver &solver() const noexcept { return *solver_; }
+
+  private:
+    IkResult solve_at_base(
+        const Point3D &pt,
+        const BasePose &base,
+        double pitch) const;
+
+    std::optional<PlanResult> try_single_pose(
+        const PlanningRequest &req,
+        const BasePose &base,
+        uint8_t plan_type) const;
+
+    std::optional<std::pair<BasePose, IkResult>> find_endpoint(
+        const Point3D &pt,
+        double pitch,
+        double base_z,
+        int limit,
+        int &evaluated) const;
+
+    std::shared_ptr<const KinematicsModel> model_;
+    std::shared_ptr<const IIkSolver> solver_;
+    WorkspaceConfig config_;
+  };
+
+  // ================= Core Utilities & Backward-Compatible API =================
+
+  // Extract kinematic parameters directly from URDF model into KinematicsModel
   bool extract_kinematics_from_urdf(
       const urdf::ModelInterface &urdf,
       const std::string &base_frame,
@@ -152,39 +269,11 @@ namespace lekiwi_control::workspace
       std::string &error_msg,
       double safety_margin_rad = 0.05);
 
-  // Forward kinematics evaluated directly across the URDF chain
-  Eigen::Isometry3d forward_kinematics(
-      const KinematicsModel &model,
-      const std::array<double, 5> &joints);
-
-  // Closed-form analytical inverse kinematics with FK verification
-  IkResult solve_analytical_ik(
-      double x, double y, double z,
-      const KinematicsModel &model,
-      double pitch = -M_PI_2,
-      double roll = 0.0);
-
   // Coordinate projection from board frame into planar base frame
   Point3D transform_point_to_base_frame(
       const Point3D &pt,
       const BasePose &base);
 
-  // Generate candidate base poses around board perimeter sorted by target proximity
-  std::vector<BasePose> generate_standoff_candidates(
-      const Point3D &pick,
-      const Point3D &place,
-      double base_z,
-      const KinematicsModel &model,
-      const WorkspaceConfig &config);
+} // namespace lekiwi_motion::workspace
 
-  // 3-Tier Move Planning (Zero-Nav -> Single-Base -> Dual-Base)
-  PlanResult plan_move(
-      const PlanningRequest &req,
-      const PlanningContext &ctx,
-      double base_z,
-      const KinematicsModel &model,
-      const WorkspaceConfig &workspace);
-
-} // namespace lekiwi_control::workspace
-
-#endif // LEKIWI_CONTROL__WORKSPACE_KINEMATICS_HPP_
+#endif // LEKIWI_MOTION__WORKSPACE_KINEMATICS_HPP_
