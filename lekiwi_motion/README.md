@@ -24,7 +24,8 @@ For composition, load either plugin into an `rclcpp_components` container and pa
 
 Edit `lekiwi_bringup/config/control/controllers.yaml`. The launch loader supplies wheel-center radius, base frame, and joint ordering from controller configuration to the relevant nodes. Nodes do not query controller parameters at runtime. Configuration is immutable for each node lifetime.
 
-- `workspace_kinematics.hpp`: URDF chain model, closed-form analytical IK solver, and pure 3-tier move planner.
+- `workspace_kinematics.hpp`: URDF chain model and closed-form analytical IK solver (`SO101AnalyticalSolver`).
+- `workspace_planner.hpp`: Pure domain service for mobile standoff candidate search and multi-tier move planning (`WorkspacePlanner`).
 - `workspace_checker_node.hpp` and `workspace_checker_node.cpp`: ROS parameters, a consistent TF snapshot, service conversion, and diagnostics; installed as `workspace_checker_node` and the `lekiwi_motion::WorkspaceCheckerNode` component.
 - `tf_gatekeeper_node.hpp`: pure freshness, standstill, and covariance predicates (`policy::fresh`, `policy::stationary`, `policy::converged`) along with the TF Gatekeeper node.
 - `torque_manager_node.hpp` & `torque_manager_node.cpp`: pure joint group tracking with precomputed indexing, read-only configuration, torque service, controller lifecycle management, and reliable command publisher.

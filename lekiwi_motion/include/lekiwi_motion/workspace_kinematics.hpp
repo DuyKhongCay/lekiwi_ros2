@@ -19,11 +19,6 @@
 namespace lekiwi_motion::workspace
 {
 
-  // Plan types matching service contract
-  constexpr uint8_t PLAN_ZERO_NAV = 0;
-  constexpr uint8_t PLAN_SINGLE_BASE = 1;
-  constexpr uint8_t PLAN_DUAL_BASE = 2;
-
   // 3D Cartesian point with finite coordinate checking
   struct Point3D
   {
@@ -44,48 +39,6 @@ namespace lekiwi_motion::workspace
     }
   };
 
-  // Board & search budget configuration
-  struct WorkspaceConfig
-  {
-    double half_w{0.195};
-    double half_h{0.195};
-    double edge_clearance{0.147};
-    double sample_step{0.025};
-    int max_samples{257};
-    double default_pitch{-M_PI_2};
-    double default_roll{0.0};
-
-    bool is_valid() const noexcept
-    {
-      return std::isfinite(half_w) && half_w > 0.0 &&
-             std::isfinite(half_h) && half_h > 0.0 &&
-             std::isfinite(edge_clearance) && edge_clearance > 0.0 &&
-             std::isfinite(sample_step) && sample_step > 0.0 &&
-             max_samples >= 1 && max_samples <= 1001 &&
-             std::isfinite(default_pitch) && std::isfinite(default_roll);
-    }
-  };
-
-  // Endpoint planning request
-  struct PlanningRequest
-  {
-    Point3D pick;
-    Point3D place;
-    double pitch{-M_PI_2};
-    bool is_capture{false};
-
-    bool is_valid() const noexcept
-    {
-      return pick.is_finite() && std::isfinite(pitch) && (is_capture || place.is_finite());
-    }
-  };
-
-  // Planning context (current mobile base pose if available from TF)
-  struct PlanningContext
-  {
-    std::optional<BasePose> current_base;
-  };
-
   // 5-DoF Arm IK Solution
   struct IkResult
   {
@@ -93,51 +46,6 @@ namespace lekiwi_motion::workspace
     std::array<double, 5> joints{};
     double radius{0.0};
     std::string reason;
-  };
-
-  // Strongly-typed feasibility status replacing stringly-typed messages
-  enum class FeasibilityStatus : uint8_t
-  {
-    SUCCESS = 0,
-    UNREACHABLE_KINEMATICS,
-    BASE_STANDOFF_EXHAUSTED,
-    TF_STALE,
-    MODEL_NOT_READY,
-    MALFORMED_REQUEST
-  };
-
-  constexpr std::string_view to_string(FeasibilityStatus status) noexcept
-  {
-    switch (status)
-    {
-    case FeasibilityStatus::SUCCESS:
-      return "SUCCESS";
-    case FeasibilityStatus::UNREACHABLE_KINEMATICS:
-      return "UNREACHABLE_KINEMATICS";
-    case FeasibilityStatus::BASE_STANDOFF_EXHAUSTED:
-      return "BASE_STANDOFF_EXHAUSTED";
-    case FeasibilityStatus::TF_STALE:
-      return "TF_STALE";
-    case FeasibilityStatus::MODEL_NOT_READY:
-      return "MODEL_NOT_READY";
-    case FeasibilityStatus::MALFORMED_REQUEST:
-      return "MALFORMED_REQUEST";
-    }
-    return "UNKNOWN";
-  }
-
-  // Complete move plan result
-  struct PlanResult
-  {
-    bool feasible{false};
-    uint8_t plan_type{0};
-    FeasibilityStatus status{FeasibilityStatus::MODEL_NOT_READY};
-    BasePose pick_base;
-    BasePose place_base;
-    std::array<double, 5> pick_joints{};
-    std::optional<std::array<double, 5>> place_joints;
-    std::string message;
-    int evaluated_candidates{0};
   };
 
   // Retained URDF segment for forward kinematics verification
@@ -209,55 +117,7 @@ namespace lekiwi_motion::workspace
     double reach_bound_{0.0};
   };
 
-  // ================= Pure Domain Service =================
-
-  // Domain service for mobile standoff candidate search and 3-tier move planning
-  class WorkspacePlanner
-  {
-  public:
-    WorkspacePlanner(
-        std::shared_ptr<const KinematicsModel> model,
-        std::shared_ptr<const IIkSolver> solver,
-        WorkspaceConfig config);
-
-    PlanResult plan(
-        const PlanningRequest &req,
-        const PlanningContext &ctx,
-        double base_z) const;
-
-    std::vector<BasePose> generate_standoff_candidates(
-        const Point3D &pick,
-        const Point3D &place,
-        double base_z) const;
-
-    const WorkspaceConfig &config() const noexcept { return config_; }
-    const KinematicsModel &model() const noexcept { return *model_; }
-    const IIkSolver &solver() const noexcept { return *solver_; }
-
-  private:
-    IkResult solve_at_base(
-        const Point3D &pt,
-        const BasePose &base,
-        double pitch) const;
-
-    std::optional<PlanResult> try_single_pose(
-        const PlanningRequest &req,
-        const BasePose &base,
-        uint8_t plan_type) const;
-
-    std::optional<std::pair<BasePose, IkResult>> find_endpoint(
-        const Point3D &pt,
-        double pitch,
-        double base_z,
-        int limit,
-        int &evaluated) const;
-
-    std::shared_ptr<const KinematicsModel> model_;
-    std::shared_ptr<const IIkSolver> solver_;
-    WorkspaceConfig config_;
-  };
-
-  // ================= Core Utilities & Backward-Compatible API =================
+  // ================= Core Utilities =================
 
   // Extract kinematic parameters directly from URDF model into KinematicsModel
   bool extract_kinematics_from_urdf(
