@@ -13,6 +13,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <lekiwi_interfaces/msg/chess_game_status.hpp>
+#include <lekiwi_interfaces/msg/chess_move_details.hpp>
 #include <lekiwi_interfaces/action/compute_best_move.hpp>
 
 #include <chess.hpp>
@@ -57,7 +58,9 @@ namespace lekiwi_chess_master
     [[nodiscard]] const std::string &get_robot_color() const { return robot_color_; }
     [[nodiscard]] int get_think_time_ms() const { return think_time_ms_; }
     [[nodiscard]] uint8_t get_game_phase() const { return current_phase_; }
-    [[nodiscard]] const std::string &get_best_move() const { return current_best_move_; }
+    [[nodiscard]] const std::string &get_best_move() const { return best_move_details_.uci; }
+    [[nodiscard]] const lekiwi_interfaces::msg::ChessMoveDetails &get_best_move_details() const { return best_move_details_; }
+    [[nodiscard]] const lekiwi_interfaces::msg::ChessMoveDetails &get_last_move_details() const { return last_move_details_; }
 
   private:
     void raw_fen_callback(const std_msgs::msg::String::ConstSharedPtr msg);
@@ -68,10 +71,7 @@ namespace lekiwi_chess_master
 
     bool match_legal_move(const std::string &detected_placement, chess::Move &matched_move);
 
-    void publish_game_status(
-        const std::string &last_move = "",
-        bool is_legal = true,
-        bool is_stable = true);
+    void publish_game_status(bool is_legal = true, bool is_stable = true);
 
     void trigger_engine_if_needed();
 
@@ -95,7 +95,6 @@ namespace lekiwi_chess_master
     rclcpp::Publisher<ChessGameStatus>::SharedPtr game_status_pub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_srv_;
     rclcpp_action::Client<ComputeBestMove>::SharedPtr action_client_;
-    rclcpp::TimerBase::SharedPtr init_timer_;
 
     // Game Engine & Debounce tracking
     mutable std::mutex state_mutex_;
@@ -105,8 +104,8 @@ namespace lekiwi_chess_master
     int consecutive_count_{0};
 
     // Match & Engine Status
-    std::string last_move_;
-    std::string current_best_move_;
+    lekiwi_interfaces::msg::ChessMoveDetails last_move_details_;
+    lekiwi_interfaces::msg::ChessMoveDetails best_move_details_;
     int32_t current_eval_centipawns_{0};
     uint8_t current_phase_{ChessGameStatus::PHASE_WAITING_PLAYER};
 

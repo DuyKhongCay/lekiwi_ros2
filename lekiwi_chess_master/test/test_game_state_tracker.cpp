@@ -151,8 +151,8 @@ TEST(BoardDisplayContextTest, FromGameStatusFactory)
 {
   lekiwi_interfaces::msg::ChessGameStatus status;
   status.full_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
-  status.last_move = "e2e4";
-  status.best_move = "e7e5";
+  status.last_move_details.uci = "e2e4";
+  status.best_move_details.uci = "e7e5";
   status.eval_centipawns = 45;
   status.game_phase = lekiwi_interfaces::msg::ChessGameStatus::PHASE_ROBOT_READY;
   status.is_check = true;

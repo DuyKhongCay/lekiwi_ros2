@@ -58,8 +58,8 @@ namespace lekiwi_chess_master
     {
       BoardDisplayContext ctx;
       ctx.fen = status.full_fen;
-      ctx.last_move = status.last_move;
-      ctx.best_move = status.best_move;
+      ctx.last_move = status.last_move_details.uci;
+      ctx.best_move = status.best_move_details.uci;
       ctx.eval_cp = status.eval_centipawns;
       ctx.game_phase = status.game_phase;
       ctx.is_check = status.is_check;
