@@ -15,6 +15,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CameraMode.msg"
   "msg/ServoTelemetry.msg"
   "msg/DriveStatus.msg"
+  "msg/ChessMoveDetails.msg"
   "msg/ChessGameStatus.msg"
   "srv/SetCamMode.srv"
   "srv/SetTorqueEnabled.srv"

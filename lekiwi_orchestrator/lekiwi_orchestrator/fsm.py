@@ -12,7 +12,6 @@ Encapsulates legal transitions for:
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Dict, Set
 
 from lekiwi_interfaces.msg import CameraMode
 
@@ -32,7 +31,7 @@ class MissionState(IntEnum):
     ERROR_FALLBACK = 9
 
 
-MISSION_STATE_NAMES: Dict[MissionState, str] = {
+MISSION_STATE_NAMES: dict[MissionState, str] = {
     MissionState.BOOT_INITIALIZING: "BOOT_INITIALIZING",
     MissionState.WAITING_FOR_TF_READY: "WAITING_FOR_TF_READY",
     MissionState.WAITING_FOR_PLAYER_MOVE: "WAITING_FOR_PLAYER_MOVE",
@@ -46,7 +45,7 @@ MISSION_STATE_NAMES: Dict[MissionState, str] = {
 }
 
 # Permitted state transitions for MissionState
-ALLOWED_MISSION_TRANSITIONS: Dict[MissionState, Set[MissionState]] = {
+ALLOWED_MISSION_TRANSITIONS: dict[MissionState, set[MissionState]] = {
     MissionState.BOOT_INITIALIZING: {
         MissionState.BOOT_INITIALIZING,
         MissionState.WAITING_FOR_TF_READY,
@@ -105,7 +104,7 @@ ALLOWED_MISSION_TRANSITIONS: Dict[MissionState, Set[MissionState]] = {
 }
 
 # Permitted state transitions for CameraMode
-ALLOWED_CAMERA_TRANSITIONS: Dict[int, Set[int]] = {
+ALLOWED_CAMERA_TRANSITIONS: dict[int, set[int]] = {
     CameraMode.STANDBY: {
         CameraMode.STANDBY,
         CameraMode.NAVIGATING,
@@ -131,7 +130,7 @@ ALLOWED_CAMERA_TRANSITIONS: Dict[int, Set[int]] = {
     },
 }
 
-CAMERA_MODE_NAMES: Dict[int, str] = {
+CAMERA_MODE_NAMES: dict[int, str] = {
     CameraMode.STANDBY: "STANDBY",
     CameraMode.NAVIGATING: "NAVIGATING",
     CameraMode.CHESS_THINKING: "CHESS_THINKING",

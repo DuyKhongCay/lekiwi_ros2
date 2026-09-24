@@ -37,6 +37,7 @@ endif()
 FetchContent_MakeAvailable(chess_library)
 
 add_library(lekiwi_chess_master_components SHARED
+  src/chess_domain.cpp
   src/stockfish_driver.cpp
   src/chess_engine_action_component.cpp
   src/chess_game_state_tracker_component.cpp
@@ -97,6 +98,12 @@ install(DIRECTORY resources/
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_chess_domain test/test_chess_domain.cpp)
+  if(TARGET test_chess_domain)
+    target_include_directories(test_chess_domain PRIVATE ${chess_library_SOURCE_DIR}/include)
+    target_link_libraries(test_chess_domain lekiwi_chess_master_components)
+  endif()
 
   ament_add_gtest(test_stockfish_driver test/test_stockfish_driver.cpp)
   if(TARGET test_stockfish_driver)

@@ -21,6 +21,7 @@
 
 #include "lekiwi_motion/chessboard_mapper.hpp"
 #include "lekiwi_motion/workspace_kinematics.hpp"
+#include "lekiwi_motion/workspace_planner.hpp"
 
 namespace lekiwi_motion
 {
@@ -42,8 +43,13 @@ namespace lekiwi_motion
 
         struct TargetPoints
         {
+            workspace::Point3D clear;
             workspace::Point3D pick;
             workspace::Point3D place;
+            geometry_msgs::msg::Point clear_pt_msg;
+            geometry_msgs::msg::Point pick_pt_msg;
+            geometry_msgs::msg::Point place_pt_msg;
+            bool is_capture{false};
         };
 
         void load_parameters();
@@ -72,6 +78,7 @@ namespace lekiwi_motion
 
         void populate_success_response(
             const workspace::PlanResult &plan,
+            const TargetPoints &targets,
             const TransformContext &tf_ctx,
             lekiwi_interfaces::srv::CheckMoveFeasibility::Response &response) const;
 

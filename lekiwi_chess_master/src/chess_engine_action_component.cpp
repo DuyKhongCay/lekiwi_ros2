@@ -65,7 +65,7 @@ namespace lekiwi_chess_master
       return rclcpp_action::GoalResponse::REJECT;
     }
 
-    if (is_busy_)
+    if (is_busy_.exchange(true))
     {
       RCLCPP_WARN(get_logger(), "Rejected ComputeBestMove Goal: Engine is currently evaluating another position.");
       return rclcpp_action::GoalResponse::REJECT;
@@ -95,7 +95,6 @@ namespace lekiwi_chess_master
 
   void ChessEngineActionComponent::execute_goal(const std::shared_ptr<GoalHandle> goal_handle)
   {
-    is_busy_ = true;
     const auto goal = goal_handle->get_goal();
     auto feedback = std::make_shared<ComputeBestMove::Feedback>();
     auto result = std::make_shared<ComputeBestMove::Result>();

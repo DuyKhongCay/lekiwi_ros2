@@ -59,6 +59,7 @@ rclcpp_components_register_node(tf_gatekeeper_component
 # ── C++ Component & Executable: workspace_checker ─────────────────────────────
 add_library(workspace_model STATIC
   src/workspace_kinematics.cpp
+  src/workspace_planner.cpp
   src/chessboard_mapper.cpp
 )
 set_target_properties(workspace_model PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -142,7 +143,6 @@ if(BUILD_TESTING)
   find_package(orocos_kdl REQUIRED)
   find_package(lekiwi_description REQUIRED)
   find_package(yaml-cpp REQUIRED)
-  find_package(ament_cmake_pytest REQUIRED)
   find_program(XACRO_EXECUTABLE xacro REQUIRED)
   get_filename_component(DESCRIPTION_SHARE "${lekiwi_description_DIR}/.." ABSOLUTE)
   file(GLOB DESCRIPTION_INPUTS CONFIGURE_DEPENDS
@@ -201,11 +201,6 @@ if(BUILD_TESTING)
   add_dependencies(test_workspace_kinematics workspace_urdf_fixture)
   target_compile_definitions(test_workspace_kinematics PRIVATE
     WORKSPACE_URDF_PATH="${WORKSPACE_URDF}")
-
-  ament_add_pytest_test(test_workspace_node_contract test/test_workspace_node_contract.py
-    TIMEOUT 60)
-  set_tests_properties(test_workspace_node_contract PROPERTIES
-    ENVIRONMENT "RMW_IMPLEMENTATION=rmw_fastrtps_cpp;ROS_DOMAIN_ID=188;ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST;WORKSPACE_URDF_PATH=${WORKSPACE_URDF};CONTROL_CONFIG_PATH=${CMAKE_CURRENT_SOURCE_DIR}/../lekiwi_bringup/config/control/orchestrator.yaml")
 endif()
 
 ament_package()

@@ -6,6 +6,7 @@
 #include <urdf_parser/urdf_parser.h>
 
 #include "lekiwi_motion/workspace_kinematics.hpp"
+#include "lekiwi_motion/workspace_planner.hpp"
 
 namespace ws = lekiwi_motion::workspace;
 
@@ -135,11 +136,36 @@ TEST_F(WorkspaceKinematicsTest, PlannerTierTwo_DualBase)
   EXPECT_TRUE(plan.place_joints.has_value());
 }
 
-// Contract 2 - Capture: Evaluates only Pick position, onboard drop is ignored
-TEST_F(WorkspaceKinematicsTest, PlannerCapture_PickOnly)
+// Contract 2 - Capture Tier 0: Robot currently in place can execute capture with ZERO base motion
+TEST_F(WorkspaceKinematicsTest, PlannerCapture_TierZero)
 {
   ws::PlanningRequest req;
+  req.clear = ws::Point3D{0.0, -0.05, 0.02};
   req.pick = ws::Point3D{0.0, -0.10, 0.02};
+  req.place = ws::Point3D{0.0, -0.05, 0.02};
+  req.pitch = -M_PI_2;
+  req.is_capture = true;
+
+  ws::BasePose current{0.0, -workspace_.half_h - workspace_.edge_clearance, -0.004, M_PI_2};
+  ws::PlanningContext ctx{current};
+
+  const ws::PlanResult plan = planner_->plan(req, ctx, current.z);
+  EXPECT_TRUE(plan.feasible);
+  EXPECT_EQ(plan.status, ws::FeasibilityStatus::SUCCESS);
+  EXPECT_EQ(plan.plan_type, ws::PLAN_CAPTURE_ZERO_NAV);
+  EXPECT_TRUE(plan.clear_joints.has_value());
+  EXPECT_TRUE(plan.place_joints.has_value());
+  EXPECT_DOUBLE_EQ(plan.clear_base.x, current.x);
+  EXPECT_DOUBLE_EQ(plan.pick_base.x, current.x);
+}
+
+// Contract 2 - Capture Tier 1: Single Standoff Base covers Clear, Pick, and Place
+TEST_F(WorkspaceKinematicsTest, PlannerCapture_SingleBase)
+{
+  ws::PlanningRequest req;
+  req.clear = ws::Point3D{0.0, -0.05, 0.02};
+  req.pick = ws::Point3D{0.0, -0.10, 0.02};
+  req.place = ws::Point3D{0.0, -0.05, 0.02};
   req.pitch = -M_PI_2;
   req.is_capture = true;
 
@@ -149,9 +175,62 @@ TEST_F(WorkspaceKinematicsTest, PlannerCapture_PickOnly)
   const ws::PlanResult plan = planner_->plan(req, ctx, base_z);
   EXPECT_TRUE(plan.feasible);
   EXPECT_EQ(plan.status, ws::FeasibilityStatus::SUCCESS);
-  EXPECT_EQ(plan.plan_type, ws::PLAN_SINGLE_BASE);
-  EXPECT_FALSE(plan.place_joints.has_value());
-  EXPECT_NE(plan.message.find("Capture"), std::string::npos);
+  EXPECT_EQ(plan.plan_type, ws::PLAN_CAPTURE_SINGLE_BASE);
+  EXPECT_TRUE(plan.clear_joints.has_value());
+  EXPECT_TRUE(plan.place_joints.has_value());
+  EXPECT_DOUBLE_EQ(plan.clear_base.x, plan.pick_base.x);
+  EXPECT_DOUBLE_EQ(plan.clear_base.y, plan.pick_base.y);
+  EXPECT_DOUBLE_EQ(plan.pick_base.x, plan.place_base.x);
+}
+
+// Contract 2 - Capture Tier 3: Diametrically opposite squares (e.g. A1 takes H8)
+TEST_F(WorkspaceKinematicsTest, PlannerCapture_TripleBase_DistantDiagonal)
+{
+  ws::PlanningRequest req;
+  // Pick at A1 corner, Clear and Place at H8 corner (~45cm apart)
+  req.pick = ws::Point3D{-0.16, -0.16, 0.02};
+  req.place = ws::Point3D{0.16, 0.16, 0.02};
+  req.clear = req.place;
+  req.pitch = -M_PI_2;
+  req.is_capture = true;
+
+  ws::PlanningContext ctx;
+  const double base_z = -0.004;
+
+  const ws::PlanResult plan = planner_->plan(req, ctx, base_z);
+  EXPECT_TRUE(plan.feasible);
+  EXPECT_EQ(plan.status, ws::FeasibilityStatus::SUCCESS);
+  EXPECT_EQ(plan.plan_type, ws::PLAN_CAPTURE_TRIPLE_BASE);
+  EXPECT_TRUE(plan.clear_joints.has_value());
+  EXPECT_TRUE(plan.place_joints.has_value());
+  // Pick base must differ from Clear/Place base
+  EXPECT_NE(plan.pick_base.x, plan.clear_base.x);
+  // Normal capture: Clear base and Place base are identical
+  EXPECT_DOUBLE_EQ(plan.clear_base.x, plan.place_base.x);
+  EXPECT_DOUBLE_EQ(plan.clear_base.y, plan.place_base.y);
+}
+
+// Contract 2 - Capture: En Passant where Clear square differs from Place square
+TEST_F(WorkspaceKinematicsTest, PlannerCapture_EnPassant)
+{
+  ws::PlanningRequest req;
+  // White pawn on e5 (-0.025, 0.025), captures black pawn on d5 (-0.05, 0.025), lands on d6 (-0.05, 0.05)
+  req.pick = ws::Point3D{-0.025, 0.025, 0.02};
+  req.clear = ws::Point3D{-0.05, 0.025, 0.02};
+  req.place = ws::Point3D{-0.05, 0.05, 0.02};
+  req.pitch = -M_PI_2;
+  req.is_capture = true;
+
+  ws::PlanningContext ctx;
+  const double base_z = -0.004;
+
+  const ws::PlanResult plan = planner_->plan(req, ctx, base_z);
+  EXPECT_TRUE(plan.feasible);
+  EXPECT_EQ(plan.status, ws::FeasibilityStatus::SUCCESS);
+  // All three squares are adjacent, so single base easily reaches all three
+  EXPECT_EQ(plan.plan_type, ws::PLAN_CAPTURE_SINGLE_BASE);
+  EXPECT_TRUE(plan.clear_joints.has_value());
+  EXPECT_TRUE(plan.place_joints.has_value());
 }
 
 // Contract 2 - Infeasible: Target outside board reach

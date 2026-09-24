@@ -3,11 +3,9 @@ std_msgs/Header header
 # Standard 6-field FEN representation of the board
 string full_fen
 
-# Last executed move in UCI format (e.g., "e2e4")
-string last_move
-
-# Engine proposed best move in UCI format (e.g., "e7e5")
-string best_move
+# Micro Move Entities (Last executed move vs Engine proposed best move)
+ChessMoveDetails last_move_details
+ChessMoveDetails best_move_details
 
 # Stockfish evaluation score in centipawns
 int32 eval_centipawns
@@ -29,4 +27,3 @@ bool is_legal_move
 bool is_check
 bool is_checkmate
 bool is_draw
-

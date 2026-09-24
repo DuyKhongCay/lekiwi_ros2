@@ -47,19 +47,8 @@ namespace lekiwi_chess_master
     std::string exec_path = executable_path;
     if (!fs::exists(exec_path))
     {
-      if (fs::exists("/usr/games/stockfish"))
-      {
-        exec_path = "/usr/games/stockfish";
-      }
-      else if (fs::exists("/usr/bin/stockfish"))
-      {
-        exec_path = "/usr/bin/stockfish";
-      }
-      else
-      {
-        std::cerr << "[StockfishDriver] Stockfish binary not found at: " << executable_path << std::endl;
-        return false;
-      }
+      std::cerr << "[StockfishDriver] Stockfish binary not found at configured path: " << executable_path << std::endl;
+      return false;
     }
 
     int in_pipe[2];

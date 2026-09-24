@@ -289,9 +289,26 @@ namespace lekiwi_motion
   std::optional<std::string> WorkspaceCheckerNode::validate_request(
       const lekiwi_interfaces::srv::CheckMoveFeasibility::Request &request) const noexcept
   {
-    if (request.uci_move.empty())
+    const auto &move = request.move;
+    if (move.from_square.empty() || move.to_square.empty())
     {
-      return "Malformed request: uci_move cannot be empty";
+      return "Malformed request: from_square and to_square cannot be empty";
+    }
+    if (!ChessboardMapper::is_valid_square(move.from_square))
+    {
+      return "Malformed request: invalid from_square '" + move.from_square + "'";
+    }
+    if (!ChessboardMapper::is_valid_square(move.to_square))
+    {
+      return "Malformed request: invalid to_square '" + move.to_square + "'";
+    }
+    if (move.is_capture)
+    {
+      const std::string &cap_sq = move.captured_square.empty() ? move.to_square : move.captured_square;
+      if (!ChessboardMapper::is_valid_square(cap_sq))
+      {
+        return "Malformed request: invalid captured_square '" + cap_sq + "'";
+      }
     }
     return std::nullopt;
   }
@@ -372,8 +389,8 @@ namespace lekiwi_motion
       const lekiwi_interfaces::srv::CheckMoveFeasibility::Request &request,
       std::string &out_error)
   {
-    workspace::Point3D pick;
-    workspace::Point3D place;
+    TargetPoints targets;
+    targets.is_capture = request.move.is_capture;
 
     try
     {
@@ -381,16 +398,27 @@ namespace lekiwi_motion
       {
         throw std::runtime_error("Chessboard mapper not initialized");
       }
-      auto details = chessboard_mapper_->parse_uci_move(request.uci_move, request.is_capture);
-      if (request.is_capture)
+      auto pick_coord = chessboard_mapper_->square_to_metric(request.move.from_square);
+      auto place_coord = chessboard_mapper_->square_to_metric(request.move.to_square);
+
+      targets.pick = workspace::Point3D{pick_coord.x, pick_coord.y, pick_coord.z};
+      targets.place = workspace::Point3D{place_coord.x, place_coord.y, place_coord.z};
+      targets.pick_pt_msg = pick_coord.to_point_msg();
+      targets.place_pt_msg = place_coord.to_point_msg();
+
+      if (request.move.is_capture)
       {
-        pick = workspace::Point3D{details.place_coord.x, details.place_coord.y, details.place_coord.z};
-        place = pick;
+        const std::string &cap_sq = request.move.captured_square.empty()
+                                        ? request.move.to_square
+                                        : request.move.captured_square;
+        auto clear_coord = chessboard_mapper_->square_to_metric(cap_sq);
+        targets.clear = workspace::Point3D{clear_coord.x, clear_coord.y, clear_coord.z};
+        targets.clear_pt_msg = clear_coord.to_point_msg();
       }
       else
       {
-        pick = workspace::Point3D{details.pick_coord.x, details.pick_coord.y, details.pick_coord.z};
-        place = workspace::Point3D{details.place_coord.x, details.place_coord.y, details.place_coord.z};
+        targets.clear = targets.place;
+        targets.clear_pt_msg = targets.place_pt_msg;
       }
     }
     catch (const std::exception &ex)
@@ -399,18 +427,23 @@ namespace lekiwi_motion
       return std::nullopt;
     }
 
-    return TargetPoints{pick, place};
+    return targets;
   }
 
   void WorkspaceCheckerNode::populate_success_response(
       const workspace::PlanResult &plan,
+      const TargetPoints &targets,
       const TransformContext &tf_ctx,
       lekiwi_interfaces::srv::CheckMoveFeasibility::Response &response) const
   {
     response.feasible = true;
     response.plan_type = plan.plan_type;
+    response.clear_base_pose = make_pose_stamped(plan.clear_base, tf_ctx.board_to_map, tf_ctx.stamp);
     response.pick_base_pose = make_pose_stamped(plan.pick_base, tf_ctx.board_to_map, tf_ctx.stamp);
     response.place_base_pose = make_pose_stamped(plan.place_base, tf_ctx.board_to_map, tf_ctx.stamp);
+    response.clear_point = targets.clear_pt_msg;
+    response.pick_point = targets.pick_pt_msg;
+    response.place_point = targets.place_pt_msg;
     response.message = plan.message;
   }
 
@@ -454,7 +487,8 @@ namespace lekiwi_motion
     }
 
     double pitch = workspace_.default_pitch;
-    workspace::PlanningRequest query{targets->pick, targets->place, pitch, request->is_capture};
+    workspace::PlanningRequest query{
+        targets->clear, targets->pick, targets->place, pitch, request->move.is_capture};
     workspace::PlanningContext context{tf_ctx->current_base};
 
     workspace::PlanResult plan = planner->plan(query, context, tf_ctx->base_z);
@@ -464,7 +498,7 @@ namespace lekiwi_motion
       return;
     }
 
-    populate_success_response(plan, *tf_ctx, *response);
+    populate_success_response(plan, *targets, *tf_ctx, *response);
     last_feasible_ = true;
     last_status_ = response->message;
   }

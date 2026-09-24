@@ -1,22 +1,37 @@
 chess_mission_orchestrator:
   ros__parameters:
+    # --- Mission Execution Settings ---
     robot_color: "b"
     board_frame: "chessboard_frame"
     map_frame: "map"
-    board_width: 0.20
-    board_height: 0.20
     feasibility_timeout_sec: 5.0
     action_timeout_sec: 60.0
-    skip_navigation: false
     readiness_timeout_sec: 1.0
-
-task_orchestrator:
-  ros__parameters:
-    cam_hub_node: "/hailo_chess_inference"
-    cam_hub_srv: "/hailo_chess_inference/set_mode"
-    orchestrator_service: "/orchestrator/set_mode"
-    lifecycle_poll_period_sec: 0.5
+    skip_navigation: false
     start_navigation: false
+
+    # --- Self-Healing & Recovery Settings ---
+    recovery:
+      auto_recovery_enabled: true
+      auto_recovery_timeout_sec: 5.0
+      max_recovery_attempts: 3
+
+    # --- Topic Endpoints (Configurable) ---
+    topics:
+      tf_ready: "/system/tf_ready"
+      game_status: "/chess/game_status"
+      camera_mode: "/camera_mode"
+      diagnostics: "/diagnostics"
+
+    # --- Service Endpoints ---
+    services:
+      check_feasibility: "/workspace/check_move_feasibility"
+      recover: "/orchestrator/recover"
+
+    # --- Action Endpoints ---
+    actions:
+      navigate_to_pose: "/navigate_to_pose"
+      execute_chess_move: "/manipulation/execute_chess_move"
 
 tf_gatekeeper_node:
   ros__parameters:
@@ -53,4 +68,3 @@ workspace_checker:
     planning.default_roll: 0.0
     tf.max_age_sec: 0.30
     tf.planar_tolerance_rad: 0.01
-

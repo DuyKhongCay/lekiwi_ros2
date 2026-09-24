@@ -7,9 +7,11 @@
  */
 
 #include "lekiwi_chess_master/chess_game_state_tracker_component.hpp"
+#include "lekiwi_chess_master/chess_domain.hpp"
 #include <rclcpp_components/register_node_macro.hpp>
 #include <algorithm>
 #include <cctype>
+#include <string_view>
 
 namespace lekiwi_chess_master
 {
@@ -51,24 +53,16 @@ namespace lekiwi_chess_master
     if (auto_trigger_engine_)
     {
       action_client_ = rclcpp_action::create_client<ComputeBestMove>(this, action_name_);
-
-      // Schedule a one-shot check if robot plays White from the initial state
-      init_timer_ = create_wall_timer(
-          std::chrono::milliseconds(1000),
-          [this]()
-          {
-            if (init_timer_)
-            {
-              init_timer_->cancel();
-              init_timer_.reset();
-            }
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            trigger_engine_if_needed();
-          });
     }
 
     // Publish initial starting game status
-    publish_game_status("", true, true);
+    publish_game_status(true, true);
+
+    if (auto_trigger_engine_)
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      trigger_engine_if_needed();
+    }
   }
 
   void ChessGameStateTrackerComponent::reset_game()
@@ -89,13 +83,13 @@ namespace lekiwi_chess_master
     last_accepted_placement_ = kDefaultStartingPlacement;
     pending_placement_.clear();
     consecutive_count_ = 0;
-    last_move_.clear();
-    current_best_move_.clear();
+    last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+    best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
     current_eval_centipawns_ = 0;
     current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
 
     RCLCPP_INFO(get_logger(), "Chess game board reset to starting position: %s", board_.getFen().c_str());
-    publish_game_status("", true, true);
+    publish_game_status(true, true);
 
     trigger_engine_if_needed();
   }
@@ -122,7 +116,9 @@ namespace lekiwi_chess_master
       board_.unmakeMove(move);
 
       auto space_idx = sim_fen.find(' ');
-      std::string sim_placement = (space_idx != std::string::npos) ? sim_fen.substr(0, space_idx) : sim_fen;
+      std::string_view sim_placement = (space_idx != std::string::npos)
+                                           ? std::string_view(sim_fen).substr(0, space_idx)
+                                           : std::string_view(sim_fen);
 
       if (sim_placement == detected_placement)
       {
@@ -133,14 +129,13 @@ namespace lekiwi_chess_master
     return false;
   }
 
-  void ChessGameStateTrackerComponent::publish_game_status(
-      const std::string &last_move, bool is_legal, bool is_stable)
+  void ChessGameStateTrackerComponent::publish_game_status(bool is_legal, bool is_stable)
   {
     ChessGameStatus msg;
     msg.header.stamp = now();
     msg.full_fen = board_.getFen();
-    msg.last_move = last_move;
-    msg.best_move = current_best_move_;
+    msg.last_move_details = last_move_details_;
+    msg.best_move_details = best_move_details_;
     msg.eval_centipawns = current_eval_centipawns_;
     msg.active_color = (board_.sideToMove() == chess::Color::WHITE) ? "w" : "b";
     msg.is_board_stable = is_stable;
@@ -222,8 +217,8 @@ namespace lekiwi_chess_master
     }
 
     current_phase_ = ChessGameStatus::PHASE_ROBOT_THINKING;
-    current_best_move_.clear();
-    publish_game_status(last_move_, true, true);
+    best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+    publish_game_status(true, true);
 
     auto goal_msg = ComputeBestMove::Goal();
     goal_msg.fen = board_.getFen();
@@ -254,7 +249,7 @@ namespace lekiwi_chess_master
       RCLCPP_ERROR(get_logger(), "Auto-trigger goal was rejected by engine action server.");
       is_engine_busy_ = false;
       current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
-      publish_game_status(last_move_, true, true);
+      publish_game_status(true, true);
     }
     else
     {
@@ -287,37 +282,38 @@ namespace lekiwi_chess_master
     switch (result.code)
     {
     case rclcpp_action::ResultCode::SUCCEEDED:
-      current_best_move_ = result.result->best_move;
+      best_move_details_ = domain::classify_move(board_, result.result->best_move);
       current_eval_centipawns_ = result.result->eval_centipawns;
       current_phase_ = ChessGameStatus::PHASE_ROBOT_READY;
-      publish_game_status(last_move_, true, true);
+      publish_game_status(true, true);
 
       RCLCPP_INFO(
           get_logger(),
           "\n============================================================\n"
-          ">>> ROBOT MOVE (%s): [ %s ] | Ponder: %s | Eval: %d cp\n"
+          ">>> ROBOT MOVE (%s): [ %s ] (SAN: %s) | Ponder: %s | Eval: %d cp\n"
           "============================================================",
           robot_color_.c_str(),
           result.result->best_move.c_str(),
+          best_move_details_.san.c_str(),
           result.result->ponder_move.c_str(),
           result.result->eval_centipawns);
       break;
     case rclcpp_action::ResultCode::ABORTED:
       current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
-      current_best_move_.clear();
-      publish_game_status(last_move_, true, true);
+      best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+      publish_game_status(true, true);
       RCLCPP_WARN(get_logger(), "Auto-trigger engine goal was aborted: %s", result.result->message.c_str());
       break;
     case rclcpp_action::ResultCode::CANCELED:
       current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
-      current_best_move_.clear();
-      publish_game_status(last_move_, true, true);
+      best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+      publish_game_status(true, true);
       RCLCPP_WARN(get_logger(), "Auto-trigger engine goal was canceled.");
       break;
     default:
       current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
-      current_best_move_.clear();
-      publish_game_status(last_move_, true, true);
+      best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+      publish_game_status(true, true);
       RCLCPP_ERROR(get_logger(), "Auto-trigger received unknown result code from engine.");
       break;
     }
@@ -372,11 +368,11 @@ namespace lekiwi_chess_master
       {
         board_ = chess::Board();
         last_accepted_placement_ = kDefaultStartingPlacement;
-        last_move_.clear();
-        current_best_move_.clear();
+        last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+        best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
         current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
         RCLCPP_INFO(get_logger(), "Board reset to starting position detected from vision.");
-        publish_game_status("", true, true);
+        publish_game_status(true, true);
         trigger_engine_if_needed();
       }
       return;
@@ -387,16 +383,16 @@ namespace lekiwi_chess_master
     if (match_legal_move(placement, matched_move))
     {
       std::string move_uci = chess::uci::moveToUci(matched_move);
+      last_move_details_ = domain::classify_move(board_, move_uci);
       board_.makeMove(matched_move);
       last_accepted_placement_ = placement;
-      last_move_ = move_uci;
-      current_best_move_.clear();
+      best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
       current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
 
-      RCLCPP_INFO(get_logger(), "Confirmed Legal Move: %s | New Full FEN: %s",
-                  move_uci.c_str(), board_.getFen().c_str());
+      RCLCPP_INFO(get_logger(), "Confirmed Legal Move: %s (SAN: %s) | New Full FEN: %s",
+                  move_uci.c_str(), last_move_details_.san.c_str(), board_.getFen().c_str());
 
-      publish_game_status(move_uci, true, true);
+      publish_game_status(true, true);
       trigger_engine_if_needed();
     }
     else
@@ -406,7 +402,8 @@ namespace lekiwi_chess_master
           "Stable vision placement '%s' does NOT match any legal move from FEN: %s",
           placement.c_str(), board_.getFen().c_str());
 
-      publish_game_status("", false, true);
+      last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+      publish_game_status(false, true);
     }
   }
 

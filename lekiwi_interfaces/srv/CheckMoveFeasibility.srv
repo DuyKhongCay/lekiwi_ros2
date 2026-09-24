@@ -1,22 +1,29 @@
 # ================= Request =================
-# High-level UCI Chess Move
-string uci_move
-bool is_capture
+# Micro Move Entity from lekiwi_chess_master
+lekiwi_interfaces/ChessMoveDetails move
 
 ---
 # ================= Response =================
 # Kiểu kế hoạch thực thi cho Task Orchestrator
-uint8 PLAN_ZERO_NAV    = 0   # Robot đứng yên, tay gắp đặt luôn
-uint8 PLAN_SINGLE_BASE = 1   # 1 lần Nav2 tới vị trí chung (hoặc gắp ăn quân)
-uint8 PLAN_DUAL_BASE   = 2   # Cần 2 lần Nav2: B_pick -> Pick -> B_place -> Place
+uint8 PLAN_ZERO_NAV            = 0   # 0 Nav2: Robot đứng yên, tay gắp đặt luôn (Quiet move)
+uint8 PLAN_SINGLE_BASE         = 1   # 1 Nav2: Di chuyển tới vị trí chung (Quiet move)
+uint8 PLAN_DUAL_BASE           = 2   # 2 Nav2: B_pick -> Pick -> B_place -> Place (Quiet move)
+uint8 PLAN_CAPTURE_ZERO_NAV    = 3   # 0 Nav2: Clear -> Pick -> Place
+uint8 PLAN_CAPTURE_SINGLE_BASE = 4   # 1 Nav2: Tới vị trí chung -> Clear -> Pick -> Place
+uint8 PLAN_CAPTURE_DUAL_BASE   = 5   # 2 Nav2: (Vd Clear tại chỗ, hoặc B_clear/B_pick chung vị trí)
+uint8 PLAN_CAPTURE_TRIPLE_BASE = 6   # 3 Nav2: B_clear -> Clear -> B_pick -> Pick -> B_place -> Place
 
 uint8 plan_type
 bool feasible
 
-# Pose đế robot cần di chuyển tới
+# Pose đế robot cần di chuyển tới (map frame)
+geometry_msgs/PoseStamped clear_base_pose
 geometry_msgs/PoseStamped pick_base_pose
-geometry_msgs/PoseStamped place_base_pose   # Bằng pick_base_pose nếu ZERO_NAV hoặc SINGLE_BASE
+geometry_msgs/PoseStamped place_base_pose
+
+# Tọa độ 3D trong target_frame (chessboard_frame)
+geometry_msgs/Point clear_point
+geometry_msgs/Point pick_point
+geometry_msgs/Point place_point
 
 string message
-
-
