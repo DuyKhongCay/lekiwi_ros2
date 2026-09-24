@@ -12,10 +12,12 @@ Panels:
         - /TF1/Tree1
         - /IMU1
         - /Odometry1
-        - /AprilTag Markers1
+        - /Chessboard AprilTag Markers1
+        - /Chessboard AprilTag Markers1/Topic1
+        - /Chessboard AprilTag Markers1/Namespaces1
         - /Left Camera1/Topic1
       Splitter Ratio: 0.5
-    Tree Height: 222
+    Tree Height: 337
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -134,10 +136,6 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-        stereo_right_optical:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
         upper_arm:
           Alpha: 1
           Show Axes: false
@@ -199,8 +197,6 @@ Visualization Manager:
           Value: false
         stereo_left_optical:
           Value: true
-        stereo_right_optical:
-          Value: false
         upper_arm:
           Value: false
         wrist:
@@ -216,35 +212,33 @@ Visualization Manager:
         map:
           chessboard_frame:
             {}
-        odom:
-          base_footprint:
-            baseframe:
-              {}
-            icm20948_imu:
-              {}
-            omniwheel_7:
-              {}
-            omniwheel_8:
-              {}
-            omniwheel_9:
-              {}
-            rotation_pitch:
-              side_camera_optical:
+          odom:
+            base_footprint:
+              baseframe:
                 {}
-              upper_arm:
-                lower_arm:
-                  wrist:
-                    gripper:
-                      gripperframe:
-                        {}
-                      moving_jaw_so101_v1:
-                        {}
-                      wrist_camera_optical:
-                        {}
-            stereo_left_optical:
-              {}
-            stereo_right_optical:
-              {}
+              icm20948_imu:
+                {}
+              omniwheel_7:
+                {}
+              omniwheel_8:
+                {}
+              omniwheel_9:
+                {}
+              rotation_pitch:
+                side_camera_optical:
+                  {}
+                upper_arm:
+                  lower_arm:
+                    wrist:
+                      gripper:
+                        gripperframe:
+                          {}
+                        moving_jaw_so101_v1:
+                          {}
+                        wrist_camera_optical:
+                          {}
+              stereo_left_optical:
+                {}
       Update Interval: 0
       Value: true
     - Acceleration properties:
@@ -316,15 +310,18 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: AprilTag Markers
+      Name: Chessboard AprilTag Markers
       Namespaces:
-        {}
+        chessboard/gridlines: true
+        chessboard/labels: true
+        chessboard/squares: true
+        chessboard/tags: true
       Topic:
         Depth: 5
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: visualization_marker_array
+        Value: chessboard_tag_markers
       Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
@@ -357,7 +354,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: odom
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:
@@ -400,35 +397,35 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 3.208113431930542
+      Distance: 1.355270504951477
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -0.2974918484687805
-        Y: 0.14154447615146637
-        Z: -0.1520862579345703
+        X: -0.19764941930770874
+        Y: -0.18743938207626343
+        Z: -0.351005494594574
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.2297940254211426
+      Pitch: 1.2747929096221924
       Target Frame: base_footprint
       Value: Orbit (rviz)
-      Yaw: 1.8103916645050049
+      Yaw: 4.4485764503479
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 749
+  Height: 1011
   Hide Left Dock: false
   Hide Right Dock: true
   Left Camera:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd00000002000000000000033000000293fc0200000004fb0000001800570072006900730074002000430061006d0065007200610000000000ffffffff0000001600fffffffb00000016004c006500660074002000430061006d006500720061010000003d000001330000001600fffffffb000000100044006900730070006c00610079007301000001760000011b000000c900fffffffb0000000800540069006d00650100000297000000390000003900ffffff000000010000013200000399fc0200000003fb0000000a00560069006500770073000000003d00000170000000a400fffffffb0000001200530065006c0065006300740069006f006e00000001b3000001b90000005c00fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730000000372000000640000005c00ffffff0000026a0000029300000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000002000000000000033000000399fc0200000004fb0000001800570072006900730074002000430061006d0065007200610000000000ffffffff0000001600fffffffb00000016004c006500660074002000430061006d006500720061010000003d000001af0000001600fffffffb000000100044006900730070006c00610079007301000001f20000018e000000c900fffffffb0000000800540069006d00650100000386000000500000003900ffffff000000010000013200000399fc0200000003fb0000000a00560069006500770073000000003d00000170000000a400fffffffb0000001200530065006c0065006300740069006f006e00000001b3000001b90000005c00fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730000000372000000640000005c00ffffff0000044a0000039900000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: true
   Time:
@@ -437,8 +434,8 @@ Window Geometry:
     collapsed: true
   Views:
     collapsed: true
-  Width: 1440
+  Width: 1920
   Wrist Camera:
     collapsed: false
-  X: 389
-  Y: 215
+  X: 0
+  Y: 32
