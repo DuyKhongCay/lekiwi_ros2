@@ -5,36 +5,35 @@
 Central Mission Orchestrator for LeKiwi Mobile Manipulation Chess Robot.
 
 Acts as a Mediator and Facade coordinating:
-1. TF readiness & EKF convergence (/system/tf_ready) via TfReadinessGatekeeper
+1. TF readiness & EKF convergence (/system/tf_ready) via selective gating (NodeHealthMonitor)
 2. Game status, FIDE legality & Stockfish best move (/chess/game_status) from lekiwi_chess_master
 3. Reachability & base standoff queries (/workspace/check_move_feasibility) from lekiwi_motion
-4. Navigation goals to chessboard perimeter standoff via Nav2 (NavigateToPose)
-5. Physical manipulation pick & place via /manipulation/execute_chess_move
-6. Dynamic operational camera modes (/camera_mode)
+4. Standoff trajectory choreography via StagePipelineBuilder
+5. Navigation & physical manipulation execution via ActionDispatcher
+6. Dynamic operational camera modes published to latched topic (/camera_mode)
+7. Self-healing & recovery mechanism (/orchestrator/recover and auto-recovery timer)
 """
 
 from __future__ import annotations
 
 import math
-import re
-import time
-from typing import Any, Optional
+import threading
 
-from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from geometry_msgs.msg import Point, PoseStamped
-from lekiwi_interfaces.msg import CameraMode, ChessGameStatus
-from lekiwi_interfaces.srv import CheckMoveFeasibility, SetCamMode
 import rclpy
-from rclpy.action import ActionClient
+from geometry_msgs.msg import Point, PoseStamped
+from lekiwi_interfaces.msg import CameraMode, ChessGameStatus, ChessMoveDetails
+from lekiwi_interfaces.srv import CheckMoveFeasibility
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.node import Node
 from rclpy.clock import Clock, ClockType
+from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool
+from std_srvs.srv import Trigger
 
-from lekiwi_orchestrator.chessboard_coordinate_mapper import (
-    ChessboardCoordinateMapper,
-    UciMoveDetails,
+from lekiwi_orchestrator.action_dispatcher import (
+    ActionDispatcherInterface,
+    RosActionDispatcher,
+    SimulatedActionDispatcher,
 )
 from lekiwi_orchestrator.fsm import (
     CAMERA_MODE_NAMES,
@@ -43,11 +42,12 @@ from lekiwi_orchestrator.fsm import (
     is_camera_transition_allowed,
     is_mission_transition_allowed,
 )
-
-try:
-    from nav2_msgs.action import NavigateToPose
-except ImportError:
-    NavigateToPose = None
+from lekiwi_orchestrator.health_monitor import NodeHealthMonitor
+from lekiwi_orchestrator.stage_pipeline_builder import (
+    ChessMoveGoal,
+    ExecutionStage,
+    StagePipelineBuilder,
+)
 
 try:
     from lekiwi_interfaces.action import ExecuteChessMove
@@ -55,358 +55,597 @@ except ImportError:
     ExecuteChessMove = None
 
 
-DEFAULT_ROBOT_COLOR = "b"  # Default robot plays Black (waiting for White's move)
-DEFAULT_BOARD_FRAME = "chessboard_frame"
-DEFAULT_MAP_FRAME = "map"
-DEFAULT_FEASIBILITY_TIMEOUT_SEC = 5.0
-DEFAULT_ACTION_TIMEOUT_SEC = 60.0
+class OrchestratorConfig:
+    """Type-safe configuration container parsed from ROS 2 node parameters."""
+
+    def __init__(self, node: Node) -> None:
+        node.declare_parameter("robot_color", "b")
+        node.declare_parameter("board_frame", "chessboard_frame")
+        node.declare_parameter("map_frame", "map")
+        node.declare_parameter("feasibility_timeout_sec", 5.0)
+        node.declare_parameter("action_timeout_sec", 60.0)
+        node.declare_parameter("readiness_timeout_sec", 1.0)
+        node.declare_parameter("skip_navigation", False)
+        node.declare_parameter("start_navigation", False)
+
+        node.declare_parameter("recovery.auto_recovery_enabled", True)
+        node.declare_parameter("recovery.auto_recovery_timeout_sec", 5.0)
+        node.declare_parameter("recovery.max_recovery_attempts", 3)
+
+        node.declare_parameter("topics.tf_ready", "/system/tf_ready")
+        node.declare_parameter("topics.game_status", "/chess/game_status")
+        node.declare_parameter("topics.camera_mode", "/camera_mode")
+        node.declare_parameter("topics.diagnostics", "/diagnostics")
+
+        node.declare_parameter(
+            "services.check_feasibility", "/workspace/check_move_feasibility"
+        )
+        node.declare_parameter("services.recover", "/orchestrator/recover")
+
+        node.declare_parameter("actions.navigate_to_pose", "/navigate_to_pose")
+        node.declare_parameter(
+            "actions.execute_chess_move", "/manipulation/execute_chess_move"
+        )
+
+        readiness_to = float(node.get_parameter("readiness_timeout_sec").value)
+        if not math.isfinite(readiness_to) or readiness_to <= 0:
+            raise ValueError("readiness_timeout_sec must be finite and positive")
+
+        self.robot_color = str(node.get_parameter("robot_color").value).lower()
+        self.board_frame = str(node.get_parameter("board_frame").value)
+        self.map_frame = str(node.get_parameter("map_frame").value)
+        self.feasibility_timeout_sec = float(
+            node.get_parameter("feasibility_timeout_sec").value
+        )
+        self.action_timeout_sec = float(node.get_parameter("action_timeout_sec").value)
+        self.readiness_timeout_sec = readiness_to
+        self.skip_navigation = bool(node.get_parameter("skip_navigation").value)
+        self.start_navigation = bool(node.get_parameter("start_navigation").value)
+
+        self.auto_recovery_enabled = bool(
+            node.get_parameter("recovery.auto_recovery_enabled").value
+        )
+        self.auto_recovery_timeout_sec = float(
+            node.get_parameter("recovery.auto_recovery_timeout_sec").value
+        )
+        self.max_recovery_attempts = int(
+            node.get_parameter("recovery.max_recovery_attempts").value
+        )
+
+        self.tf_ready_topic = str(node.get_parameter("topics.tf_ready").value)
+        self.game_status_topic = str(node.get_parameter("topics.game_status").value)
+        self.camera_mode_topic = str(node.get_parameter("topics.camera_mode").value)
+        self.diagnostics_topic = str(node.get_parameter("topics.diagnostics").value)
+
+        self.check_feasibility_srv = str(
+            node.get_parameter("services.check_feasibility").value
+        )
+        self.recover_srv = str(node.get_parameter("services.recover").value)
+
+        self.navigate_to_pose_action = str(
+            node.get_parameter("actions.navigate_to_pose").value
+        )
+        self.execute_chess_move_action = str(
+            node.get_parameter("actions.execute_chess_move").value
+        )
 
 
 class ChessMissionOrchestrator(Node):
-    """
-    High-level mission coordinator implementing Mediator and Facade design patterns.
-    """
+    """High-level mission coordinator implementing Mediator and Facade design patterns."""
 
     def __init__(
         self,
         node_name: str = "chess_mission_orchestrator",
-        coordinate_mapper: Optional[ChessboardCoordinateMapper] = None,
+        action_dispatcher: ActionDispatcherInterface | None = None,
+        **kwargs,
     ) -> None:
-        super().__init__(node_name)
+        super().__init__(node_name, **kwargs)
 
-        # Declare parameters
-        self.declare_parameter("robot_color", DEFAULT_ROBOT_COLOR)
-        self.declare_parameter("board_frame", DEFAULT_BOARD_FRAME)
-        self.declare_parameter("map_frame", DEFAULT_MAP_FRAME)
-        self.declare_parameter("board_width", 0.20)
-        self.declare_parameter("board_height", 0.20)
-        self.declare_parameter(
-            "feasibility_timeout_sec", DEFAULT_FEASIBILITY_TIMEOUT_SEC
-        )
-        self.declare_parameter("action_timeout_sec", DEFAULT_ACTION_TIMEOUT_SEC)
-        self.declare_parameter(
-            "skip_navigation", False
-        )  # Useful for tabletop sim/tests
+        self.config = OrchestratorConfig(self)
 
-        self._robot_color = str(self.get_parameter("robot_color").value).lower()
-        self._board_frame = str(self.get_parameter("board_frame").value)
-        self._map_frame = str(self.get_parameter("map_frame").value)
-        board_w = float(self.get_parameter("board_width").value)
-        board_h = float(self.get_parameter("board_height").value)
-        self._feasibility_timeout = float(
-            self.get_parameter("feasibility_timeout_sec").value
-        )
-        self._action_timeout = float(self.get_parameter("action_timeout_sec").value)
-        self._skip_nav = bool(self.get_parameter("skip_navigation").value)
-
-        # Spatial chess square mapping is now handled centrally in lekiwi_motion
-        # (via /workspace/check_move_feasibility). coordinate_mapper is maintained
-        # for backwards compatibility.
-        self._mapper = coordinate_mapper
-
-        # Internal State Machine tracking
+        # Thread Safety & State Machine Tracking
+        self._state_lock = threading.RLock()
         self._mission_state = MissionState.BOOT_INITIALIZING
         self._camera_mode = CameraMode.STANDBY
-        self._tf_ready = False
-        self._last_readiness_heartbeat = None
-        self._readiness_timeout = self.declare_parameter(
-            "readiness_timeout_sec", 1.0
-        ).value
-        if not math.isfinite(self._readiness_timeout) or self._readiness_timeout <= 0:
-            raise ValueError("readiness_timeout_sec must be finite and positive")
-        self._current_goal_move: Optional[str] = None
-        self._current_move_details: Optional[UciMoveDetails] = None
-        self._last_processed_fen: Optional[str] = None
+        self._current_goal_move: str | None = None
+        self._current_move_details: ChessMoveGoal | None = None
+        self._last_processed_fen: str | None = None
+        self._execution_stages: list[ExecutionStage] = []
+        self._current_stage: ExecutionStage | None = None
+        self._current_feasibility_resp: CheckMoveFeasibility.Response | None = None
+        self._dual_base_phase: str | None = None
+
+        # Watchdog Timers
+        self._feasibility_timer = None
+        self._action_timer = None
+        self._action_watchdog_desc: str = ""
 
         # Callback Groups
         self._cb_group_sub = MutuallyExclusiveCallbackGroup()
         self._cb_group_client = ReentrantCallbackGroup()
 
-        # Subscriptions
-        latched_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            reliability=ReliabilityPolicy.RELIABLE,
+        # Action Dispatcher
+        if action_dispatcher is not None:
+            self._dispatcher = action_dispatcher
+        elif self.config.skip_navigation:
+            self._dispatcher = SimulatedActionDispatcher(self)
+        else:
+            self._dispatcher = RosActionDispatcher(
+                self,
+                nav2_action_name=self.config.navigate_to_pose_action,
+                manipulation_action_name=self.config.execute_chess_move_action,
+                callback_group=self._cb_group_client,
+            )
+
+        # Health, Lease, Auto-Recovery & Diagnostics Manager
+        self._health_monitor = NodeHealthMonitor(
+            node=self,
+            tf_ready_topic=self.config.tf_ready_topic,
+            diagnostics_topic=self.config.diagnostics_topic,
+            recover_service_name=self.config.recover_srv,
+            readiness_timeout_sec=self.config.readiness_timeout_sec,
+            auto_recovery_enabled=self.config.auto_recovery_enabled,
+            auto_recovery_timeout_sec=self.config.auto_recovery_timeout_sec,
+            max_recovery_attempts=self.config.max_recovery_attempts,
+            robot_color=self.config.robot_color,
+            state_lock=self._state_lock,
+            cb_group_sub=self._cb_group_sub,
+            on_tf_ready_transition_cb=self._on_tf_ready_transition,
+            on_critical_tf_loss_cb=lambda: self.transition_to(
+                MissionState.ERROR_FALLBACK
+            ),
+            on_auto_recovery_cb=lambda: self.trigger_recovery(
+                reason="auto_recovery_timer"
+            ),
+            on_reset_recovery_system_cb=self.trigger_recovery,
         )
+
+        # Subscriptions
         self._tf_ready_sub = self.create_subscription(
             Bool,
-            "/system/tf_ready",
+            self.config.tf_ready_topic,
             self._on_tf_ready,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
             callback_group=self._cb_group_sub,
         )
         self._game_status_sub = self.create_subscription(
             ChessGameStatus,
-            "/chess/game_status",
+            self.config.game_status_topic,
             self._on_game_status,
             10,
             callback_group=self._cb_group_sub,
         )
 
-        # Service Clients
+        # Service Clients & Servers
         self._feasibility_client = self.create_client(
             CheckMoveFeasibility,
-            "/workspace/check_move_feasibility",
+            self.config.check_feasibility_srv,
             callback_group=self._cb_group_client,
         )
-        self._cam_mode_client = self.create_client(
-            SetCamMode,
-            "/orchestrator/set_mode",
+        self._recover_service = self.create_service(
+            Trigger,
+            self.config.recover_srv,
+            self._handle_recover_service,
             callback_group=self._cb_group_client,
         )
 
-        # Action Clients
-        self._nav2_client = (
-            ActionClient(
-                self,
-                NavigateToPose,
-                "/navigate_to_pose",
-                callback_group=self._cb_group_client,
-            )
-            if NavigateToPose is not None
-            else None
+        # Camera Mode Publisher (Latched)
+        mode_pub_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
-        self._manipulation_client = (
-            ActionClient(
-                self,
-                ExecuteChessMove,
-                "/manipulation/execute_chess_move",
-                callback_group=self._cb_group_client,
-            )
-            if ExecuteChessMove is not None
-            else None
+        self._camera_mode_pub = self.create_publisher(
+            CameraMode, self.config.camera_mode_topic, mode_pub_qos
         )
 
-        # Publishers
-        self._diag_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
-        self._cam_mode_pub = self.create_publisher(
-            CameraMode, "/camera_mode", latched_qos
-        )
+        # Optional Navigation Startup Component
+        self._navigation_startup = None
+        if self.config.start_navigation:
+            from lekiwi_orchestrator.navigation_startup import NavigationStartup
 
-        # Periodic Diagnostic Timer (1 Hz)
-        self._diag_timer = self.create_timer(1.0, self._publish_diagnostics)
-        self._readiness_timer = self.create_timer(
-            min(0.2, self._readiness_timeout / 2),
-            self._expire_readiness,
-            callback_group=self._cb_group_sub,
-            clock=Clock(clock_type=ClockType.STEADY_TIME),
-        )
+            self._navigation_startup = NavigationStartup(self)
+
+        # Publish initial camera mode
+        self._publish_camera_mode(self._camera_mode)
 
         # Initial State transition to WAITING_FOR_TF_READY
         self.transition_to(MissionState.WAITING_FOR_TF_READY)
         self.get_logger().info(
-            f"ChessMissionOrchestrator initialized. Robot Color: '{self._robot_color}'. "
-            f"Waiting for TF Tree Readiness on /system/tf_ready..."
+            f"ChessMissionOrchestrator initialized. Robot Color: '{self.config.robot_color}'. "
+            f"Waiting for TF Tree Readiness on {self.config.tf_ready_topic}..."
         )
 
+    def destroy_node(self) -> bool:
+        """Clean up active timers and components upon node shutdown."""
+        self._cancel_feasibility_timer()
+        self._cancel_action_watchdog()
+        if hasattr(self, "_health_monitor"):
+            self._health_monitor.destroy()
+        if hasattr(self, "_dispatcher") and self._dispatcher is not None:
+            self._dispatcher.destroy()
+        return super().destroy_node()
+
+    # --- Compatibility Properties for Tests & Telemetry ---
     @property
     def mission_state(self) -> MissionState:
-        return self._mission_state
+        with self._state_lock:
+            return self._mission_state
 
     @property
     def camera_mode(self) -> int:
-        return self._camera_mode
+        with self._state_lock:
+            return self._camera_mode
+
+    @property
+    def current_move_details(self) -> ChessMoveGoal | None:
+        with self._state_lock:
+            return self._current_move_details
 
     @property
     def is_tf_ready(self) -> bool:
-        return (
-            self._tf_ready
-            and self._last_readiness_heartbeat is not None
-            and time.monotonic() - self._last_readiness_heartbeat
-            <= self._readiness_timeout
-        )
+        return self._health_monitor.is_tf_ready
+
+    @property
+    def _tf_ready(self) -> bool:
+        return self._health_monitor.tf_ready
+
+    @_tf_ready.setter
+    def _tf_ready(self, val: bool) -> None:
+        self._health_monitor.tf_ready = val
+
+    @property
+    def _last_readiness_heartbeat(self) -> float | None:
+        return self._health_monitor.last_readiness_heartbeat
+
+    @_last_readiness_heartbeat.setter
+    def _last_readiness_heartbeat(self, val: float | None) -> None:
+        self._health_monitor.last_readiness_heartbeat = val
+
+    @property
+    def _recovery_attempts(self) -> int:
+        return self._health_monitor.recovery_attempts
+
+    @_recovery_attempts.setter
+    def _recovery_attempts(self, val: int) -> None:
+        self._health_monitor.recovery_attempts = val
+
+    @property
+    def _recovery_timer(self):
+        return self._health_monitor._recovery_timer
+
+    @_recovery_timer.setter
+    def _recovery_timer(self, val):
+        self._health_monitor._recovery_timer = val
+
+    def _on_auto_recovery_timer(self) -> None:
+        self._health_monitor.cancel_recovery_timer()
+        self.trigger_recovery(reason="auto_recovery_timer")
+
+    def _cancel_recovery_timer(self) -> None:
+        self._health_monitor.cancel_recovery_timer()
 
     # ================= State Machine Management =================
 
     def transition_to(self, target_state: MissionState) -> bool:
-        """
-        Safely transition to target_state validating against legal transition matrix.
-        Fail fast and loud if an illegal state transition is requested.
-        """
-        if target_state == self._mission_state:
-            return True
+        """Safely transition to target_state validating against legal transition matrix."""
+        with self._state_lock:
+            if target_state == self._mission_state:
+                return True
 
-        if not is_mission_transition_allowed(self._mission_state, target_state):
-            err_msg = (
-                f"ILLEGAL FSM TRANSITION: Cannot move from "
-                f"{MISSION_STATE_NAMES.get(self._mission_state, 'UNKNOWN')} to "
-                f"{MISSION_STATE_NAMES.get(target_state, 'UNKNOWN')}"
+            if not is_mission_transition_allowed(self._mission_state, target_state):
+                err_msg = (
+                    f"ILLEGAL FSM TRANSITION: Cannot move from "
+                    f"{MISSION_STATE_NAMES.get(self._mission_state, 'UNKNOWN')} to "
+                    f"{MISSION_STATE_NAMES.get(target_state, 'UNKNOWN')}"
+                )
+                self.get_logger().error(err_msg)
+                return False
+
+            old_name = MISSION_STATE_NAMES.get(self._mission_state, "UNKNOWN")
+            new_name = MISSION_STATE_NAMES.get(target_state, "UNKNOWN")
+            self._mission_state = target_state
+            self.get_logger().info(
+                f"[MISSION FSM] Transitioned: {old_name} -> {new_name}"
             )
-            self.get_logger().error(err_msg)
-            return False
 
-        old_state_name = MISSION_STATE_NAMES.get(self._mission_state, "UNKNOWN")
-        new_state_name = MISSION_STATE_NAMES.get(target_state, "UNKNOWN")
-        self._mission_state = target_state
-        self.get_logger().info(
-            f"[MISSION FSM] Transitioned: {old_state_name} -> {new_state_name}"
-        )
-        return True
+            if target_state in (
+                MissionState.WAITING_FOR_PLAYER_MOVE,
+                MissionState.TURN_COMPLETED,
+            ):
+                self._health_monitor.reset_recovery_attempts()
+
+            if target_state == MissionState.ERROR_FALLBACK:
+                self._health_monitor.schedule_auto_recovery_if_enabled()
+
+            return True
 
     def set_camera_mode(self, requested_mode: int) -> bool:
-        """Update system camera mode and notify /camera_mode topic."""
-        if requested_mode == self._camera_mode:
-            return True
+        """Update system camera mode and publish directly on latched topic."""
+        with self._state_lock:
+            current_mode = self._camera_mode
+            if requested_mode == current_mode:
+                return True
 
-        if not is_camera_transition_allowed(self._camera_mode, requested_mode):
-            self.get_logger().warn(
-                f"[CAMERA FSM] Rejected mode switch: "
-                f"{CAMERA_MODE_NAMES.get(self._camera_mode, 'UNKNOWN')} -> "
-                f"{CAMERA_MODE_NAMES.get(requested_mode, 'UNKNOWN')}"
-            )
-            return False
+            if not is_camera_transition_allowed(current_mode, requested_mode):
+                self.get_logger().warn(
+                    f"[CAMERA FSM] Rejected mode switch: "
+                    f"{CAMERA_MODE_NAMES.get(current_mode, 'UNKNOWN')} -> "
+                    f"{CAMERA_MODE_NAMES.get(requested_mode, 'UNKNOWN')}"
+                )
+                return False
 
-        self._camera_mode = requested_mode
-        msg = CameraMode()
-        msg.value = self._camera_mode
-        self._cam_mode_pub.publish(msg)
+            self._camera_mode = requested_mode
+
         self.get_logger().info(
             f"[CAMERA FSM] Switched CameraMode to {CAMERA_MODE_NAMES.get(requested_mode, 'UNKNOWN')}"
         )
+        self._publish_camera_mode(requested_mode)
         return True
+
+    def _publish_camera_mode(self, mode_value: int) -> None:
+        if hasattr(self, "_camera_mode_pub") and self._camera_mode_pub is not None:
+            msg = CameraMode()
+            msg.value = mode_value
+            self._camera_mode_pub.publish(msg)
+
+    # ================= Self-Healing & Recovery =================
+
+    def trigger_recovery(self, reason: str = "manual") -> bool:
+        """Recover from ERROR_FALLBACK safely to WAITING_FOR_TF_READY."""
+        with self._state_lock:
+            if self._mission_state != MissionState.ERROR_FALLBACK:
+                self.get_logger().warn(
+                    f"Recovery requested ({reason}), but node is not in ERROR_FALLBACK "
+                    f"(current: {MISSION_STATE_NAMES.get(self._mission_state, 'UNKNOWN')})"
+                )
+                return False
+
+            self._cancel_feasibility_timer()
+            self._cancel_action_watchdog()
+            self._health_monitor.cancel_recovery_timer()
+            self._dispatcher.cancel_active_goal()
+            self._execution_stages.clear()
+            self._current_stage = None
+            self._current_feasibility_resp = None
+            self._dual_base_phase = None
+            self._current_goal_move = None
+
+            self.get_logger().info(
+                f"[RECOVERY] Resetting system state ({reason}). Transitioning to WAITING_FOR_TF_READY."
+            )
+            success = self.transition_to(MissionState.WAITING_FOR_TF_READY)
+            if success:
+                self.set_camera_mode(CameraMode.STANDBY)
+            return success
+
+    def _handle_recover_service(
+        self, request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        return self._health_monitor.handle_recover_service(
+            request, response, self.mission_state
+        )
 
     # ================= Subscription Callbacks =================
 
-    def _expire_readiness(self):
-        """Withdraw cached readiness when its heartbeat lease expires."""
-        if self._tf_ready and not self.is_tf_ready:
-            self._tf_ready = False
-            self.get_logger().warning("TF readiness heartbeat expired")
+    def _expire_readiness(self) -> None:
+        """Check lease expiration via health monitor."""
+        self._health_monitor.expire_readiness(self.mission_state)
 
     def _on_tf_ready(self, msg: Bool) -> None:
-        """Handle readiness notifications from TfReadinessGatekeeper."""
-        previous = self.is_tf_ready
-        self._last_readiness_heartbeat = time.monotonic()
-        self._tf_ready = bool(msg.data)
+        """Handle readiness notifications from gatekeeper."""
+        self._health_monitor.on_tf_ready_msg(msg, self.mission_state)
 
-        if self._tf_ready and not previous:
-            self.get_logger().info(
-                ">>> [ORCHESTRATOR] TF Ready confirmed! System is localized & stationary."
+    def _on_tf_ready_transition(self, is_ready: bool) -> None:
+        """Callback invoked by health monitor when TF readiness goes True."""
+        if is_ready and self.mission_state == MissionState.WAITING_FOR_TF_READY:
+            initial_state = (
+                MissionState.EVALUATING_BEST_MOVE
+                if self.config.robot_color == "w"
+                else MissionState.WAITING_FOR_PLAYER_MOVE
             )
-            if self._mission_state == MissionState.WAITING_FOR_TF_READY:
-                # If robot is White, it plays first; otherwise waits for Black/White player move
-                initial_state = (
-                    MissionState.EVALUATING_BEST_MOVE
-                    if self._robot_color == "w"
-                    else MissionState.WAITING_FOR_PLAYER_MOVE
-                )
-                self.transition_to(initial_state)
-                self.set_camera_mode(CameraMode.CHESS_THINKING)
-        elif not self._tf_ready and previous:
-            self.get_logger().warn(
-                "<<< [ORCHESTRATOR] TF Unready! Robot moved or EKF lost convergence."
-            )
+            self.transition_to(initial_state)
+            self.set_camera_mode(CameraMode.CHESS_THINKING)
 
     def _on_game_status(self, msg: ChessGameStatus) -> None:
         """Process game state updates from lekiwi_chess_master."""
-        if not self.is_tf_ready:
+        if self._handle_game_over_if_concluded(msg):
             return
 
-        # Game over condition
-        if msg.is_checkmate or msg.is_draw:
-            if self._mission_state != MissionState.GAME_OVER:
-                self.transition_to(MissionState.GAME_OVER)
-                reason = "CHECKMATE" if msg.is_checkmate else "DRAW"
-                self.get_logger().info(
-                    f"*** GAME OVER: {reason}! FEN: {msg.full_fen} ***"
-                )
-                self.set_camera_mode(CameraMode.STANDBY)
-            return
+        if self._is_eligible_robot_turn(msg):
+            self._dispatch_if_new_board(msg)
 
-        # Robot Turn Trigger
-        is_robot_turn = msg.active_color == self._robot_color
-        is_ready_to_act = (
+    def _handle_game_over_if_concluded(self, msg: ChessGameStatus) -> bool:
+        if not (msg.is_checkmate or msg.is_draw):
+            return False
+
+        with self._state_lock:
+            current_state = self._mission_state
+        if current_state != MissionState.GAME_OVER:
+            self.transition_to(MissionState.GAME_OVER)
+            reason = "CHECKMATE" if msg.is_checkmate else "DRAW"
+            self.get_logger().info(f"*** GAME OVER: {reason}! FEN: {msg.full_fen} ***")
+            self.set_camera_mode(CameraMode.STANDBY)
+        return True
+
+    def _is_eligible_robot_turn(self, msg: ChessGameStatus) -> bool:
+        is_robot_turn = msg.active_color == self.config.robot_color
+        best_uci = msg.best_move_details.uci
+        is_ready = (
             msg.is_board_stable
             and is_robot_turn
-            and bool(msg.best_move)
+            and bool(best_uci)
             and msg.game_phase
             in (
                 ChessGameStatus.PHASE_ROBOT_READY,
                 ChessGameStatus.PHASE_WAITING_PLAYER,
             )
         )
+        if not is_ready:
+            return False
 
-        if is_ready_to_act and self._mission_state in (
-            MissionState.WAITING_FOR_PLAYER_MOVE,
-            MissionState.EVALUATING_BEST_MOVE,
-            MissionState.TURN_COMPLETED,
-        ):
-            # Avoid re-triggering the same FEN position
+        with self._state_lock:
+            return self._mission_state in (
+                MissionState.WAITING_FOR_PLAYER_MOVE,
+                MissionState.EVALUATING_BEST_MOVE,
+                MissionState.TURN_COMPLETED,
+            )
+
+    def _dispatch_if_new_board(self, msg: ChessGameStatus) -> None:
+        with self._state_lock:
             if msg.full_fen == self._last_processed_fen:
                 return
-
             self._last_processed_fen = msg.full_fen
-            self._current_goal_move = msg.best_move
-            self.get_logger().info(
-                f">>> [ORCHESTRATOR] New Best Move Received: '{self._current_goal_move}' "
-                f"(Eval: {msg.eval_centipawns} cp, Color: {msg.active_color})"
-            )
-            self._dispatch_move_workflow(self._current_goal_move)
+            self._current_goal_move = msg.best_move_details.uci
+
+        details = msg.best_move_details
+        self.get_logger().info(
+            f">>> [ORCHESTRATOR] New Best Move Received: '{details.uci}' "
+            f"(SAN: {details.san}, Piece: {details.piece_type}, "
+            f"Capture: {details.is_capture}, Eval: {msg.eval_centipawns} cp, Color: {msg.active_color})"
+        )
+        self._dispatch_move_workflow(details.uci, move_details=details)
 
     # ================= Workflow Orchestration =================
 
-    def _dispatch_move_workflow(self, uci_move: str) -> None:
+    def _dispatch_move_workflow(
+        self,
+        uci_move: str,
+        move_details: ChessMoveDetails | None = None,
+    ) -> None:
         """Begin autonomous execution of a single chess move."""
         if not self.is_tf_ready:
+            self.get_logger().warn(
+                f"Cannot dispatch move '{uci_move}': TF tree not ready. Waiting for TF readiness."
+            )
+            self.transition_to(MissionState.WAITING_FOR_TF_READY)
             return
 
-        cleaned_move = uci_move.strip().lower()
-        match = re.match(r"^([a-h][1-8])([a-h][1-8])([qrbn])?$", cleaned_move)
-        if not match:
-            self.get_logger().error(
-                f"Failed to parse UCI move '{uci_move}': Expected format like 'e2e4' or 'e7e8q'."
-            )
+        details = self._parse_move_goal(uci_move, move_details)
+        if details is None:
             self.transition_to(MissionState.ERROR_FALLBACK)
             return
 
-        from_square = match.group(1)
-        to_square = match.group(2)
-        promo = match.group(3)
+        with self._state_lock:
+            self._current_move_details = details
 
-        details = UciMoveDetails(
-            uci=cleaned_move,
-            from_square=from_square,
-            to_square=to_square,
-            promotion=promo,
-            pick_point=Point(),
-            place_point=Point(),
-            is_capture=False,
-        )
-        self._current_move_details = details
+        if self._mission_state in (
+            MissionState.WAITING_FOR_PLAYER_MOVE,
+            MissionState.TURN_COMPLETED,
+        ) and not self.transition_to(MissionState.EVALUATING_BEST_MOVE):
+            return
 
         if not self.transition_to(MissionState.CHECKING_REACHABILITY):
             return
 
         if not self._feasibility_client.service_is_ready():
             self.get_logger().error(
-                "Workspace Checker service '/workspace/check_move_feasibility' is unavailable!"
+                f"Workspace Checker service '{self.config.check_feasibility_srv}' is unavailable!"
             )
             self.transition_to(MissionState.ERROR_FALLBACK)
             return
 
+        self._send_feasibility_query(details)
+
+    def _parse_move_goal(
+        self,
+        uci_move: str,
+        move_details: ChessMoveDetails | None,
+    ) -> ChessMoveGoal | None:
+        cleaned_move = uci_move.strip().lower()
+        if len(cleaned_move) < 4:
+            self.get_logger().error(
+                f"Failed to parse UCI move '{uci_move}': Expected format like 'e2e4' or 'e7e8q'."
+            )
+            return None
+
+        if move_details is not None and move_details.from_square:
+            return ChessMoveGoal(
+                uci=move_details.uci or cleaned_move,
+                from_square=move_details.from_square,
+                to_square=move_details.to_square,
+                promotion=(
+                    move_details.promotion_piece
+                    if move_details.promotion_piece
+                    else None
+                ),
+                is_capture=move_details.is_capture,
+                captured_square=(
+                    move_details.captured_square
+                    if move_details.captured_square
+                    else (move_details.to_square if move_details.is_capture else "")
+                ),
+                castling_rook_from=move_details.castling_rook_from,
+                castling_rook_to=move_details.castling_rook_to,
+            )
+
+        from_sq = cleaned_move[:2]
+        to_sq = cleaned_move[2:4]
+        promo = cleaned_move[4:] if len(cleaned_move) > 4 else None
+        return ChessMoveGoal(
+            uci=cleaned_move,
+            from_square=from_sq,
+            to_square=to_sq,
+            promotion=promo,
+            is_capture=False,
+        )
+
+    def _send_feasibility_query(self, details: ChessMoveGoal) -> None:
         req = CheckMoveFeasibility.Request()
-        req.uci_move = cleaned_move
-        req.is_capture = False
+        req.move.uci = details.uci
+        req.move.from_square = details.from_square
+        req.move.to_square = details.to_square
+        req.move.is_capture = details.is_capture
+        req.move.captured_square = details.captured_square
+        if details.promotion:
+            req.move.promotion_piece = details.promotion
+        if details.castling_rook_from:
+            req.move.castling_rook_from = details.castling_rook_from
+            req.move.castling_rook_to = details.castling_rook_to
+            req.move.is_castling = True
 
         self.get_logger().info(
-            f"Querying reachability feasibility for {from_square} -> {to_square} ({cleaned_move})..."
+            f"Querying reachability feasibility for {details.from_square} -> {details.to_square} "
+            f"({'capture at ' + details.captured_square if details.is_capture else 'quiet'})..."
         )
+
+        self._cancel_feasibility_timer()
+        self._feasibility_timer = self.create_timer(
+            self.config.feasibility_timeout_sec,
+            self._on_feasibility_timeout,
+            callback_group=self._cb_group_sub,
+            clock=Clock(clock_type=ClockType.STEADY_TIME),
+        )
+
         future = self._feasibility_client.call_async(req)
         future.add_done_callback(lambda f: self._on_feasibility_response(f, details))
 
-    def _on_feasibility_response(self, future, details: UciMoveDetails) -> None:
-        """Handle feasibility calculation result from lekiwi_motion."""
+    def _cancel_feasibility_timer(self) -> None:
+        if self._feasibility_timer is not None:
+            self._feasibility_timer.cancel()
+            self.destroy_timer(self._feasibility_timer)
+            self._feasibility_timer = None
+
+    def _on_feasibility_timeout(self) -> None:
+        self.get_logger().error(
+            f"Workspace feasibility query timed out after {self.config.feasibility_timeout_sec}s!"
+        )
+        self._cancel_feasibility_timer()
+        self.transition_to(MissionState.ERROR_FALLBACK)
+
+    def _on_feasibility_response(self, future, details: ChessMoveGoal) -> None:
+        self._cancel_feasibility_timer()
         try:
             resp: CheckMoveFeasibility.Response = future.result()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self.get_logger().error(f"Workspace feasibility query failed: {exc}")
             self.transition_to(MissionState.ERROR_FALLBACK)
             return
 
         if not resp.feasible:
             self.get_logger().error(
-                f"Move {details.uci} is declared NOT FEASIBLE: {resp.message}"
+                f"Move {details.uci} declared NOT FEASIBLE: {resp.message}"
             )
             self.transition_to(MissionState.ERROR_FALLBACK)
             return
@@ -415,180 +654,221 @@ class ChessMissionOrchestrator(Node):
             f"Feasibility confirmed! Plan Type: {resp.plan_type} ({resp.message})"
         )
 
-        # Decide navigation vs direct manipulation
-        if (
-            resp.plan_type == CheckMoveFeasibility.Response.PLAN_ZERO_NAV
-            or self._skip_nav
-        ):
-            self._execute_manipulation_step(details, resp)
+        stages = StagePipelineBuilder.build_stages(resp, details)
+        with self._state_lock:
+            self._execution_stages = stages
+            self._current_feasibility_resp = resp
+
+        self._advance_execution_pipeline()
+
+    # ================= Navigation & Manipulation Execution =================
+
+    def _start_action_watchdog(self, action_name: str) -> None:
+        self._cancel_action_watchdog()
+        self._action_watchdog_desc = action_name
+        self._action_timer = self.create_timer(
+            self.config.action_timeout_sec,
+            self._on_action_timeout,
+            callback_group=self._cb_group_sub,
+            clock=Clock(clock_type=ClockType.STEADY_TIME),
+        )
+
+    def _cancel_action_watchdog(self) -> None:
+        if self._action_timer is not None:
+            self._action_timer.cancel()
+            self.destroy_timer(self._action_timer)
+            self._action_timer = None
+        self._action_watchdog_desc = ""
+
+    def _on_action_timeout(self) -> None:
+        desc = self._action_watchdog_desc or "Action"
+        self.get_logger().error(
+            f"{desc} timed out after {self.config.action_timeout_sec}s! Cancelling active goal."
+        )
+        self._dispatcher.cancel_active_goal()
+        self._cancel_action_watchdog()
+        self.transition_to(MissionState.ERROR_FALLBACK)
+
+    def _advance_execution_pipeline(self) -> None:
+        """Advance to next execution stage or finalize turn."""
+        with self._state_lock:
+            if not self._execution_stages:
+                self._current_stage = None
+                self._dual_base_phase = None
+                self._finalize_turn()
+                return
+
+            stage = self._execution_stages.pop(0)
+            self._current_stage = stage
+            self._dual_base_phase = stage.name
+            feasibility_resp = self._current_feasibility_resp
+            details = self._current_move_details
+
+        if stage.target_pose is not None:
+            self._execute_navigation_step(
+                stage.target_pose, details, feasibility_resp, stage
+            )
         else:
-            # Need base navigation to standoff pose
-            self._execute_navigation_step(resp.pick_base_pose, details, resp)
+            self._execute_manipulation_step(details, feasibility_resp, stage)
 
     def _execute_navigation_step(
         self,
         target_pose: PoseStamped,
-        details: UciMoveDetails,
+        details: ChessMoveGoal,
         feasibility_resp: CheckMoveFeasibility.Response,
+        stage: ExecutionStage | None = None,
     ) -> None:
-        """Dispatch Nav2 goal to standoff base position."""
-        if self._nav2_client is None or not self._nav2_client.server_is_ready():
-            self.get_logger().warn(
-                "Nav2 action server not ready; proceeding in tabletop test mode."
-            )
-            self._execute_manipulation_step(details, feasibility_resp)
-            return
-
         if not self.transition_to(MissionState.NAVIGATING_TO_STANDOFF):
             return
 
         self.set_camera_mode(CameraMode.NAVIGATING)
-        goal_msg = NavigateToPose.Goal()
-        goal_msg.pose = target_pose
-
+        stage_name = stage.name if stage else (self._dual_base_phase or "NAV")
         self.get_logger().info(
-            f"Dispatching Nav2 NavigateToPose to ({target_pose.pose.position.x:.3f}, "
+            f"Dispatching NavigateToPose ({stage_name} standoff) to ({target_pose.pose.position.x:.3f}, "
             f"{target_pose.pose.position.y:.3f})..."
         )
-        send_future = self._nav2_client.send_goal_async(goal_msg)
-        send_future.add_done_callback(
-            lambda f: self._on_nav2_goal_submitted(f, details, feasibility_resp)
+
+        self._start_action_watchdog(f"Nav2 navigation ({stage_name} standoff)")
+
+        success = self._dispatcher.send_navigation_goal(
+            target_pose=target_pose,
+            on_accepted=lambda handle: self._on_nav2_goal_submitted(
+                handle, details, feasibility_resp
+            ),
+            on_completed=lambda fut: self._on_nav2_completed(
+                fut, details, feasibility_resp, stage
+            ),
         )
-
-    def _on_nav2_goal_submitted(
-        self,
-        future,
-        details: UciMoveDetails,
-        feasibility_resp: CheckMoveFeasibility.Response,
-    ) -> None:
-        """Handle Nav2 goal acceptance response."""
-        try:
-            goal_handle = future.result()
-            if not goal_handle.accepted:
-                self.get_logger().error("Nav2 rejected navigation goal!")
-                self.transition_to(MissionState.ERROR_FALLBACK)
-                return
-
-            res_future = goal_handle.get_result_async()
-            res_future.add_done_callback(
-                lambda f: self._on_nav2_completed(f, details, feasibility_resp)
-            )
-        except Exception as exc:
-            self.get_logger().error(f"Failed to submit Nav2 goal: {exc}")
+        if not success:
+            self._cancel_action_watchdog()
             self.transition_to(MissionState.ERROR_FALLBACK)
 
-    def _on_nav2_completed(
-        self,
-        future,
-        details: UciMoveDetails,
-        feasibility_resp: CheckMoveFeasibility.Response,
-    ) -> None:
-        """Handle Nav2 navigation completion."""
+    def _on_nav2_goal_submitted(self, goal_handle, details, feasibility_resp) -> None:
+        if goal_handle is None:
+            self._cancel_action_watchdog()
+            self.get_logger().error("Nav2 rejected navigation goal!")
+            self.transition_to(MissionState.ERROR_FALLBACK)
+            return
+        self.get_logger().info("Nav2 navigation goal accepted.")
+
+    def _on_nav2_completed(self, future, details, feasibility_resp, stage) -> None:
+        self._cancel_action_watchdog()
+        stage_name = stage.name if stage else "target"
         self.get_logger().info(
-            "Nav2 navigation completed successfully! Commencing manipulation."
+            f"Nav2 navigation for stage '{stage_name}' completed successfully! Commencing manipulation."
         )
-        self._execute_manipulation_step(details, feasibility_resp)
+        self._execute_manipulation_step(details, feasibility_resp, stage)
 
     def _execute_manipulation_step(
-        self, details: UciMoveDetails, feasibility_resp: CheckMoveFeasibility.Response
+        self,
+        details: ChessMoveGoal,
+        feasibility_resp: CheckMoveFeasibility.Response,
+        stage: ExecutionStage | None = None,
     ) -> None:
-        """Dispatch manipulation pick and place action."""
         if not self.transition_to(MissionState.EXECUTING_MANIPULATION):
             return
 
         self.set_camera_mode(CameraMode.MANIPULATION_LEROBOT)
 
-        if (
-            self._manipulation_client is None
-            or not self._manipulation_client.server_is_ready()
-        ):
-            self.get_logger().info(
-                f"[SIMULATION COMPLETE] Simulated manipulation of move {details.uci} "
-                f"from {details.from_square} to {details.to_square}."
-            )
-            self._finalize_turn()
-            return
-
-        # Resolve pick and place 3D coordinates (from lekiwi_motion response or details fallback)
-        has_resp_pick = hasattr(feasibility_resp, "pick_point") and (
-            feasibility_resp.pick_point.x != 0.0
-            or feasibility_resp.pick_point.y != 0.0
-            or feasibility_resp.pick_point.z != 0.0
-        )
-        pick_point = (
-            feasibility_resp.pick_point if has_resp_pick else details.pick_point
-        )
-
-        has_resp_place = hasattr(feasibility_resp, "place_point") and (
-            feasibility_resp.place_point.x != 0.0
-            or feasibility_resp.place_point.y != 0.0
-            or feasibility_resp.place_point.z != 0.0
-        )
-        place_point = (
-            feasibility_resp.place_point if has_resp_place else details.place_point
-        )
-
-        goal = ExecuteChessMove.Goal()
-        goal.instruction = f"Pick {details.from_square}, place {details.to_square}"
-        goal.from_square = details.from_square
-        goal.to_square = details.to_square
-        goal.pick_point = pick_point
-        goal.place_point = place_point
-        goal.is_capture = details.is_capture
-        goal.target_frame = self._board_frame
-        goal.pick_ik_hint = feasibility_resp.pick_ik_solution
-        goal.place_ik_hint = feasibility_resp.place_ik_solution
+        goal = self._build_manipulation_goal(details, feasibility_resp, stage)
+        self._start_action_watchdog(f"Manipulation goal: '{goal.instruction}'")
 
         self.get_logger().info(
-            f"Sending ExecuteChessMove goal: '{goal.instruction}'..."
+            f"Sending ExecuteChessMove goal: '{goal.instruction}' (capture={goal.is_capture})..."
         )
-        send_future = self._manipulation_client.send_goal_async(
-            goal, feedback_callback=self._on_manipulation_feedback
+        success = self._dispatcher.send_manipulation_goal(
+            goal=goal,
+            on_feedback=self._on_manipulation_feedback,
+            on_accepted=lambda handle: self._on_manipulation_goal_submitted(
+                handle, details, feasibility_resp
+            ),
+            on_completed=lambda fut: self._on_manipulation_completed(
+                fut, details, feasibility_resp
+            ),
         )
-        send_future.add_done_callback(self._on_manipulation_goal_submitted)
-
-    def _on_manipulation_feedback(self, feedback_msg) -> None:
-        """Log progress feedback during physical manipulation."""
-        fb = feedback_msg.feedback
-        self.get_logger().info(
-            f"[MANIPULATION FEEDBACK] Phase: {fb.current_phase} ({fb.progress_percent:.1f}%)"
-        )
-
-    def _on_manipulation_goal_submitted(self, future) -> None:
-        """Handle manipulation goal acceptance response."""
-        try:
-            goal_handle = future.result()
-            if not goal_handle.accepted:
-                self.get_logger().error("Manipulation server rejected chess move goal!")
-                self.transition_to(MissionState.ERROR_FALLBACK)
-                return
-
-            res_future = goal_handle.get_result_async()
-            res_future.add_done_callback(self._on_manipulation_completed)
-        except Exception as exc:
-            self.get_logger().error(f"Failed to submit manipulation goal: {exc}")
+        if not success:
+            self._cancel_action_watchdog()
             self.transition_to(MissionState.ERROR_FALLBACK)
 
-    def _on_manipulation_completed(self, future) -> None:
-        """Handle manipulation execution completion."""
+    def _build_manipulation_goal(
+        self,
+        details: ChessMoveGoal,
+        feasibility_resp: CheckMoveFeasibility.Response,
+        stage: ExecutionStage | None,
+    ) -> ExecuteChessMove.Goal:
+        goal = ExecuteChessMove.Goal()
+        cur_stage = stage or self._current_stage
+        if cur_stage is not None:
+            goal.instruction = cur_stage.instruction
+            goal.from_square = cur_stage.from_square
+            goal.to_square = cur_stage.to_square
+            goal.is_capture = cur_stage.is_capture
+            goal.pick_point = cur_stage.pick_point
+            goal.place_point = cur_stage.place_point
+        else:
+            goal.instruction = f"Pick {details.from_square}, place {details.to_square}"
+            goal.from_square = details.from_square
+            goal.to_square = details.to_square
+            goal.is_capture = details.is_capture
+            goal.pick_point = getattr(feasibility_resp, "pick_point", Point())
+            goal.place_point = getattr(feasibility_resp, "place_point", Point())
+
+        goal.target_frame = self.config.board_frame
+        if hasattr(feasibility_resp, "pick_ik_solution") and getattr(
+            feasibility_resp.pick_ik_solution, "name", None
+        ):
+            goal.pick_ik_hint = feasibility_resp.pick_ik_solution
+        if hasattr(feasibility_resp, "place_ik_solution") and getattr(
+            feasibility_resp.place_ik_solution, "name", None
+        ):
+            goal.place_ik_hint = feasibility_resp.place_ik_solution
+        return goal
+
+    def _on_manipulation_feedback(self, feedback_msg) -> None:
+        fb = getattr(feedback_msg, "feedback", feedback_msg)
+        phase = getattr(fb, "current_phase", "EXEC")
+        progress = getattr(fb, "progress_percent", 0.0)
+        self.get_logger().info(
+            f"[MANIPULATION FEEDBACK] Phase: {phase} ({progress:.1f}%)"
+        )
+
+    def _on_manipulation_goal_submitted(
+        self, goal_handle, details, feasibility_resp
+    ) -> None:
+        if goal_handle is None:
+            self._cancel_action_watchdog()
+            self.get_logger().error("Manipulation server rejected chess move goal!")
+            self.transition_to(MissionState.ERROR_FALLBACK)
+            return
+        self.get_logger().info("Manipulation goal accepted.")
+
+    def _on_manipulation_completed(self, future, details, feasibility_resp) -> None:
+        self._cancel_action_watchdog()
         try:
-            result = future.result().result
-            if result.success:
+            res_obj = future.result() if hasattr(future, "result") else future
+            result = getattr(res_obj, "result", res_obj)
+            if getattr(result, "success", False):
+                exec_time = getattr(result, "execution_time_sec", 0.0)
+                msg = getattr(result, "message", "OK")
                 self.get_logger().info(
-                    f"Manipulation execution successful in {result.execution_time_sec:.2f}s: {result.message}"
+                    f"Manipulation execution successful in {exec_time:.2f}s: {msg}"
                 )
-                self._finalize_turn()
+                self._advance_execution_pipeline()
             else:
-                self.get_logger().error(
-                    f"Manipulation execution failed: {result.message}"
-                )
+                msg = getattr(result, "message", "unknown failure")
+                self.get_logger().error(f"Manipulation execution failed: {msg}")
                 self.transition_to(MissionState.ERROR_FALLBACK)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self.get_logger().error(f"Error reading manipulation result: {exc}")
             self.transition_to(MissionState.ERROR_FALLBACK)
 
     def _finalize_turn(self) -> None:
         """Conclude robot turn and return to waiting for opponent."""
+        with self._state_lock:
+            self._execution_stages.clear()
+            self._current_stage = None
+            self._current_feasibility_resp = None
+            self._dual_base_phase = None
         self.transition_to(MissionState.TURN_COMPLETED)
         self.set_camera_mode(CameraMode.CHESS_THINKING)
         self.transition_to(MissionState.WAITING_FOR_PLAYER_MOVE)
@@ -596,44 +876,14 @@ class ChessMissionOrchestrator(Node):
             ">>> Turn finalized successfully. Waiting for opponent move."
         )
 
-    # ================= Diagnostics =================
-
-    def _publish_diagnostics(self) -> None:
-        """Publish mission state telemetry on /diagnostics."""
-        diag = DiagnosticStatus()
-        diag.name = "Chess Mission Orchestrator"
-        diag.hardware_id = "LeKiwi_Brain"
-
-        if self._mission_state == MissionState.ERROR_FALLBACK:
-            diag.level = DiagnosticStatus.ERROR
-            diag.message = "System in Error Fallback state"
-        elif not self.is_tf_ready:
-            diag.level = DiagnosticStatus.WARN
-            diag.message = "Waiting for TF readiness"
-        else:
-            diag.level = DiagnosticStatus.OK
-            diag.message = (
-                f"Active ({MISSION_STATE_NAMES.get(self._mission_state, 'UNKNOWN')})"
-            )
-
-        diag.values = [
-            KeyValue(
-                key="mission_state",
-                value=MISSION_STATE_NAMES.get(self._mission_state, "UNKNOWN"),
-            ),
-            KeyValue(
-                key="camera_mode",
-                value=CAMERA_MODE_NAMES.get(self._camera_mode, "UNKNOWN"),
-            ),
-            KeyValue(key="tf_ready", value=str(self._tf_ready)),
-            KeyValue(key="robot_color", value=self._robot_color),
-            KeyValue(key="last_goal_move", value=str(self._current_goal_move)),
-        ]
-
-        diag_array = DiagnosticArray()
-        diag_array.header.stamp = self.get_clock().now().to_msg()
-        diag_array.status.append(diag)
-        self._diag_pub.publish(diag_array)
+    def publish_diagnostics_snapshot(self) -> None:
+        """Delegate diagnostic snapshot to health monitor."""
+        with self._state_lock:
+            state = self._mission_state
+            cam_mode = self._camera_mode
+            goal = self._current_goal_move
+            phase = self._dual_base_phase
+        self._health_monitor.publish_diagnostics(state, cam_mode, goal, phase)
 
 
 def main(args=None):

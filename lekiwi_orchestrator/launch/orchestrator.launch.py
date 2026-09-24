@@ -58,16 +58,7 @@ def generate_launch_description():
         parameters=[params_file, {"use_sim_time": use_sim_time}],
     )
 
-    # 3. Camera Mode & Lifecycle Task Orchestrator
-    task_orchestrator_node = Node(
-        package="lekiwi_orchestrator",
-        executable="task_orchestrator",
-        name="task_orchestrator",
-        output="screen",
-        parameters=[params_file, {"use_sim_time": use_sim_time}],
-    )
-
-    # 4. Autonomous Chess Mission Conductor
+    # 3. Autonomous Chess Mission Conductor
     chess_mission_node = Node(
         package="lekiwi_orchestrator",
         executable="chess_mission_orchestrator",
@@ -84,7 +75,6 @@ def generate_launch_description():
             start_mission_arg,
             tf_gatekeeper_node,
             workspace_checker_node,
-            task_orchestrator_node,
             chess_mission_node,
         ]
     )

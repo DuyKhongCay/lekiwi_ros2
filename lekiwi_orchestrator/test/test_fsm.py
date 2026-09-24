@@ -3,15 +3,16 @@
 
 """Unit tests for LeKiwi State Pattern and FSM rules."""
 
-from lekiwi_interfaces.msg import CameraMode
+import itertools
+
 from lekiwi_orchestrator.fsm import (
-    ALLOWED_CAMERA_TRANSITIONS,
-    ALLOWED_MISSION_TRANSITIONS,
     MissionState,
     is_camera_transition_allowed,
     is_mission_transition_allowed,
     is_transition_allowed,
 )
+
+from lekiwi_interfaces.msg import CameraMode
 
 
 def test_canonical_camera_sequence_is_allowed():
@@ -25,7 +26,7 @@ def test_canonical_camera_sequence_is_allowed():
     ]
     assert all(
         is_camera_transition_allowed(current, requested)
-        for current, requested in zip(sequence, sequence[1:])
+        for current, requested in itertools.pairwise(sequence)
     )
 
 
@@ -56,7 +57,7 @@ def test_mission_fsm_canonical_workflow():
     ]
     assert all(
         is_mission_transition_allowed(curr, next_st)
-        for curr, next_st in zip(sequence, sequence[1:])
+        for curr, next_st in itertools.pairwise(sequence)
     )
 
 

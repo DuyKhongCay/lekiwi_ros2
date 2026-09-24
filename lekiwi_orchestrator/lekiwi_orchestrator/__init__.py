@@ -3,11 +3,6 @@
 
 """LeKiwi Orchestration package for chess autonomous mobile manipulation."""
 
-from lekiwi_orchestrator.chessboard_coordinate_mapper import (
-    ChessboardCoordinateMapper,
-    SquareCoordinate,
-    UciMoveDetails,
-)
 from lekiwi_orchestrator.fsm import (
     ALLOWED_CAMERA_TRANSITIONS,
     ALLOWED_MISSION_TRANSITIONS,
@@ -28,7 +23,4 @@ __all__ = [
     "MissionState",
     "is_camera_transition_allowed",
     "is_mission_transition_allowed",
-    "ChessboardCoordinateMapper",
-    "SquareCoordinate",
-    "UciMoveDetails",
 ]
