@@ -135,7 +135,7 @@ namespace lekiwi_motion::workspace
     {
       return std::nullopt;
     }
-    for (const auto &base : generate_standoff_candidates(pt, pt, base_z))
+    for (const auto &base : generate_standoff_candidates({pt}, base_z))
     {
       if (evaluated >= limit)
       {
@@ -249,23 +249,6 @@ namespace lekiwi_motion::workspace
     return candidates;
   }
 
-  std::vector<BasePose> WorkspacePlanner::generate_standoff_candidates(
-      const Point3D &pick,
-      const Point3D &place,
-      double base_z) const
-  {
-    return generate_standoff_candidates(std::vector<Point3D>{pick, place}, base_z);
-  }
-
-  std::vector<BasePose> WorkspacePlanner::generate_standoff_candidates_3(
-      const Point3D &p1,
-      const Point3D &p2,
-      const Point3D &p3,
-      double base_z) const
-  {
-    return generate_standoff_candidates(std::vector<Point3D>{p1, p2, p3}, base_z);
-  }
-
   PlanResult WorkspacePlanner::plan(
       const PlanningRequest &req,
       const PlanningContext &ctx,
@@ -309,7 +292,7 @@ namespace lekiwi_motion::workspace
     // Tier 1: Single Standoff Base
     const int remaining = config_.max_samples - evaluated;
     const int single_limit = evaluated + (remaining <= 2 ? remaining : remaining / 2);
-    for (const auto &base : generate_standoff_candidates(req.pick, req.place, base_z))
+    for (const auto &base : generate_standoff_candidates({req.pick, req.place}, base_z))
     {
       if (evaluated >= single_limit)
       {
@@ -379,7 +362,7 @@ namespace lekiwi_motion::workspace
     // Tier 1: Single Standoff Base covering all 3 points
     const int remaining = config_.max_samples - evaluated;
     const int single_limit = evaluated + (remaining <= 2 ? remaining : remaining / 2);
-    for (const auto &base : generate_standoff_candidates_3(req.clear, req.pick, req.place, base_z))
+    for (const auto &base : generate_standoff_candidates({req.clear, req.pick, req.place}, base_z))
     {
       if (evaluated >= single_limit)
       {

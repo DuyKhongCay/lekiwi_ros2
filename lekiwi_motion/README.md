@@ -1,6 +1,6 @@
 # lekiwi_control
 
-C++17 `ament_cmake` package: three composable nodes (`tf_gatekeeper_node`, `workspace_checker_node`, `torque_manager`) in `src/` and `include/`, with GTests in `test/`. Launch and robot configuration belong to `lekiwi_bringup`.
+C++17 `ament_cmake` package: three composable nodes (`system_readiness_node`, `workspace_checker_node`, `torque_manager`) in `src/` and `include/`, with GTests in `test/`. Launch and robot configuration belong to `lekiwi_bringup`.
 
 ## Launch
 
@@ -9,12 +9,12 @@ ros2 launch lekiwi_bringup control.launch.py
 ros2 launch lekiwi_bringup control.launch.py enable_readiness_checks:=false
 ```
 
-Only `enable_readiness_checks` and `use_sim_time` are launch arguments. Torque manager always starts; the combined switch controls both workspace checker and TF gatekeeper within the multithreaded component container `lekiwi_control_container`. This launch does not start hardware, orchestration, or manipulation.
+Only `enable_readiness_checks` and `use_sim_time` are launch arguments. Torque manager always starts; the combined switch controls both workspace checker and system readiness supervisor within the multithreaded component container `lekiwi_control_container`. This launch does not start hardware, orchestration, or manipulation.
 
 | Component | Generated executable |
 | `lekiwi_motion::TorqueManagerNode` | `torque_manager` |
 | `lekiwi_motion::WorkspaceCheckerNode` | `workspace_checker_node` |
-| `lekiwi_motion::TfGatekeeperNode` | `tf_gatekeeper_node` |
+| `lekiwi_motion::SystemReadinessNode` | `system_readiness_node` |
 
 `rclcpp_components_register_node` generates executable entry points using a single-threaded executor. All components can be loaded into an `rclcpp_components` container with intra-process communication.
 
@@ -27,7 +27,7 @@ Edit `lekiwi_bringup/config/control/controllers.yaml`. The launch loader supplie
 - `workspace_kinematics.hpp`: URDF chain model and closed-form analytical IK solver (`SO101AnalyticalSolver`).
 - `workspace_planner.hpp`: Pure domain service for mobile standoff candidate search and multi-tier move planning (`WorkspacePlanner`).
 - `workspace_checker_node.hpp` and `workspace_checker_node.cpp`: ROS parameters, a consistent TF snapshot, service conversion, and diagnostics; installed as `workspace_checker_node` and the `lekiwi_motion::WorkspaceCheckerNode` component.
-- `tf_gatekeeper_node.hpp`: pure freshness, standstill, and covariance predicates (`policy::fresh`, `policy::stationary`, `policy::converged`) along with the TF Gatekeeper node.
+- `system_readiness_state.hpp` and `system_readiness_node.hpp`: Pure dual readiness evaluation (`system_readiness_state.hpp`) for decoupled navigation and manipulation gating, periodic diagnostic updates, and automatic Nav2 lifecycle startup (`system_readiness_node.hpp`).
 - `torque_manager_node.hpp` & `torque_manager_node.cpp`: pure joint group tracking with precomputed indexing, read-only configuration, torque service, controller lifecycle management, and reliable command publisher.
 
 The analytical arm supports a vertical pan, three parallel horizontal pitch axes, and a wrist-roll axis aligned with the configured TCP approach axis. The extractor retains all fixed transforms, shoulder/lateral offsets, joint axes, and URDF angle conventions. Unsupported chains and invalid limits are rejected; no nominal arm model or tool length is substituted. Small CAD axis rounding is bounded by `kinematics.axis_tolerance`, and every successful IK result must pass full-chain position and orientation residual checks. This remains an endpoint feasibility checker, not a collision or trajectory checker.
@@ -45,10 +45,10 @@ Wheel-center radius is not the footprint radius: footprint padding and planning 
 | Node | Interface | Behavior |
 |---|---|---|
 | workspace_checker | `/workspace/check_move_feasibility` | Returns IK hints and map-frame base poses; rejects missing, stale, nonplanar TF and invalid input |
-| tf_gatekeeper_node | `/system/tf_ready`, `/system/check_tf_readiness` | Readiness heartbeat and query; fresh odometry, covariance, joints and TF required |
+| system_readiness_node | `/system/nav_ready`, `/system/grasp_ready` | Dual readiness heartbeats (Transient Local, Reliable); automatically autostarts Nav2 when nav readiness is attained |
 | torque_manager | `/set_torque_enabled` | Submits name-mapped torque commands; see startup policy below |
 
-Gatekeeper configures and activates through launch lifecycle handlers. EKF bootstrap uses `std_srvs/srv/Empty`, bounded waits and retry backoff. Deactivation clears observations and pending bootstrap state; reactivation requires fresh data. Readiness is a heartbeat, not a persistent authorization: consumers must expire it if the publisher disappears.
+System readiness publishes decoupled health signals: `/system/nav_ready` requires fresh odometry and base TF (and remains active during robot driving), whereas `/system/grasp_ready` requires standstill and fresh chessboard perception transforms prior to arm manipulation.
 
 Torque startup policy is `preserve`: startup and shutdown emit no torque command. State is unknown until an explicit `ALL` request initializes the complete command vector; partial requests are rejected beforehand. A successful response acknowledges command submission, not hardware application. The hardware driver's own startup behavior is unchanged.
 

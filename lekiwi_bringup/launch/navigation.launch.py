@@ -3,6 +3,7 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -33,7 +34,13 @@ def generate_launch_description():
     declare_autostart = DeclareLaunchArgument(
         "autostart",
         default_value="false",
-        description="Automatically startup the Nav2 stack (set false when gated by tf_gatekeeper)",
+        description="Automatically startup the Nav2 stack (set false when gated by system_readiness_node)",
+    )
+
+    declare_start_readiness = DeclareLaunchArgument(
+        "start_readiness_manager",
+        default_value="true",
+        description="Run system_readiness_node to automatically manage Nav2 lifecycle when navigation ready",
     )
 
     # Lifecycle node names for Nav2
@@ -116,16 +123,34 @@ def generate_launch_description():
         ],
     )
 
+    # 7. System Readiness & Nav2 Autostart Bridge
+    system_readiness_node = Node(
+        package="lekiwi_motion",
+        executable="system_readiness_node",
+        name="system_readiness_node",
+        output="screen",
+        parameters=[
+            {
+                "use_sim_time": use_sim_time,
+                "autostart_nav2": True,
+                "nav2_lifecycle_service": "/lifecycle_manager_navigation/manage_nodes",
+            }
+        ],
+        condition=IfCondition(LaunchConfiguration("start_readiness_manager")),
+    )
+
     return LaunchDescription(
         [
             declare_map_yaml,
             declare_use_sim_time,
             declare_autostart,
+            declare_start_readiness,
             map_server_node,
             planner_server_node,
             controller_server_node,
             behavior_server_node,
             bt_navigator_node,
             lifecycle_manager_node,
+            system_readiness_node,
         ]
     )

@@ -81,11 +81,20 @@ namespace lekiwi_motion
         std::bind(&WorkspaceCheckerNode::handle_check_move_feasibility, this,
                   std::placeholders::_1, std::placeholders::_2));
 
+    rclcpp::QoS pub_qos(1);
+    pub_qos.reliable();
+    pub_qos.transient_local();
+    feasibility_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
+        "~/feasibility_markers", pub_qos);
+
+    marker_builder_ = std::make_unique<visualization::FeasibilityMarkerBuilder>(
+        map_frame_, board_frame_);
+
     diag_updater_ = std::make_unique<diagnostic_updater::Updater>(this);
     diag_updater_->setHardwareID("lekiwi_workspace_checker");
     diag_updater_->add("Workspace Checker Feasibility", this, &WorkspaceCheckerNode::produce_diagnostics);
 
-    RCLCPP_INFO(get_logger(), "WorkspaceCheckerNode (Lean) initialized successfully");
+    RCLCPP_INFO(get_logger(), "WorkspaceCheckerNode (Lean) initialized successfully with FeasibilityMarkerBuilder");
   }
 
   void WorkspaceCheckerNode::load_parameters()
@@ -108,12 +117,6 @@ namespace lekiwi_motion
 
     // Board dimensions
     declare_fixed<std::vector<double>>(*this, "board_size", {0.390, 0.390}, "Board width and height in meters [w, h]");
-    declare_number(*this, "board.w", 0.390, 1e-6, 10.0, "Legacy board width fallback");
-    declare_number(*this, "board.h", 0.390, 1e-6, 10.0, "Legacy board height fallback");
-
-    // Optional tag arrays fallback for backwards compatibility
-    declare_fixed<std::vector<double>>(*this, "tag_positions_x", {}, "Optional tag X positions");
-    declare_fixed<std::vector<double>>(*this, "tag_positions_y", {}, "Optional tag Y positions");
 
     // Arm & Planning parameters
     declare_fixed<std::string>(*this, "robot_description", "", "URDF XML string if provided as parameter");
@@ -148,16 +151,13 @@ namespace lekiwi_motion
   void WorkspaceCheckerNode::init_workspace_bounds()
   {
     auto size = get_parameter("board_size").as_double_array();
-    if (size.size() == 2 && size[0] > 0.0 && size[1] > 0.0)
+    if (size.size() != 2 || size[0] <= 0.0 || size[1] <= 0.0)
     {
-      workspace_.half_w = size[0] * 0.5;
-      workspace_.half_h = size[1] * 0.5;
+      throw std::invalid_argument("board_size parameter must be a 2-element array with positive dimensions [width, height]");
     }
-    else
-    {
-      workspace_.half_w = get_parameter("board.w").as_double() * 0.5;
-      workspace_.half_h = get_parameter("board.h").as_double() * 0.5;
-    }
+
+    workspace_.half_w = size[0] * 0.5;
+    workspace_.half_h = size[1] * 0.5;
 
     if (!workspace_.is_valid())
     {
@@ -451,6 +451,18 @@ namespace lekiwi_motion
       const std::shared_ptr<lekiwi_interfaces::srv::CheckMoveFeasibility::Request> request,
       std::shared_ptr<lekiwi_interfaces::srv::CheckMoveFeasibility::Response> response)
   {
+    const std::string move_uci = request->move.from_square + request->move.to_square;
+    const auto now_stamp = get_clock()->now();
+
+    auto publish_markers_guard = [&]()
+    {
+      if (feasibility_pub_ && marker_builder_)
+      {
+        auto markers = marker_builder_->build(*response, move_uci, now_stamp);
+        feasibility_pub_->publish(std::move(markers));
+      }
+    };
+
     auto planner = get_planner_snapshot();
     if (!planner)
     {
@@ -460,21 +472,24 @@ namespace lekiwi_motion
         current_model_status = model_status_;
       }
       set_error_response(*response, workspace::FeasibilityStatus::MODEL_NOT_READY, current_model_status);
+      publish_markers_guard();
       return;
     }
 
     if (auto err = validate_request(*request); err.has_value())
     {
       set_error_response(*response, workspace::FeasibilityStatus::MALFORMED_REQUEST, *err);
+      publish_markers_guard();
       return;
     }
 
     workspace::FeasibilityStatus tf_status{workspace::FeasibilityStatus::TF_STALE};
     std::string tf_err;
-    auto tf_ctx = resolve_base_transforms(get_clock()->now(), tf_status, tf_err);
+    auto tf_ctx = resolve_base_transforms(now_stamp, tf_status, tf_err);
     if (!tf_ctx)
     {
       set_error_response(*response, tf_status, tf_err);
+      publish_markers_guard();
       return;
     }
 
@@ -483,6 +498,7 @@ namespace lekiwi_motion
     if (!targets)
     {
       set_error_response(*response, workspace::FeasibilityStatus::MALFORMED_REQUEST, target_err);
+      publish_markers_guard();
       return;
     }
 
@@ -495,12 +511,14 @@ namespace lekiwi_motion
     if (!plan.feasible)
     {
       set_error_response(*response, plan.status, plan.message);
+      publish_markers_guard();
       return;
     }
 
     populate_success_response(plan, *targets, *tf_ctx, *response);
     last_feasible_ = true;
     last_status_ = response->message;
+    publish_markers_guard();
   }
 
   void WorkspaceCheckerNode::produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat)

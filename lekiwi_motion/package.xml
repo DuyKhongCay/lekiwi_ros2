@@ -5,7 +5,7 @@
   <version>0.2.0</version>
   <description>
     LeKiwi Motion Subsystem: Workspace reachability planning, chess move kinematics,
-    TF readiness gatekeeper, and torque lifecycle management.
+    system readiness diagnostics, and torque lifecycle management.
   </description>
   <maintainer email="duykhongcay@todo.todo">duykhongcay</maintainer>
   <license>Apache-2.0</license>
@@ -28,10 +28,12 @@
   <depend>eigen</depend>
   <depend>lekiwi_interfaces</depend>
   <depend>controller_manager_msgs</depend>
+  <depend>visualization_msgs</depend>
 
   <depend>diagnostic_msgs</depend>
   <depend>lifecycle_msgs</depend>
   <depend>rcl_interfaces</depend>
+  <depend>nav2_msgs</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>

@@ -27,17 +27,30 @@ find_package(urdf REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(lekiwi_interfaces REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
 
-# ── C++ Component & Executable: tf_gatekeeper ─────────────────────────────────
-add_library(tf_gatekeeper_component SHARED
-  src/tf_gatekeeper_node.cpp
+# ── C++ Domain Library & Component: system_readiness ─────────────────────────
+add_library(system_readiness_state STATIC
+  src/system_readiness_state.cpp
 )
-target_include_directories(tf_gatekeeper_component PUBLIC
+set_target_properties(system_readiness_state PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(system_readiness_state PUBLIC cxx_std_17)
+target_include_directories(system_readiness_state PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
-target_compile_features(tf_gatekeeper_component PUBLIC cxx_std_17)
-target_link_libraries(tf_gatekeeper_component
+
+add_library(system_readiness_component SHARED
+  src/system_readiness_node.cpp
+)
+target_include_directories(system_readiness_component PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
+target_compile_features(system_readiness_component PUBLIC cxx_std_17)
+target_link_libraries(system_readiness_component
+  system_readiness_state
   rclcpp::rclcpp
   rclcpp_components::component
   diagnostic_updater::diagnostic_updater
@@ -48,12 +61,13 @@ target_link_libraries(tf_gatekeeper_component
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
+  ${nav2_msgs_TARGETS}
   tf2_ros::tf2_ros
   ${tf2_geometry_msgs_TARGETS}
 )
-rclcpp_components_register_node(tf_gatekeeper_component
-  PLUGIN "lekiwi_motion::TfGatekeeperNode"
-  EXECUTABLE tf_gatekeeper_node
+rclcpp_components_register_node(system_readiness_component
+  PLUGIN "lekiwi_motion::SystemReadinessNode"
+  EXECUTABLE system_readiness_node
 )
 
 # ── C++ Component & Executable: workspace_checker ─────────────────────────────
@@ -61,6 +75,7 @@ add_library(workspace_model STATIC
   src/workspace_kinematics.cpp
   src/workspace_planner.cpp
   src/chessboard_mapper.cpp
+  src/feasibility_marker_builder.cpp
 )
 set_target_properties(workspace_model PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(workspace_model PUBLIC cxx_std_17)
@@ -69,6 +84,8 @@ target_link_libraries(workspace_model PUBLIC
   Eigen3::Eigen
   urdf::urdf
   ${geometry_msgs_TARGETS}
+  ${visualization_msgs_TARGETS}
+  ${lekiwi_interfaces_TARGETS}
 )
 
 add_library(workspace_checker_component SHARED
@@ -90,6 +107,7 @@ target_link_libraries(workspace_checker_component
   ${sensor_msgs_TARGETS}
   ${std_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
+  ${visualization_msgs_TARGETS}
   tf2_ros::tf2_ros
   ${tf2_geometry_msgs_TARGETS}
   ${lekiwi_interfaces_TARGETS}
@@ -120,8 +138,9 @@ rclcpp_components_register_node(torque_manager_component
 )
 
 install(TARGETS
-  tf_gatekeeper_component
-  tf_gatekeeper_node
+  system_readiness_state
+  system_readiness_component
+  system_readiness_node
   workspace_checker_component
   workspace_checker_node
   torque_manager_component
@@ -177,15 +196,15 @@ if(BUILD_TESTING)
     ${std_msgs_TARGETS}
   )
 
-  ament_add_gtest(test_tf_gatekeeper_pure
-    test/test_tf_gatekeeper_pure.cpp
+  ament_add_gtest(test_system_readiness_state
+    test/test_system_readiness_state.cpp
   )
-  target_compile_features(test_tf_gatekeeper_pure PUBLIC cxx_std_17)
-  target_include_directories(test_tf_gatekeeper_pure PUBLIC
+  target_compile_features(test_system_readiness_state PUBLIC cxx_std_17)
+  target_include_directories(test_system_readiness_state PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
-  target_link_libraries(test_tf_gatekeeper_pure
-    tf_gatekeeper_component
+  target_link_libraries(test_system_readiness_state
+    system_readiness_state
   )
 
   ament_add_gtest(test_workspace_kinematics
@@ -201,6 +220,20 @@ if(BUILD_TESTING)
   add_dependencies(test_workspace_kinematics workspace_urdf_fixture)
   target_compile_definitions(test_workspace_kinematics PRIVATE
     WORKSPACE_URDF_PATH="${WORKSPACE_URDF}")
+
+  ament_add_gtest(test_feasibility_marker_builder
+    test/test_feasibility_marker_builder.cpp
+  )
+  target_compile_features(test_feasibility_marker_builder PUBLIC cxx_std_17)
+  target_include_directories(test_feasibility_marker_builder PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  target_link_libraries(test_feasibility_marker_builder
+    workspace_model
+    ${visualization_msgs_TARGETS}
+    ${lekiwi_interfaces_TARGETS}
+    rclcpp::rclcpp
+  )
 endif()
 
 ament_package()

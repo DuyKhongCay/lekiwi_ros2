@@ -18,8 +18,10 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include "lekiwi_motion/chessboard_mapper.hpp"
+#include "lekiwi_motion/feasibility_marker_builder.hpp"
 #include "lekiwi_motion/workspace_kinematics.hpp"
 #include "lekiwi_motion/workspace_planner.hpp"
 
@@ -98,8 +100,10 @@ namespace lekiwi_motion
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
         rclcpp::Service<lekiwi_interfaces::srv::CheckMoveFeasibility>::SharedPtr service_;
+        rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr feasibility_pub_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_desc_sub_;
         std::unique_ptr<diagnostic_updater::Updater> diag_updater_;
+        std::unique_ptr<visualization::FeasibilityMarkerBuilder> marker_builder_;
 
         // Frame names
         std::string map_frame_{"map"};

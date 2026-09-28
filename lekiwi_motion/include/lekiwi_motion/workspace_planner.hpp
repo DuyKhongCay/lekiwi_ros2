@@ -140,18 +140,6 @@ namespace lekiwi_motion::workspace
         const std::vector<Point3D> &targets,
         double base_z) const;
 
-    // Overloads for backwards compatibility
-    std::vector<BasePose> generate_standoff_candidates(
-        const Point3D &pick,
-        const Point3D &place,
-        double base_z) const;
-
-    std::vector<BasePose> generate_standoff_candidates_3(
-        const Point3D &p1,
-        const Point3D &p2,
-        const Point3D &p3,
-        double base_z) const;
-
     const WorkspaceConfig &config() const noexcept { return config_; }
     const KinematicsModel &model() const noexcept { return *model_; }
     const IIkSolver &solver() const noexcept { return *solver_; }
