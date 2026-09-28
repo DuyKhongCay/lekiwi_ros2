@@ -9,6 +9,8 @@ install(DIRECTORY urdf assets config launch
 
 install(PROGRAMS
   scripts/chessboard_marker_publisher.py
+  scripts/chess_rviz_visualizer.py
+  scripts/recenter_chess_pieces.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

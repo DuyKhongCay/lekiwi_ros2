@@ -87,6 +87,11 @@ def generate_launch_description():
             default_value="true",
             description="Publish AprilTag and gridline markers for the chessboard arena.",
         ),
+        DeclareLaunchArgument(
+            "visualize_chess_game",
+            default_value="true",
+            description="Launch chess_rviz_visualizer to show 3D pieces, moves, and HUD.",
+        ),
     ]
 
     chessboard_config = LaunchConfiguration("chessboard_config")
@@ -95,6 +100,7 @@ def generate_launch_description():
     publish_robot_state = LaunchConfiguration("publish_robot_state")
     gui = LaunchConfiguration("gui")
     publish_chessboard_markers = LaunchConfiguration("publish_chessboard_markers")
+    visualize_chess_game = LaunchConfiguration("visualize_chess_game")
 
     description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -133,6 +139,24 @@ def generate_launch_description():
         condition=IfCondition(publish_chessboard_markers),
     )
 
+    chess_visualizer_node = Node(
+        package="lekiwi_description",
+        executable="chess_rviz_visualizer.py",
+        name="chess_rviz_visualizer",
+        output="screen",
+        parameters=[
+            {
+                "use_sim_time": use_sim_time,
+                "chessboard_frame": "chessboard_frame",
+                "game_status_topic": "/chess/game_status",
+                "marker_topic": "/chess/game_markers",
+                "square_size": 0.0475,
+                "board_z": 0.006,
+            }
+        ],
+        condition=IfCondition(visualize_chess_game),
+    )
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -150,6 +174,7 @@ def generate_launch_description():
             description_launch,
             jsp_gui_node,
             chessboard_markers_node,
+            chess_visualizer_node,
             rviz_node,
         ]
     )
