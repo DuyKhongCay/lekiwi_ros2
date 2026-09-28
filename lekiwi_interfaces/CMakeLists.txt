@@ -13,11 +13,13 @@ find_package(sensor_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CameraMode.msg"
+  "msg/PerceptionContext.msg"
   "msg/ServoTelemetry.msg"
   "msg/DriveStatus.msg"
   "msg/ChessMoveDetails.msg"
   "msg/ChessGameStatus.msg"
   "srv/SetCamMode.srv"
+  "srv/SetPerceptionContext.srv"
   "srv/SetTorqueEnabled.srv"
   "srv/ResetMotorBus.srv"
   "srv/CheckMoveFeasibility.srv"

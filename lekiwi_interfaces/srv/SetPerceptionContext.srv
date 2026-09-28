@@ -1,0 +1,7 @@
+# Copyright 2026 LeKiwi Labs
+
+PerceptionContext requested_context
+---
+bool success
+PerceptionContext applied_context
+string message
