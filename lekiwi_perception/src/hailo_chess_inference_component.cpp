@@ -63,9 +63,9 @@ namespace lekiwi_perception
     detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>(detections_topic_, rclcpp::SensorDataQoS());
     grid_points_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(grid_points_topic_, rclcpp::SensorDataQoS());
 
-    mode_srv_ = create_service<lekiwi_interfaces::srv::SetCamMode>(
-        "~/set_mode",
-        std::bind(&HailoChessInferenceComponent::handle_set_mode, this,
+    context_srv_ = create_service<lekiwi_interfaces::srv::SetPerceptionContext>(
+        "~/set_perception_context",
+        std::bind(&HailoChessInferenceComponent::handle_set_perception_context, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     image_sub_ = create_subscription<sensor_msgs::msg::Image>(
@@ -86,7 +86,8 @@ namespace lekiwi_perception
 
     lifecycle_helper_ = std::make_unique<utils::PerceptionLifecycleHelper>(
         this, "hailo8_npu", "NPU_Pipeline_Status");
-    lifecycle_helper_->setup_camera_mode_sub({lekiwi_interfaces::msg::CameraMode::CHESS_THINKING});
+    lifecycle_helper_->setup_perception_context_sub({lekiwi_interfaces::msg::PerceptionContext::BOARD_STATE_SCAN,
+                                                     lekiwi_interfaces::msg::PerceptionContext::POST_MOVE_VERIFY});
     lifecycle_helper_->diagnostics().updater().add(
         "NPU_Pipeline_Status", this,
         &HailoChessInferenceComponent::produce_diagnostics);
@@ -196,7 +197,7 @@ namespace lekiwi_perception
       static_cast<void>(hailo_pipeline_->stop(std::chrono::milliseconds(500), ignored));
       hailo_pipeline_.reset();
     }
-    mode_srv_.reset();
+    context_srv_.reset();
     image_sub_.reset();
     tag_centers_sub_.reset();
     {
@@ -249,33 +250,33 @@ namespace lekiwi_perception
     }
   }
 
-  void HailoChessInferenceComponent::handle_set_mode(
-      const std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Request> request,
-      std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Response> response)
+  void HailoChessInferenceComponent::handle_set_perception_context(
+      const std::shared_ptr<lekiwi_interfaces::srv::SetPerceptionContext::Request> request,
+      std::shared_ptr<lekiwi_interfaces::srv::SetPerceptionContext::Response> response)
   {
-    const uint8_t req_mode = request->requested_mode.value;
-    if (req_mode > lekiwi_interfaces::msg::CameraMode::MANIPULATION_LEROBOT)
+    const uint8_t req_context = request->requested_context.value;
+    if (req_context > lekiwi_interfaces::msg::PerceptionContext::CALIBRATION_STREAM)
     {
       response->success = false;
-      response->applied_mode.value = lifecycle_helper_ ? lifecycle_helper_->get_current_mode() : 0;
-      response->message = "Invalid camera mode requested";
+      response->applied_context.value = lifecycle_helper_ ? lifecycle_helper_->get_current_context() : 0;
+      response->message = "Invalid perception context requested";
       return;
     }
 
     if (lifecycle_helper_)
     {
-      lifecycle_helper_->set_current_mode(req_mode);
+      lifecycle_helper_->set_current_context(req_context);
     }
     response->success = true;
-    response->applied_mode.value = req_mode;
-    response->message = "Camera mode applied successfully";
-    RCLCPP_INFO(get_logger(), "Camera mode set to %u", req_mode);
+    response->applied_context.value = req_context;
+    response->message = "Perception context applied successfully";
+    RCLCPP_INFO(get_logger(), "Perception context set to %u", req_context);
   }
 
   void HailoChessInferenceComponent::handle_image_input(
       const sensor_msgs::msg::Image::ConstSharedPtr &msg)
   {
-    if (!lifecycle_helper_ || !lifecycle_helper_->is_mode_allowed())
+    if (!lifecycle_helper_ || !lifecycle_helper_->is_context_allowed())
     {
       return;
     }
@@ -456,23 +457,13 @@ namespace lekiwi_perception
     }
 
     double lat_ms = 0.0;
-    if (pipeline != nullptr && GST_BUFFER_PTS_IS_VALID(buffer))
+    if (header.stamp.sec > 0 || header.stamp.nanosec > 0)
     {
-      GstClock *clock = gst_element_get_clock(pipeline);
-      if (clock != nullptr)
+      const rclcpp::Time img_time(header.stamp);
+      const rclcpp::Time current_time = now();
+      if (current_time >= img_time)
       {
-        const GstClockTime now_gst = gst_clock_get_time(clock);
-        const GstClockTime base_time = gst_element_get_base_time(pipeline);
-        if (now_gst >= base_time)
-        {
-          const GstClockTime running_time = now_gst - base_time;
-          const GstClockTime pts = GST_BUFFER_PTS(buffer);
-          if (running_time >= pts)
-          {
-            lat_ms = static_cast<double>(running_time - pts) / 1000000.0;
-          }
-        }
-        gst_object_unref(clock);
+        lat_ms = (current_time - img_time).seconds() * 1000.0;
       }
     }
 

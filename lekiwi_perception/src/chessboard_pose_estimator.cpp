@@ -118,10 +118,12 @@ namespace lekiwi_perception
             this, "ChessboardPoseEstimator", "Chessboard Tracker Status");
       }
 
-      const std::vector<uint8_t> allowed_modes = {
-          lekiwi_interfaces::msg::CameraMode::STANDBY,
-          lekiwi_interfaces::msg::CameraMode::CHESS_THINKING};
-      lifecycle_helper_->setup_camera_mode_sub(allowed_modes);
+      const std::vector<uint8_t> allowed_contexts = {
+          lekiwi_interfaces::msg::PerceptionContext::TF_TRACKING_AND_NAV,
+          lekiwi_interfaces::msg::PerceptionContext::BOARD_STATE_SCAN,
+          lekiwi_interfaces::msg::PerceptionContext::POST_MOVE_VERIFY,
+          lekiwi_interfaces::msg::PerceptionContext::CALIBRATION_STREAM};
+      lifecycle_helper_->setup_perception_context_sub(allowed_contexts);
 
       lifecycle_helper_->diagnostics().updater().add(
           "Chessboard Tracker Status", this, &ChessboardPoseEstimator::produce_diagnostics);
@@ -440,7 +442,7 @@ namespace lekiwi_perception
       const sensor_msgs::msg::Image::ConstSharedPtr &msg)
   {
     const bool is_active = (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
-    const bool allow_detection = calib_ || (lifecycle_helper_ && lifecycle_helper_->is_mode_allowed());
+    const bool allow_detection = calib_ || (lifecycle_helper_ && lifecycle_helper_->is_context_allowed());
 
     if (!is_active || !allow_detection || !has_camera_info_)
     {

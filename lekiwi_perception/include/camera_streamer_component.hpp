@@ -27,7 +27,7 @@
 
 #include <camera_info_manager/camera_info_manager.hpp>
 #include <diagnostic_updater/diagnostic_updater.hpp>
-#include "lekiwi_interfaces/msg/camera_mode.hpp"
+#include "lekiwi_interfaces/msg/perception_context.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
@@ -61,7 +61,7 @@ namespace lekiwi_perception
 
     // Public getters & helpers for testing / status introspection
     [[nodiscard]] bool is_streaming() const noexcept;
-    [[nodiscard]] uint8_t current_camera_mode() const noexcept;
+    [[nodiscard]] uint8_t current_perception_context() const noexcept;
     [[nodiscard]] bool is_valve_open() const;
     [[nodiscard]] sensor_msgs::msg::CameraInfo scale_camera_info(
         const sensor_msgs::msg::CameraInfo &orig_info,
@@ -104,7 +104,7 @@ namespace lekiwi_perception
     bool use_sensor_data_qos_{true};
     bool autostart_{true};
     bool calib_mode_{false};
-    std::vector<int64_t> active_modes_;
+    std::vector<int64_t> active_contexts_;
     std::string valve_name_{"gate"};
     int64_t output_size_{0};
     bool add_border_{false};

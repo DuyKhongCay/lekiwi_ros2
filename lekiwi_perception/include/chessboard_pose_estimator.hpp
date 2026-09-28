@@ -36,7 +36,7 @@
 #include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
-#include "lekiwi_interfaces/msg/camera_mode.hpp"
+#include "lekiwi_interfaces/msg/perception_context.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"

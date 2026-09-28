@@ -34,7 +34,7 @@ namespace lekiwi_perception
     declare_parameter<bool>("use_sensor_data_qos", true);
     declare_parameter<bool>("autostart", true);
     declare_parameter<bool>("calib_mode", false);
-    declare_parameter<std::vector<int64_t>>("active_modes", std::vector<int64_t>{});
+    declare_parameter<std::vector<int64_t>>("active_contexts", std::vector<int64_t>{});
     declare_parameter<std::string>("valve_name", "gate");
     declare_parameter<int64_t>("output_size", 0);
     declare_parameter<bool>("add_border", false);
@@ -67,7 +67,7 @@ namespace lekiwi_perception
       use_gst_timestamps_ = get_parameter("use_gst_timestamps").as_bool();
       use_sensor_data_qos_ = get_parameter("use_sensor_data_qos").as_bool();
       calib_mode_ = get_parameter("calib_mode").as_bool();
-      active_modes_ = get_parameter("active_modes").as_integer_array();
+      active_contexts_ = get_parameter("active_contexts").as_integer_array();
       valve_name_ = get_parameter("valve_name").as_string();
       output_size_ = get_parameter("output_size").as_int();
       add_border_ = get_parameter("add_border").as_bool();
@@ -85,10 +85,10 @@ namespace lekiwi_perception
         camera_info_manager_->loadCameraInfo(camera_info_url_);
       }
 
-      const bool only_mode_3 = !active_modes_.empty() &&
-                               std::all_of(active_modes_.begin(), active_modes_.end(), [](int64_t m)
-                                           { return m == 3; });
-      if (only_mode_3)
+      const bool only_manipulation = !active_contexts_.empty() &&
+                                     std::all_of(active_contexts_.begin(), active_contexts_.end(), [](int64_t m)
+                                                 { return m == lekiwi_interfaces::msg::PerceptionContext::MANIPULATION_ACTOR; });
+      if (only_manipulation)
       {
         publish_raw_ = false;
         publish_compressed_ = true;
@@ -117,15 +117,15 @@ namespace lekiwi_perception
       }
 
       std::vector<uint8_t> active_u8;
-      active_u8.reserve(active_modes_.size());
-      for (int64_t m : active_modes_)
+      active_u8.reserve(active_contexts_.size());
+      for (int64_t m : active_contexts_)
       {
         active_u8.push_back(static_cast<uint8_t>(m));
       }
 
-      lifecycle_helper_->setup_camera_mode_sub(
+      lifecycle_helper_->setup_perception_context_sub(
           active_u8,
-          [this](uint8_t /*new_mode*/)
+          [this](uint8_t /*new_context*/)
           {
             this->update_valve_state();
           });
@@ -431,10 +431,10 @@ namespace lekiwi_perception
     const uint8_t state_id = get_current_state().id();
     const bool is_active = (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE ||
                             state_id == lifecycle_msgs::msg::State::TRANSITION_STATE_ACTIVATING);
-    const bool mode_allowed = !lifecycle_helper_ || lifecycle_helper_->is_mode_allowed();
-    const uint8_t mode = lifecycle_helper_ ? lifecycle_helper_->get_current_mode() : 0;
+    const bool context_allowed = !lifecycle_helper_ || lifecycle_helper_->is_context_allowed();
+    const uint8_t context = lifecycle_helper_ ? lifecycle_helper_->get_current_context() : 0;
 
-    const bool should_stream = calib_mode_ || (is_active && mode_allowed);
+    const bool should_stream = calib_mode_ || (is_active && context_allowed);
     const bool prev_streaming = is_streaming_.exchange(should_stream);
 
     if (valve_ != nullptr)
@@ -447,10 +447,10 @@ namespace lekiwi_perception
     {
       RCLCPP_INFO(
           get_logger(),
-          "[%s] Valve state changed: %s (calib_mode=%d, mode=%u, allowed=%d, active=%d)",
+          "[%s] Valve state changed: %s (calib_mode=%d, context=%u, allowed=%d, active=%d)",
           camera_name_.c_str(),
           should_stream ? "OPEN (streaming)" : "DROPPING (idle)",
-          calib_mode_ ? 1 : 0, mode, mode_allowed, is_active);
+          calib_mode_ ? 1 : 0, context, context_allowed, is_active);
     }
   }
 
@@ -788,9 +788,9 @@ namespace lekiwi_perception
     return is_streaming_.load();
   }
 
-  uint8_t CameraStreamerComponent::current_camera_mode() const noexcept
+  uint8_t CameraStreamerComponent::current_perception_context() const noexcept
   {
-    return lifecycle_helper_ ? lifecycle_helper_->get_current_mode() : 0;
+    return lifecycle_helper_ ? lifecycle_helper_->get_current_context() : 0;
   }
 
   bool CameraStreamerComponent::is_valve_open() const

@@ -75,7 +75,7 @@ def generate_launch_description():
         remappings=[
             ("~/image_raw", "/cameras/stereo_left/image_raw"),
             ("~/camera_info", "/cameras/stereo_left/camera_info"),
-            ("~/camera_mode", "/camera_mode"),
+            ("~/perception_context", "/perception_context"),
         ],
         parameters=[chessboard_params_file],
         extra_arguments=[{"use_intra_process_comms": True}],

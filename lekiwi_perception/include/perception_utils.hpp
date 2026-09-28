@@ -27,7 +27,7 @@
 #include <vector>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
-#include <lekiwi_interfaces/msg/camera_mode.hpp>
+#include <lekiwi_interfaces/msg/perception_context.hpp>
 #include <lifecycle_msgs/msg/state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
@@ -136,15 +136,15 @@ namespace lekiwi_perception::utils
    * @brief Composition-over-inheritance lifecycle helper.
    *
    * Manages:
-   * 1. Relative "~/camera_mode" topic subscription with latched QoS.
-   * 2. Allowed camera modes list and `is_mode_allowed()` gating.
+   * 1. Relative "~/perception_context" topic subscription with latched QoS.
+   * 2. Allowed perception contexts list and `is_context_allowed()` gating.
    * 3. Optional 1ms autostart timer.
    * 4. Integrated diagnostics updater and performance tracking.
    */
   class PerceptionLifecycleHelper
   {
   public:
-    using ModeChangedCallback = std::function<void(uint8_t new_mode)>;
+    using ContextChangedCallback = std::function<void(uint8_t new_context)>;
 
     PerceptionLifecycleHelper(
         rclcpp_lifecycle::LifecycleNode *node,
@@ -152,27 +152,28 @@ namespace lekiwi_perception::utils
         const std::string &task_name);
 
     /**
-     * @brief Configures subscription to ~/camera_mode.
-     * @param[in] allowed_modes Set of allowed modes. If empty, all modes are allowed.
-     * @param[in] on_mode_changed Optional callback fired when mode value changes.
+     * @brief Configures subscription to /perception_context.
+     * @param[in] allowed_contexts Set of allowed contexts. If empty, all contexts are allowed.
+     * @param[in] on_context_changed Optional callback fired when context value changes.
+     * @param[in] topic_name Topic name for perception context.
      */
-    void setup_camera_mode_sub(
-        const std::vector<uint8_t> &allowed_modes = {},
-        ModeChangedCallback on_mode_changed = nullptr,
-        const std::string &topic_name = "/camera_mode");
+    void setup_perception_context_sub(
+        const std::vector<uint8_t> &allowed_contexts = {},
+        ContextChangedCallback on_context_changed = nullptr,
+        const std::string &topic_name = "/perception_context");
 
     /**
-     * @brief Sets allowed modes dynamically.
+     * @brief Sets allowed contexts dynamically.
      */
-    void set_allowed_modes(const std::vector<uint8_t> &allowed_modes);
+    void set_allowed_contexts(const std::vector<uint8_t> &allowed_contexts);
 
     /**
-     * @brief Checks if the current camera mode is within the allowed modes list.
+     * @brief Checks if the current perception context is within the allowed contexts list.
      */
-    [[nodiscard]] bool is_mode_allowed() const noexcept;
+    [[nodiscard]] bool is_context_allowed() const noexcept;
 
-    [[nodiscard]] uint8_t get_current_mode() const noexcept;
-    void set_current_mode(uint8_t mode) noexcept;
+    [[nodiscard]] uint8_t get_current_context() const noexcept;
+    void set_current_context(uint8_t context) noexcept;
 
     /**
      * @brief Configures one-shot 1ms autostart timer to configure and activate node.
@@ -198,15 +199,15 @@ namespace lekiwi_perception::utils
         PerceptionDiagnosticsHelper::CustomFieldsFn custom_fields_fn = nullptr);
 
   private:
-    void on_camera_mode_msg(const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg);
+    void on_perception_context_msg(const lekiwi_interfaces::msg::PerceptionContext::ConstSharedPtr &msg);
 
     rclcpp_lifecycle::LifecycleNode *node_{nullptr};
-    std::atomic<uint8_t> current_mode_{lekiwi_interfaces::msg::CameraMode::STANDBY};
-    std::vector<uint8_t> allowed_modes_;
-    mutable std::mutex mode_mutex_;
+    std::atomic<uint8_t> current_context_{lekiwi_interfaces::msg::PerceptionContext::IDLE_STANDBY};
+    std::vector<uint8_t> allowed_contexts_;
+    mutable std::mutex context_mutex_;
 
-    ModeChangedCallback mode_changed_cb_;
-    rclcpp::Subscription<lekiwi_interfaces::msg::CameraMode>::SharedPtr mode_sub_;
+    ContextChangedCallback context_changed_cb_;
+    rclcpp::Subscription<lekiwi_interfaces::msg::PerceptionContext>::SharedPtr context_sub_;
     rclcpp::TimerBase::SharedPtr autostart_timer_;
 
     std::unique_ptr<PerceptionDiagnosticsHelper> diag_helper_;

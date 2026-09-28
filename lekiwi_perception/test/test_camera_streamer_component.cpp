@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "camera_streamer_component.hpp"
-#include "lekiwi_interfaces/msg/camera_mode.hpp"
+#include "lekiwi_interfaces/msg/perception_context.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 class CameraStreamerComponentTest : public ::testing::Test
@@ -41,7 +41,7 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
   options.parameter_overrides({{"camera_name", "test_camera"},
                                {"frame_id", "test_camera_optical"},
                                {"gscam_config", "videotestsrc is-live=true ! valve name=gate drop=true ! video/x-raw,format=RGB,width=320,height=240,framerate=15/1"},
-                               {"active_modes", std::vector<int64_t>{0, 2}},
+                               {"active_contexts", std::vector<int64_t>{0, 2}},
                                {"autostart", false}});
 
   auto node = std::make_shared<lekiwi_perception::CameraStreamerComponent>(options);
@@ -60,7 +60,7 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
   state = node->activate();
   ASSERT_EQ(state.label(), "active");
 
-  // In STANDBY mode (0), active_modes [0, 2] allows streaming immediately without subscribers
+  // In IDLE_STANDBY context (0), active_contexts [0, 2] allows streaming immediately without subscribers
   EXPECT_TRUE(node->is_streaming());
   EXPECT_TRUE(node->is_valve_open());
 
@@ -69,13 +69,13 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
   exec.add_node(node->get_node_base_interface());
   exec.add_node(helper_node);
 
-  auto mode_pub = helper_node->create_publisher<lekiwi_interfaces::msg::CameraMode>(
-      "/camera_mode", rclcpp::QoS(1).reliable().transient_local());
+  auto context_pub = helper_node->create_publisher<lekiwi_interfaces::msg::PerceptionContext>(
+      "/perception_context", rclcpp::QoS(1).reliable().transient_local());
 
-  // Switch mode to NAVIGATING (1) -> should drop/gate since 1 is not in [0, 2]
-  auto mode_msg = std::make_shared<lekiwi_interfaces::msg::CameraMode>();
-  mode_msg->value = lekiwi_interfaces::msg::CameraMode::NAVIGATING;
-  mode_pub->publish(*mode_msg);
+  // Switch context to TF_TRACKING_AND_NAV (1) -> should drop/gate since 1 is not in [0, 2]
+  auto context_msg = std::make_shared<lekiwi_interfaces::msg::PerceptionContext>();
+  context_msg->value = lekiwi_interfaces::msg::PerceptionContext::TF_TRACKING_AND_NAV;
+  context_pub->publish(*context_msg);
 
   for (int i = 0; i < 10; ++i)
   {
@@ -83,13 +83,13 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
 
-  EXPECT_EQ(node->current_camera_mode(), lekiwi_interfaces::msg::CameraMode::NAVIGATING);
+  EXPECT_EQ(node->current_perception_context(), lekiwi_interfaces::msg::PerceptionContext::TF_TRACKING_AND_NAV);
   EXPECT_FALSE(node->is_streaming());
   EXPECT_FALSE(node->is_valve_open());
 
-  // Switch mode to CHESS_THINKING (2) -> should open since 2 is in [0, 2]
-  mode_msg->value = lekiwi_interfaces::msg::CameraMode::CHESS_THINKING;
-  mode_pub->publish(*mode_msg);
+  // Switch context to BOARD_STATE_SCAN (2) -> should open since 2 is in [0, 2]
+  context_msg->value = lekiwi_interfaces::msg::PerceptionContext::BOARD_STATE_SCAN;
+  context_pub->publish(*context_msg);
 
   for (int i = 0; i < 10; ++i)
   {
@@ -97,13 +97,13 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
 
-  EXPECT_EQ(node->current_camera_mode(), lekiwi_interfaces::msg::CameraMode::CHESS_THINKING);
+  EXPECT_EQ(node->current_perception_context(), lekiwi_interfaces::msg::PerceptionContext::BOARD_STATE_SCAN);
   EXPECT_TRUE(node->is_streaming());
   EXPECT_TRUE(node->is_valve_open());
 
-  // Switch mode to MANIPULATION_LEROBOT (3) -> should drop/gate
-  mode_msg->value = lekiwi_interfaces::msg::CameraMode::MANIPULATION_LEROBOT;
-  mode_pub->publish(*mode_msg);
+  // Switch context to MANIPULATION_ACTOR (3) -> should drop/gate
+  context_msg->value = lekiwi_interfaces::msg::PerceptionContext::MANIPULATION_ACTOR;
+  context_pub->publish(*context_msg);
 
   for (int i = 0; i < 10; ++i)
   {
@@ -111,7 +111,7 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
 
-  EXPECT_EQ(node->current_camera_mode(), lekiwi_interfaces::msg::CameraMode::MANIPULATION_LEROBOT);
+  EXPECT_EQ(node->current_perception_context(), lekiwi_interfaces::msg::PerceptionContext::MANIPULATION_ACTOR);
   EXPECT_FALSE(node->is_streaming());
   EXPECT_FALSE(node->is_valve_open());
 
@@ -130,13 +130,13 @@ TEST_F(CameraStreamerComponentTest, BasicLifecycleAndGating)
   EXPECT_EQ(state.label(), "finalized");
 }
 
-TEST_F(CameraStreamerComponentTest, Mode3CompressedPublisher)
+TEST_F(CameraStreamerComponentTest, ManipulationCompressedPublisher)
 {
   rclcpp::NodeOptions options;
   options.parameter_overrides({{"camera_name", "test_jpeg_camera"},
                                {"frame_id", "test_jpeg_optical"},
                                {"gscam_config", "videotestsrc is-live=true ! valve name=gate drop=true ! video/x-raw,format=I420,width=320,height=240,framerate=15/1 ! jpegenc quality=80 ! image/jpeg"},
-                               {"active_modes", std::vector<int64_t>{3}},
+                               {"active_contexts", std::vector<int64_t>{3}},
                                {"autostart", false}});
 
   auto node = std::make_shared<lekiwi_perception::CameraStreamerComponent>(options);
@@ -145,7 +145,7 @@ TEST_F(CameraStreamerComponentTest, Mode3CompressedPublisher)
   state = node->activate();
   ASSERT_EQ(state.label(), "active");
 
-  // In STANDBY mode (0), active_modes [3] will drop
+  // In IDLE_STANDBY context (0), active_contexts [3] will drop
   EXPECT_FALSE(node->is_streaming());
   EXPECT_FALSE(node->is_valve_open());
 
@@ -165,12 +165,12 @@ TEST_F(CameraStreamerComponentTest, Mode3CompressedPublisher)
         }
       });
 
-  auto mode_pub = helper_node->create_publisher<lekiwi_interfaces::msg::CameraMode>(
-      "/camera_mode", rclcpp::QoS(1).reliable().transient_local());
+  auto context_pub = helper_node->create_publisher<lekiwi_interfaces::msg::PerceptionContext>(
+      "/perception_context", rclcpp::QoS(1).reliable().transient_local());
 
-  auto mode_msg = std::make_shared<lekiwi_interfaces::msg::CameraMode>();
-  mode_msg->value = lekiwi_interfaces::msg::CameraMode::MANIPULATION_LEROBOT;
-  mode_pub->publish(*mode_msg);
+  auto context_msg = std::make_shared<lekiwi_interfaces::msg::PerceptionContext>();
+  context_msg->value = lekiwi_interfaces::msg::PerceptionContext::MANIPULATION_ACTOR;
+  context_pub->publish(*context_msg);
 
   for (int i = 0; i < 20; ++i)
   {
@@ -178,7 +178,7 @@ TEST_F(CameraStreamerComponentTest, Mode3CompressedPublisher)
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
 
-  EXPECT_EQ(node->current_camera_mode(), lekiwi_interfaces::msg::CameraMode::MANIPULATION_LEROBOT);
+  EXPECT_EQ(node->current_perception_context(), lekiwi_interfaces::msg::PerceptionContext::MANIPULATION_ACTOR);
   EXPECT_TRUE(node->is_streaming());
   EXPECT_TRUE(node->is_valve_open());
   EXPECT_GT(compressed_count, 0U);

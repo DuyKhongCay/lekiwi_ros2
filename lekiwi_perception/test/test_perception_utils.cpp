@@ -124,29 +124,29 @@ TEST_F(PerceptionUtilsTest, CameraInfoScalerCenterCrop)
 // PerceptionDiagnosticsHelper & PerceptionLifecycleHelper Tests
 // =============================================================================
 
-TEST_F(PerceptionUtilsTest, PerceptionLifecycleHelperModeGating)
+TEST_F(PerceptionUtilsTest, PerceptionLifecycleHelperContextGating)
 {
   auto node = std::make_shared<rclcpp_lifecycle::LifecycleNode>("test_lifecycle_node");
   PerceptionLifecycleHelper helper(node.get(), "test_hw", "test_task");
 
-  // Allow mode 0 (STANDBY) and mode 2 (CHESS_THINKING)
-  uint8_t notified_mode = 255;
-  helper.setup_camera_mode_sub({0, 2}, [&](uint8_t m)
-                               { notified_mode = m; }, "/test_camera_mode");
+  // Allow context 0 (IDLE_STANDBY) and context 2 (BOARD_STATE_SCAN)
+  uint8_t notified_context = 255;
+  helper.setup_perception_context_sub({0, 2}, [&](uint8_t c)
+                                      { notified_context = c; }, "/test_perception_context");
 
-  EXPECT_TRUE(helper.is_mode_allowed()); // Standby is 0 by default
-  EXPECT_EQ(helper.get_current_mode(), 0);
+  EXPECT_TRUE(helper.is_context_allowed()); // Standby is 0 by default
+  EXPECT_EQ(helper.get_current_context(), 0);
 
-  // Set mode to 1 (NAVIGATING) -> not allowed
-  helper.set_current_mode(1);
-  EXPECT_EQ(notified_mode, 1);
-  EXPECT_EQ(helper.get_current_mode(), 1);
-  EXPECT_FALSE(helper.is_mode_allowed());
+  // Set context to 1 (TF_TRACKING_AND_NAV) -> not allowed
+  helper.set_current_context(1);
+  EXPECT_EQ(notified_context, 1);
+  EXPECT_EQ(helper.get_current_context(), 1);
+  EXPECT_FALSE(helper.is_context_allowed());
 
-  // Set mode to 2 (CHESS_THINKING) -> allowed
-  helper.set_current_mode(2);
-  EXPECT_EQ(notified_mode, 2);
-  EXPECT_TRUE(helper.is_mode_allowed());
+  // Set context to 2 (BOARD_STATE_SCAN) -> allowed
+  helper.set_current_context(2);
+  EXPECT_EQ(notified_context, 2);
+  EXPECT_TRUE(helper.is_context_allowed());
 }
 
 TEST_F(PerceptionUtilsTest, PerceptionDiagnosticsStatusEvaluation)

@@ -21,8 +21,8 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <vision_msgs/msg/detection2_d_array.hpp>
-#include <lekiwi_interfaces/srv/set_cam_mode.hpp>
-#include <lekiwi_interfaces/msg/camera_mode.hpp>
+#include <lekiwi_interfaces/srv/set_perception_context.hpp>
+#include <lekiwi_interfaces/msg/perception_context.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -87,14 +87,14 @@ namespace lekiwi_perception
     CallbackReturn on_shutdown(const rclcpp_lifecycle::State &state) override;
     CallbackReturn on_error(const rclcpp_lifecycle::State &state) override;
 
-    [[nodiscard]] uint8_t current_camera_mode() const noexcept
+    [[nodiscard]] uint8_t current_perception_context() const noexcept
     {
-      return lifecycle_helper_ ? lifecycle_helper_->get_current_mode() : 0;
+      return lifecycle_helper_ ? lifecycle_helper_->get_current_context() : 0;
     }
 
-    void handle_set_mode(
-        const std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Request> request,
-        std::shared_ptr<lekiwi_interfaces::srv::SetCamMode::Response> response);
+    void handle_set_perception_context(
+        const std::shared_ptr<lekiwi_interfaces::srv::SetPerceptionContext::Request> request,
+        std::shared_ptr<lekiwi_interfaces::srv::SetPerceptionContext::Response> response);
 
   private:
     void handle_sample(GstSample *sample, GstElement *pipeline);
@@ -125,7 +125,7 @@ namespace lekiwi_perception
     rclcpp_lifecycle::LifecyclePublisher<vision_msgs::msg::Detection2DArray>::SharedPtr detections_pub_;
     rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PolygonStamped>::SharedPtr grid_points_pub_;
 
-    rclcpp::Service<lekiwi_interfaces::srv::SetCamMode>::SharedPtr mode_srv_;
+    rclcpp::Service<lekiwi_interfaces::srv::SetPerceptionContext>::SharedPtr context_srv_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr tag_centers_sub_;
     std::mutex tags_mutex_;

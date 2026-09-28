@@ -11,7 +11,7 @@ This package registers four C++ plugins using `rclcpp_components`:
 ### 1. `CameraStreamerComponent`
 Lifecycle-managed camera driver using GStreamer 1.0.
 - Supports CSI cameras via `libcamerasrc` (Raspberry Pi 5 RP1 CSI) and USB cameras via `v4l2src`.
-- Features dynamic GStreamer `valve` gating based on the `/camera_mode` topic: when the camera is not in the configured `active_modes`, frames are dropped immediately at the source with 0 CPU overhead.
+- Features dynamic GStreamer `valve` gating based on the `/perception_context` topic: when the camera is not in the configured `active_contexts`, frames are dropped immediately at the source with 0 CPU overhead.
 - Publishes ROS 2 `sensor_msgs/msg/Image`, `sensor_msgs/msg/CompressedImage`, and `sensor_msgs/msg/CameraInfo`.
 
 ### 2. `HailoChessInferenceComponent`
@@ -74,7 +74,7 @@ lekiwi_perception/
 ### Subscribed Topics
 | Topic | Type | Description |
 |---|---|---|
-| `/camera_mode` | `lekiwi_interfaces/msg/CameraMode` | Latched system camera mode used for dynamic valve gating. |
+| `/perception_context` | `lekiwi_interfaces/msg/PerceptionContext` | Latched system perception context used for dynamic valve gating. |
 | `/cameras/stereo_left/image_raw` | `sensor_msgs/msg/Image` | Input frame for chess piece and board inference. |
 | `/chess/detections_2d` | `vision_msgs/msg/Detection2DArray` | Input piece bounding boxes for overlay. |
 | `/chess/tag_centers` | `geometry_msgs/msg/PolygonStamped` | Tag corner points for overlay. |
@@ -83,7 +83,7 @@ lekiwi_perception/
 ### Services
 | Service | Type | Description |
 |---|---|---|
-| `/hailo_chess_inference/set_camera_mode` | `lekiwi_interfaces/srv/SetCamMode` | Directly set mode for the inference component. |
+| `/hailo_chess_inference/set_perception_context` | `lekiwi_interfaces/srv/SetPerceptionContext` | Directly set perception context for the inference component. |
 
 ---
 

@@ -278,65 +278,65 @@ namespace lekiwi_perception::utils
   {
   }
 
-  void PerceptionLifecycleHelper::setup_camera_mode_sub(
-      const std::vector<uint8_t> &allowed_modes,
-      ModeChangedCallback on_mode_changed,
+  void PerceptionLifecycleHelper::setup_perception_context_sub(
+      const std::vector<uint8_t> &allowed_contexts,
+      ContextChangedCallback on_context_changed,
       const std::string &topic_name)
   {
-    set_allowed_modes(allowed_modes);
-    mode_changed_cb_ = std::move(on_mode_changed);
+    set_allowed_contexts(allowed_contexts);
+    context_changed_cb_ = std::move(on_context_changed);
 
     if (!node_)
     {
       return;
     }
 
-    rclcpp::QoS mode_qos(1);
-    mode_qos.reliable();
-    mode_qos.transient_local();
+    rclcpp::QoS context_qos(1);
+    context_qos.reliable();
+    context_qos.transient_local();
 
-    mode_sub_ = node_->create_subscription<lekiwi_interfaces::msg::CameraMode>(
-        topic_name, mode_qos,
-        std::bind(&PerceptionLifecycleHelper::on_camera_mode_msg, this, std::placeholders::_1));
+    context_sub_ = node_->create_subscription<lekiwi_interfaces::msg::PerceptionContext>(
+        topic_name, context_qos,
+        std::bind(&PerceptionLifecycleHelper::on_perception_context_msg, this, std::placeholders::_1));
   }
 
-  void PerceptionLifecycleHelper::set_allowed_modes(const std::vector<uint8_t> &allowed_modes)
+  void PerceptionLifecycleHelper::set_allowed_contexts(const std::vector<uint8_t> &allowed_contexts)
   {
-    std::lock_guard<std::mutex> lock(mode_mutex_);
-    allowed_modes_ = allowed_modes;
+    std::lock_guard<std::mutex> lock(context_mutex_);
+    allowed_contexts_ = allowed_contexts;
   }
 
-  bool PerceptionLifecycleHelper::is_mode_allowed() const noexcept
+  bool PerceptionLifecycleHelper::is_context_allowed() const noexcept
   {
-    std::lock_guard<std::mutex> lock(mode_mutex_);
-    const uint8_t cur = current_mode_.load(std::memory_order_relaxed);
-    if (allowed_modes_.empty())
+    std::lock_guard<std::mutex> lock(context_mutex_);
+    const uint8_t cur = current_context_.load(std::memory_order_relaxed);
+    if (allowed_contexts_.empty())
     {
       return true;
     }
-    return std::find(allowed_modes_.begin(), allowed_modes_.end(), cur) != allowed_modes_.end();
+    return std::find(allowed_contexts_.begin(), allowed_contexts_.end(), cur) != allowed_contexts_.end();
   }
 
-  uint8_t PerceptionLifecycleHelper::get_current_mode() const noexcept
+  uint8_t PerceptionLifecycleHelper::get_current_context() const noexcept
   {
-    return current_mode_.load(std::memory_order_relaxed);
+    return current_context_.load(std::memory_order_relaxed);
   }
 
-  void PerceptionLifecycleHelper::set_current_mode(uint8_t mode) noexcept
+  void PerceptionLifecycleHelper::set_current_context(uint8_t context) noexcept
   {
-    const uint8_t old_mode = current_mode_.exchange(mode);
-    if (old_mode != mode && mode_changed_cb_)
+    const uint8_t old_context = current_context_.exchange(context);
+    if (old_context != context && context_changed_cb_)
     {
-      mode_changed_cb_(mode);
+      context_changed_cb_(context);
     }
   }
 
-  void PerceptionLifecycleHelper::on_camera_mode_msg(
-      const lekiwi_interfaces::msg::CameraMode::ConstSharedPtr &msg)
+  void PerceptionLifecycleHelper::on_perception_context_msg(
+      const lekiwi_interfaces::msg::PerceptionContext::ConstSharedPtr &msg)
   {
     if (msg)
     {
-      set_current_mode(msg->value);
+      set_current_context(msg->value);
     }
   }
 
