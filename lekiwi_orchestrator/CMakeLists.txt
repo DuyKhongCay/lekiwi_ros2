@@ -19,10 +19,13 @@ install(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(test_navigation_startup test/test_navigation_startup.py)
   ament_add_pytest_test(test_fsm test/test_fsm.py)
   ament_add_pytest_test(test_chess_mission_orchestrator test/test_chess_mission_orchestrator.py)
-  ament_add_pytest_test(test_stage_pipeline_builder test/test_stage_pipeline_builder.py)
+  ament_add_pytest_test(test_health_monitor test/test_health_monitor.py)
+  ament_add_pytest_test(test_move_pipeline test/test_move_pipeline.py)
+  ament_add_pytest_test(test_perception_manager test/test_perception_manager.py)
+  ament_add_pytest_test(test_motion_dispatcher test/test_motion_dispatcher.py)
+  ament_add_pytest_test(test_visualizer test/test_visualizer.py)
 endif()
 
 ament_package()

@@ -4,23 +4,33 @@
 """LeKiwi Orchestration package for chess autonomous mobile manipulation."""
 
 from lekiwi_orchestrator.fsm import (
-    ALLOWED_CAMERA_TRANSITIONS,
     ALLOWED_MISSION_TRANSITIONS,
-    CAMERA_MODE_NAMES,
+    ALLOWED_MOTION_TRANSITIONS,
+    ALLOWED_PERCEPTION_TRANSITIONS,
     MISSION_STATE_NAMES,
-    CameraMode,
+    MOTION_STATE_NAMES,
+    PERCEPTION_CONTEXT_NAMES,
+    MacroMissionState,
     MissionState,
-    is_camera_transition_allowed,
+    MotionExecutionState,
+    PerceptionContext,
     is_mission_transition_allowed,
+    is_motion_transition_allowed,
+    is_perception_transition_allowed,
 )
 
 __all__ = [
-    "ALLOWED_CAMERA_TRANSITIONS",
     "ALLOWED_MISSION_TRANSITIONS",
-    "CAMERA_MODE_NAMES",
+    "ALLOWED_MOTION_TRANSITIONS",
+    "ALLOWED_PERCEPTION_TRANSITIONS",
     "MISSION_STATE_NAMES",
-    "CameraMode",
+    "MOTION_STATE_NAMES",
+    "PERCEPTION_CONTEXT_NAMES",
+    "MacroMissionState",
     "MissionState",
-    "is_camera_transition_allowed",
+    "MotionExecutionState",
+    "PerceptionContext",
     "is_mission_transition_allowed",
+    "is_motion_transition_allowed",
+    "is_perception_transition_allowed",
 ]

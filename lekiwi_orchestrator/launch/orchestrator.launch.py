@@ -33,20 +33,23 @@ def generate_launch_description():
         default_value="true",
         description="Whether to start the autonomous chess mission orchestrator",
     )
+    start_readiness_arg = DeclareLaunchArgument(
+        "start_readiness_manager",
+        default_value="true",
+        description="Whether to start system_readiness_node in orchestrator launch",
+    )
 
     params_file = LaunchConfiguration("params_file")
     use_sim_time = LaunchConfiguration("use_sim_time")
 
-    # 1. System Readiness Gatekeeper (TF tree, arm joints freshness, standstill, EKF convergence)
-    tf_gatekeeper_node = Node(
+    # 1. System Readiness Manager (Nav & Grasp readiness, EKF convergence, arm joints)
+    system_readiness_node = Node(
         package="lekiwi_motion",
-        executable="tf_gatekeeper_node",
-        name="tf_gatekeeper_node",
+        executable="system_readiness_node",
+        name="system_readiness_node",
         output="screen",
         parameters=[params_file, {"use_sim_time": use_sim_time}],
-        remappings=[
-            ("odometry/filtered", "/odometry/local"),
-        ],
+        condition=IfCondition(LaunchConfiguration("start_readiness_manager")),
     )
 
     # 2. Workspace Kinematics Feasibility & Base Standoff Planner
@@ -73,7 +76,8 @@ def generate_launch_description():
             params_file_arg,
             use_sim_time_arg,
             start_mission_arg,
-            tf_gatekeeper_node,
+            start_readiness_arg,
+            system_readiness_node,
             workspace_checker_node,
             chess_mission_node,
         ]

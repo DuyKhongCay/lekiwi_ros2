@@ -8,7 +8,6 @@ chess_mission_orchestrator:
     action_timeout_sec: 60.0
     readiness_timeout_sec: 1.0
     skip_navigation: false
-    start_navigation: false
 
     # --- Self-Healing & Recovery Settings ---
     recovery:
@@ -18,29 +17,49 @@ chess_mission_orchestrator:
 
     # --- Topic Endpoints (Configurable) ---
     topics:
-      tf_ready: "/system/tf_ready"
+      nav_ready: "/system/nav_ready"
+      grasp_ready: "/system/grasp_ready"
       game_status: "/chess/game_status"
-      camera_mode: "/camera_mode"
+      perception_context: "/perception_context"
       diagnostics: "/diagnostics"
 
     # --- Service Endpoints ---
     services:
       check_feasibility: "/workspace/check_move_feasibility"
       recover: "/orchestrator/recover"
+      set_perception_context: "/orchestrator/set_perception_context"
 
     # --- Action Endpoints ---
     actions:
       navigate_to_pose: "/navigate_to_pose"
       execute_chess_move: "/manipulation/execute_chess_move"
 
-tf_gatekeeper_node:
+    # --- Active Observation & Vantage Point Settings ---
+    observation:
+      standoff_distance: 0.65
+      scan_timeout_sec: 6.0
+
+    # --- 3D Status Visualization (RViz2) ---
+    visualization:
+      enabled: true
+      topic: "~/status_markers"
+      hud_z_offset: 0.35
+      robot_frame: "base_footprint"
+
+system_readiness_node:
   ros__parameters:
     max_pos_variance: 0.0012
     max_yaw_variance: 0.0030
     max_transform_age_sec: 0.30
+    nav_odom_max_age_sec: 0.50
     max_stop_velocity: 0.03
     max_stop_angular_vel: 0.08
     check_frequency_hz: 10.0
+    autostart_nav2: true
+    nav2_lifecycle_service: "/lifecycle_manager_navigation/manage_nodes"
+    local_odom_topic: "/odometry/local"
+    global_odom_topic: "/odometry/global"
+    joint_states_topic: "/joint_states"
     map_frame: map
     odom_frame: odom
     base_frame: base_footprint

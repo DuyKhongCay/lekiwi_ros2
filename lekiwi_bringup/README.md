@@ -4,14 +4,14 @@ Robot launch files and deployment configuration for LeKiwi.
 
 ## Orchestration & Readiness Subsystem
 
-The readiness and orchestration subsystem (`tf_gatekeeper_node`, `workspace_checker`, `task_orchestrator`, and optional `chess_mission_orchestrator`) is consolidated in `lekiwi_orchestrator/launch/orchestrator.launch.py`. Parameters are configured centrally in `lekiwi_orchestrator/config/orchestrator_params.yaml`.
+The readiness and orchestration subsystem (`system_readiness_node`, `workspace_checker`, `task_orchestrator`, and optional `chess_mission_orchestrator`) is consolidated in `lekiwi_orchestrator/launch/orchestrator.launch.py`. Parameters are configured centrally in `lekiwi_orchestrator/config/orchestrator_params.yaml`.
 
 ```bash
 ros2 launch lekiwi_orchestrator orchestrator.launch.py
 ros2 launch lekiwi_orchestrator orchestrator.launch.py start_mission:=false use_sim_time:=true
 ```
 
-`robot.launch.py` automatically includes `orchestrator.launch.py` with `start_mission:=false`, providing the full readiness gatekeeper, workspace feasibility service, and lifecycle management. Torque manager is managed via `controllers.launch.py`.
+`robot.launch.py` automatically includes `orchestrator.launch.py` with `start_mission:=false`, providing the system readiness supervisor, workspace feasibility service, and lifecycle management. Torque manager is managed via `controllers.launch.py`.
 
 Use the installed launch descriptions to inspect the complete top-level interface:
 
