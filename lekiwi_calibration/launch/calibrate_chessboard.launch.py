@@ -22,8 +22,8 @@ def generate_launch_description() -> LaunchDescription:
     gscam_params_file = PathJoinSubstitution(
         [bringup_share, "config", "perception", "gscam_cameras.yaml"]
     )
-    chessboard_params_file = PathJoinSubstitution(
-        [bringup_share, "config", "localization", "chessboard_tags.yaml"]
+    perception_params_file = PathJoinSubstitution(
+        [bringup_share, "config", "perception", "perception_config.yaml"]
     )
 
     config_file_arg = DeclareLaunchArgument(
@@ -61,7 +61,7 @@ def generate_launch_description() -> LaunchDescription:
             ("~/perception_context", "/perception_context"),
         ],
         parameters=[
-            chessboard_params_file,
+            perception_params_file,
             {"calib": True},
         ],
         extra_arguments=[{"use_intra_process_comms": True}],

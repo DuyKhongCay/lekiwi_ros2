@@ -57,8 +57,8 @@ def generate_launch_description():
             ),
             ComposableNode(
                 package="lekiwi_chess_master",
-                plugin="lekiwi_chess_master::ChessboardVisualizerComponent",
-                name="chessboard_visualizer",
+                plugin="lekiwi_chess_master::Chessboard2DVisualizer",
+                name="chessboard_2d_visualizer",
                 parameters=[
                     LaunchConfiguration("config_file"),
                     {"use_sim_time": LaunchConfiguration("use_sim_time")},

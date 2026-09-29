@@ -12,7 +12,7 @@
     auto_trigger_engine: true     # Bật để tự chơi trong giai đoạn dev; tắt khi dùng orchestrator
     robot_color: "black"          # Màu quân cờ robot cầm ("black" hoặc "white")
 
-chessboard_visualizer:
+chessboard_2d_visualizer:
   ros__parameters:
     game_status_topic: "/chess/game_status"
     raw_fen_topic: "/chess/raw_fen"

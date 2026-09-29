@@ -32,10 +32,6 @@ def generate_launch_description():
     gscam_params_file = PathJoinSubstitution(
         [bringup_share, "config", "perception", "gscam_cameras.yaml"]
     )
-    chessboard_params_file = PathJoinSubstitution(
-        [bringup_share, "config", "localization", "chessboard_tags.yaml"]
-    )
-
     perception_params_file = PathJoinSubstitution(
         [bringup_share, "config", "perception", "perception_config.yaml"]
     )
@@ -59,10 +55,10 @@ def generate_launch_description():
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
-    chess_overlay_component = ComposableNode(
+    chess_overlay_visualizer = ComposableNode(
         package="lekiwi_perception",
-        plugin="lekiwi_perception::ChessOverlayComponent",
-        name="chess_overlay",
+        plugin="lekiwi_perception::ChessOverlayVisualizer",
+        name="chess_overlay_visualizer",
         parameters=[perception_params_file],
         extra_arguments=[{"use_intra_process_comms": True}],
     )
@@ -77,14 +73,14 @@ def generate_launch_description():
             ("~/camera_info", "/cameras/stereo_left/camera_info"),
             ("~/perception_context", "/perception_context"),
         ],
-        parameters=[chessboard_params_file],
+        parameters=[perception_params_file],
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
     all_components = [
         *camera_components,
         inference_component,
-        chess_overlay_component,
+        chess_overlay_visualizer,
         chessboard_estimator_component,
     ]
 

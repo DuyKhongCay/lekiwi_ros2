@@ -30,23 +30,7 @@ def generate_launch_description():
         [description_share, "config", "rviz", "lekiwi_full.rviz"]
     )
 
-    try:
-        from ament_index_python.packages import get_package_share_directory
-        bringup_share = get_package_share_directory("lekiwi_bringup")
-        default_chessboard_config = os.path.join(
-            bringup_share, "config", "localization", "chessboard_tags.yaml"
-        )
-    except Exception:
-        import os
-        # Source tree fallback when lekiwi_bringup is not yet colcon built
-        default_chessboard_config = "/home/duykhongcay/lerobot_ws/lekiwi_ros2/lekiwi_bringup/config/localization/chessboard_tags.yaml"
-
     declared_arguments = [
-        DeclareLaunchArgument(
-            "chessboard_config",
-            default_value=default_chessboard_config,
-            description="Full path to the chessboard tags YAML configuration.",
-        ),
         DeclareLaunchArgument(
             "rviz_config",
             default_value=default_rviz_config,
@@ -58,48 +42,14 @@ def generate_launch_description():
             description="Use simulation clock if true.",
         ),
         DeclareLaunchArgument(
-            "gui",
-            default_value="false",
-            description="Run joint_state_publisher_gui for offline model inspection.",
-        ),
-        DeclareLaunchArgument(
-            "publish_robot_state",
-            default_value="true",
-            description="Launch robot_state_publisher via description.launch.py if true.",
-        ),
-        DeclareLaunchArgument(
-            "hardware_type",
-            default_value="mock",
-            description="Hardware interface type: real or mock.",
-        ),
-        DeclareLaunchArgument(
-            "imu_hardware_type",
-            default_value="mock",
-            description="IMU hardware interface type: real or mock.",
-        ),
-        DeclareLaunchArgument(
-            "robot_description_topic",
-            default_value="/rviz/robot_description",
-            description="Topic name for robot_description used by local visualizer.",
-        ),
-        DeclareLaunchArgument(
-            "publish_chessboard_markers",
-            default_value="true",
-            description="Publish AprilTag and gridline markers for the chessboard arena.",
-        ),
-        DeclareLaunchArgument(
             "visualize_chess_game",
             default_value="true",
-            description="Launch chess_rviz_visualizer to show 3D pieces, moves, and HUD.",
+            description="Launch chessboard_3d_visualizer to show 3D pieces, highlights, and moves.",
         ),
     ]
 
-    chessboard_config = LaunchConfiguration("chessboard_config")
     rviz_config = LaunchConfiguration("rviz_config")
     use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
-    publish_robot_state = LaunchConfiguration("publish_robot_state")
-    gui = LaunchConfiguration("gui")
-    publish_chessboard_markers = LaunchConfiguration("publish_chessboard_markers")
     visualize_chess_game = LaunchConfiguration("visualize_chess_game")
 
     description_launch = IncludeLaunchDescription(
@@ -108,41 +58,15 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "hardware_type": LaunchConfiguration("hardware_type"),
-            "imu_hardware_type": LaunchConfiguration("imu_hardware_type"),
-            "robot_description_topic": LaunchConfiguration("robot_description_topic"),
+            "hardware_type": "mock",
+            "robot_description_topic": "/rviz/robot_description",
         }.items(),
-        condition=IfCondition(publish_robot_state),
-    )
-
-    jsp_gui_node = Node(
-        package="joint_state_publisher_gui",
-        executable="joint_state_publisher_gui",
-        name="joint_state_publisher_gui",
-        output="screen",
-        parameters=[{"use_sim_time": use_sim_time}],
-        condition=IfCondition(gui),
-    )
-
-    chessboard_markers_node = Node(
-        package="lekiwi_description",
-        executable="chessboard_marker_publisher.py",
-        name="chessboard_marker_publisher",
-        output="screen",
-        parameters=[
-            chessboard_config,
-            {
-                "use_sim_time": use_sim_time,
-                "topic_name": "chessboard_tag_markers",
-            }
-        ],
-        condition=IfCondition(publish_chessboard_markers),
     )
 
     chess_visualizer_node = Node(
         package="lekiwi_description",
-        executable="chess_rviz_visualizer.py",
-        name="chess_rviz_visualizer",
+        executable="chessboard_3d_visualizer.py",
+        name="chessboard_3d_visualizer",
         output="screen",
         parameters=[
             {
@@ -172,8 +96,6 @@ def generate_launch_description():
         [
             *declared_arguments,
             description_launch,
-            jsp_gui_node,
-            chessboard_markers_node,
             chess_visualizer_node,
             rviz_node,
         ]

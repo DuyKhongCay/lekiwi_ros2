@@ -10,7 +10,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
 #include "lekiwi_chess_master/chess_game_state_tracker_component.hpp"
-#include "lekiwi_chess_master/chessboard_visualizer_component.hpp"
+#include "lekiwi_chess_master/chessboard_2d_visualizer.hpp"
 
 using namespace lekiwi_chess_master;
 

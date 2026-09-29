@@ -1,5 +1,5 @@
 /**
- * @file chessboard_visualizer_component.hpp
+ * @file chessboard_2d_visualizer.hpp
  * @brief 2D Top-down digital chessboard panel renderer and compressed image publisher.
  *
  * Subscribes to /chess/game_status and /chess/raw_fen.
@@ -72,13 +72,13 @@ namespace lekiwi_chess_master
   /**
    * @brief Headless component rendering synthetic 2D top-down chessboard into JPEG image.
    */
-  class ChessboardVisualizerComponent : public rclcpp::Node
+  class Chessboard2DVisualizer : public rclcpp::Node
   {
   public:
     using ChessGameStatus = lekiwi_interfaces::msg::ChessGameStatus;
 
-    explicit ChessboardVisualizerComponent(const rclcpp::NodeOptions &options);
-    ~ChessboardVisualizerComponent() override = default;
+    explicit Chessboard2DVisualizer(const rclcpp::NodeOptions &options);
+    ~Chessboard2DVisualizer() override = default;
 
   private:
     // Callbacks

@@ -14,14 +14,23 @@ def generate_launch_description():
     """Top-level Bringup: Compose LeKiwi robot subsystems with streamlined configuration."""
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")
-    orchestrator_share = FindPackageShare("lekiwi_orchestrator")
 
     # Global and Subsystem Arguments
     declared_arguments = [
         DeclareLaunchArgument(
+            "enable_orchestrator",
+            default_value="true",
+            description="Start LeKiwi orchestration and readiness subsystem",
+        ),
+        DeclareLaunchArgument(
             "enable_readiness_checks",
             default_value="true",
             description="Start both TF and workspace readiness checks",
+        ),
+        DeclareLaunchArgument(
+            "start_mission",
+            default_value="false",
+            description="Start autonomous chess mission orchestrator",
         ),
         DeclareLaunchArgument(
             "cameras",
@@ -120,17 +129,17 @@ def generate_launch_description():
 
     orchestrator = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution(
-                [orchestrator_share, "launch", "orchestrator.launch.py"]
-            )
+            PathJoinSubstitution([bringup_share, "launch", "orchestrator.launch.py"])
         ),
         launch_arguments={
             "params_file": PathJoinSubstitution(
                 [bringup_share, "config", "control", "orchestrator.yaml"]
             ),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "start_mission": "false",
+            "start_mission": LaunchConfiguration("start_mission"),
+            "start_readiness_manager": LaunchConfiguration("enable_readiness_checks"),
         }.items(),
+        condition=IfCondition(LaunchConfiguration("enable_orchestrator")),
     )
 
     diagnostics = IncludeLaunchDescription(

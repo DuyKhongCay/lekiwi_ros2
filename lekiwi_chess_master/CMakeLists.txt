@@ -41,7 +41,7 @@ add_library(lekiwi_chess_master_components SHARED
   src/stockfish_driver.cpp
   src/chess_engine_action_component.cpp
   src/chess_game_state_tracker_component.cpp
-  src/chessboard_visualizer_component.cpp
+  src/chessboard_2d_visualizer.cpp
 )
 target_include_directories(lekiwi_chess_master_components PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -74,8 +74,8 @@ rclcpp_components_register_node(lekiwi_chess_master_components
 )
 
 rclcpp_components_register_node(lekiwi_chess_master_components
-  PLUGIN "lekiwi_chess_master::ChessboardVisualizerComponent"
-  EXECUTABLE chessboard_visualizer_node
+  PLUGIN "lekiwi_chess_master::Chessboard2DVisualizer"
+  EXECUTABLE chessboard_2d_visualizer_node
 )
 
 install(TARGETS
@@ -86,7 +86,7 @@ install(TARGETS
 install(TARGETS
   chess_game_state_tracker_node
   chess_engine_action_node
-  chessboard_visualizer_node
+  chessboard_2d_visualizer_node
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/

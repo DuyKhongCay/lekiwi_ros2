@@ -21,106 +21,94 @@ Tính năng:
 - Dựng 32 quân cờ 3D Mesh STL thực tế (đã chuẩn hóa gốc tọa độ tâm đáy).
 - Tô màu ô xuất phát, ô đích, ô ăn quân (En Passant) và ô Vua bị chiếu.
 - Vẽ mũi tên 3D biểu diễn nước đi vừa thực hiện (last_move) và nước tối ưu (best_move).
-- Bảng thông tin 3D HUD lơ lửng hiển thị FEN, Eval Stockfish và Game Phase.
 """
 
+from __future__ import annotations
+
 from typing import Any
-import math
-from typing import Dict, List, Optional, Tuple
 
 import rclpy
+from geometry_msgs.msg import Point
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
-from lekiwi_interfaces.msg import ChessGameStatus, ChessMoveDetails
-
+from lekiwi_interfaces.msg import ChessGameStatus
 
 PIECE_TYPE_MAP = {
-    'p': 'pawn',
-    'r': 'rook',
-    'n': 'knight',
-    'b': 'bishop',
-    'q': 'queen',
-    'k': 'king'
-}
-
-PHASE_LABELS = {
-    ChessGameStatus.PHASE_WAITING_PLAYER: "WAITING FOR PLAYER",
-    ChessGameStatus.PHASE_ROBOT_THINKING: "ROBOT THINKING...",
-    ChessGameStatus.PHASE_ROBOT_READY: "ROBOT READY",
-    ChessGameStatus.PHASE_ROBOT_EXECUTING: "ROBOT EXECUTING MOVE",
-    ChessGameStatus.PHASE_GAME_OVER: "GAME OVER"
+    "p": "pawn",
+    "r": "rook",
+    "n": "knight",
+    "b": "bishop",
+    "q": "queen",
+    "k": "king",
 }
 
 
-class ChessRvizVisualizer(Node):
-    """Visualizes live 3D chess pieces, highlights, move trajectories, and HUD in RViz2."""
+class Chessboard3DVisualizer(Node):
+    """Visualizes live 3D chess pieces, highlights, and move trajectories in RViz2."""
 
     def __init__(self):
-        super().__init__('chess_rviz_visualizer')
+        super().__init__("chessboard_3d_visualizer")
 
         # -----------------------------------------------------------------
         # 1. Parameter Declarations
         # -----------------------------------------------------------------
         self.declare_parameter(
-            'chessboard_frame',
-            'chessboard_frame',
+            "chessboard_frame",
+            "chessboard_frame",
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
-                description='Target frame ID for chessboard visualization.'
-            )
+                description="Target frame ID for chessboard visualization.",
+            ),
         )
         self.declare_parameter(
-            'game_status_topic',
-            '/chess/game_status',
+            "game_status_topic",
+            "/chess/game_status",
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
-                description='Input ChessGameStatus topic name.'
-            )
+                description="Input ChessGameStatus topic name.",
+            ),
         )
         self.declare_parameter(
-            'marker_topic',
-            '/chess/game_markers',
+            "marker_topic",
+            "/chess/game_markers",
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
-                description='Output MarkerArray topic name.'
-            )
+                description="Output MarkerArray topic name.",
+            ),
         )
         self.declare_parameter(
-            'square_size',
+            "square_size",
             0.0475,
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_DOUBLE,
-                description='Side length of each chessboard square in meters.'
-            )
+                description="Side length of each chessboard square in meters.",
+            ),
         )
         self.declare_parameter(
-            'board_z',
+            "board_z",
             0.006,
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_DOUBLE,
-                description='Top surface Z coordinate of chessboard relative to frame (meters).'
-            )
+                description="Top surface Z coordinate of chessboard relative to frame (meters).",
+            ),
         )
-        self.declare_parameter('enable_pieces', True)
-        self.declare_parameter('enable_highlights', True)
-        self.declare_parameter('enable_arrows', True)
-        self.declare_parameter('enable_hud', True)
+        self.declare_parameter("enable_pieces", True)
+        self.declare_parameter("enable_highlights", True)
+        self.declare_parameter("enable_arrows", True)
 
-        self.frame_id = self.get_parameter('chessboard_frame').value
-        game_status_topic = self.get_parameter('game_status_topic').value
-        marker_topic = self.get_parameter('marker_topic').value
-        self.square_size = float(self.get_parameter('square_size').value)
-        self.board_z = float(self.get_parameter('board_z').value)
+        self.frame_id = self.get_parameter("chessboard_frame").value
+        game_status_topic = self.get_parameter("game_status_topic").value
+        marker_topic = self.get_parameter("marker_topic").value
+        self.square_size = float(self.get_parameter("square_size").value)
+        self.board_z = float(self.get_parameter("board_z").value)
 
-        self.enable_pieces = bool(self.get_parameter('enable_pieces').value)
-        self.enable_highlights = bool(self.get_parameter('enable_highlights').value)
-        self.enable_arrows = bool(self.get_parameter('enable_arrows').value)
-        self.enable_hud = bool(self.get_parameter('enable_hud').value)
+        self.enable_pieces = bool(self.get_parameter("enable_pieces").value)
+        self.enable_highlights = bool(self.get_parameter("enable_highlights").value)
+        self.enable_arrows = bool(self.get_parameter("enable_arrows").value)
 
         # -----------------------------------------------------------------
         # 2. Setup QoS, Publisher & Subscriber
@@ -129,20 +117,17 @@ class ChessRvizVisualizer(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE
+            durability=DurabilityPolicy.VOLATILE,
         )
         self.status_sub = self.create_subscription(
-            ChessGameStatus,
-            game_status_topic,
-            self.game_status_callback,
-            sub_qos
+            ChessGameStatus, game_status_topic, self.game_status_callback, sub_qos
         )
 
         pub_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.marker_pub = self.create_publisher(MarkerArray, marker_topic, pub_qos)
 
@@ -157,7 +142,7 @@ class ChessRvizVisualizer(Node):
     # ---------------------------------------------------------------------
     # Coordinate Helpers
     # ---------------------------------------------------------------------
-    def square_to_metric(self, square: str) -> Optional[Tuple[float, float]]:
+    def square_to_metric(self, square: str) -> tuple[float, float] | None:
         """Chuyển đổi chuỗi ô chuẩn FIDE (e.g. 'e4') sang tọa độ (x, y) trên chessboard_frame."""
         if not square or len(square) < 2:
             return None
@@ -165,28 +150,28 @@ class ChessRvizVisualizer(Node):
         file_char = cleaned[0]
         rank_char = cleaned[1]
 
-        if not ('a' <= file_char <= 'h' and '1' <= rank_char <= '8'):
+        if not ("a" <= file_char <= "h" and "1" <= rank_char <= "8"):
             return None
 
-        file_idx = ord(file_char) - ord('a')  # 0..7
-        rank_idx = ord(rank_char) - ord('1')  # 0..7
+        file_idx = ord(file_char) - ord("a")  # 0..7
+        rank_idx = ord(rank_char) - ord("1")  # 0..7
 
         # Tâm ô cờ đối với hệ tọa độ bàn cờ có tâm tại (0,0)
         x = (file_idx - 3.5) * self.square_size
         y = (rank_idx - 3.5) * self.square_size
         return x, y
 
-    def parse_fen_board(self, full_fen: str) -> List[Optional[str]]:
+    def parse_fen_board(self, full_fen: str) -> list[str | None]:
         """
         Giải mã FEN thành mảng 64 phần tử từ a1 (index 0) đến h8 (index 63).
         Trả về ký tự đại diện quân cờ (e.g. 'P', 'k') hoặc None nếu ô trống.
         """
-        board: List[Optional[str]] = [None] * 64
+        board: list[str | None] = [None] * 64
         if not full_fen:
             return board
 
         fen_board_part = full_fen.split()[0]
-        ranks = fen_board_part.split('/')
+        ranks = fen_board_part.split("/")
         if len(ranks) != 8:
             return board
 
@@ -226,18 +211,13 @@ class ChessRvizVisualizer(Node):
             arrow_markers = self._build_arrow_markers(msg, now)
             markers.markers.extend(arrow_markers)
 
-        # 4. 3D Floating HUD Billboard
-        if self.enable_hud:
-            hud_marker = self._build_hud_marker(msg, now)
-            markers.markers.append(hud_marker)
-
         self.marker_pub.publish(markers)
 
     # ---------------------------------------------------------------------
     # Marker Builders
     # ---------------------------------------------------------------------
-    def _build_piece_markers(self, full_fen: str, stamp) -> List[Marker]:
-        markers: List[Marker] = []
+    def _build_piece_markers(self, full_fen: str, stamp: Any) -> list[Marker]:
+        markers: list[Marker] = []
         board = self.parse_fen_board(full_fen)
         current_occupied_squares: set[int] = set()
 
@@ -250,19 +230,17 @@ class ChessRvizVisualizer(Node):
             if piece_char is not None:
                 current_occupied_squares.add(sq_idx)
                 is_white = piece_char.isupper()
-                color_name = 'white' if is_white else 'black'
-                piece_type = PIECE_TYPE_MAP.get(piece_char.lower(), 'pawn')
+                color_name = "white" if is_white else "black"
+                piece_type = PIECE_TYPE_MAP.get(piece_char.lower(), "pawn")
 
                 marker = Marker()
                 marker.header.frame_id = self.frame_id
                 marker.header.stamp = stamp
-                marker.ns = 'chess/pieces'
+                marker.ns = "chess/pieces"
                 marker.id = sq_idx
                 marker.type = Marker.MESH_RESOURCE
                 marker.action = Marker.ADD
-                marker.mesh_resource = (
-                    f"package://lekiwi_description/assets/chess_pieces/{color_name}_{piece_type}.stl"
-                )
+                marker.mesh_resource = f"package://lekiwi_description/assets/chess_pieces/{color_name}_{piece_type}.stl"
                 # Tỷ lệ: đơn vị file STL là mm -> đổi sang mét chuẩn ROS (0.001)
                 marker.scale.x = 0.001
                 marker.scale.y = 0.001
@@ -273,7 +251,7 @@ class ChessRvizVisualizer(Node):
                 marker.pose.position.z = self.board_z
 
                 # Hướng quay: Quân Mã Đen quay 180 độ đối diện với Mã Trắng
-                if piece_char == 'n':
+                if piece_char == "n":
                     marker.pose.orientation.z = 1.0
                     marker.pose.orientation.w = 0.0
                 else:
@@ -295,7 +273,7 @@ class ChessRvizVisualizer(Node):
                     del_marker = Marker()
                     del_marker.header.frame_id = self.frame_id
                     del_marker.header.stamp = stamp
-                    del_marker.ns = 'chess/pieces'
+                    del_marker.ns = "chess/pieces"
                     del_marker.id = sq_idx
                     del_marker.action = Marker.DELETE
                     markers.append(del_marker)
@@ -303,8 +281,10 @@ class ChessRvizVisualizer(Node):
         self.previously_occupied_squares = current_occupied_squares
         return markers
 
-    def _build_highlight_markers(self, msg: ChessGameStatus, stamp) -> List[Marker]:
-        markers: List[Marker] = []
+    def _build_highlight_markers(
+        self, msg: ChessGameStatus, stamp: Any
+    ) -> list[Marker]:
+        markers: list[Marker] = []
         last_move = msg.last_move_details
         tile_size = self.square_size * 0.94
         tile_thick = 0.001
@@ -315,26 +295,40 @@ class ChessRvizVisualizer(Node):
             pt = self.square_to_metric(last_move.from_square)
             if pt:
                 m = self._create_cube_marker(
-                    'chess/highlights', 101, pt[0], pt[1], z_pos,
-                    tile_size, tile_size, tile_thick,
-                    ColorRGBA(r=1.0, g=0.75, b=0.0, a=0.45), stamp
+                    "chess/highlights",
+                    101,
+                    pt[0],
+                    pt[1],
+                    z_pos,
+                    tile_size,
+                    tile_size,
+                    tile_thick,
+                    ColorRGBA(r=1.0, g=0.75, b=0.0, a=0.45),
+                    stamp,
                 )
                 markers.append(m)
         else:
-            markers.append(self._create_delete_marker('chess/highlights', 101, stamp))
+            markers.append(self._create_delete_marker("chess/highlights", 101, stamp))
 
         # 2. To Square Highlight (Xanh lục dạ quang bán trong suốt)
         if last_move.to_square:
             pt = self.square_to_metric(last_move.to_square)
             if pt:
                 m = self._create_cube_marker(
-                    'chess/highlights', 102, pt[0], pt[1], z_pos,
-                    tile_size, tile_size, tile_thick,
-                    ColorRGBA(r=0.0, g=0.9, b=0.3, a=0.55), stamp
+                    "chess/highlights",
+                    102,
+                    pt[0],
+                    pt[1],
+                    z_pos,
+                    tile_size,
+                    tile_size,
+                    tile_thick,
+                    ColorRGBA(r=0.0, g=0.9, b=0.3, a=0.55),
+                    stamp,
                 )
                 markers.append(m)
         else:
-            markers.append(self._create_delete_marker('chess/highlights', 102, stamp))
+            markers.append(self._create_delete_marker("chess/highlights", 102, stamp))
 
         # 3. Capture Square Alert (Bia ngắm Đỏ rực tại ô bị ăn)
         if last_move.is_capture and last_move.captured_square:
@@ -343,7 +337,7 @@ class ChessRvizVisualizer(Node):
                 cap_marker = Marker()
                 cap_marker.header.frame_id = self.frame_id
                 cap_marker.header.stamp = stamp
-                cap_marker.ns = 'chess/highlights'
+                cap_marker.ns = "chess/highlights"
                 cap_marker.id = 103
                 cap_marker.type = Marker.CYLINDER
                 cap_marker.action = Marker.ADD
@@ -358,31 +352,40 @@ class ChessRvizVisualizer(Node):
                 cap_marker.frame_locked = True
                 markers.append(cap_marker)
         else:
-            markers.append(self._create_delete_marker('chess/highlights', 103, stamp))
+            markers.append(self._create_delete_marker("chess/highlights", 103, stamp))
 
         # 4. Check / Checkmate King Alert (Tô đỏ ô quân Vua đang bị chiếu)
         if (msg.is_check or msg.is_checkmate) and msg.full_fen:
-            king_char = 'K' if msg.active_color == 'w' else 'k'
+            king_char = "K" if msg.active_color == "w" else "k"
             board = self.parse_fen_board(msg.full_fen)
             try:
                 k_idx = board.index(king_char)
                 kx = (k_idx % 8 - 3.5) * self.square_size
                 ky = (k_idx // 8 - 3.5) * self.square_size
                 m_king = self._create_cube_marker(
-                    'chess/highlights', 104, kx, ky, z_pos + 0.001,
-                    tile_size, tile_size, 0.002,
-                    ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.75), stamp
+                    "chess/highlights",
+                    104,
+                    kx,
+                    ky,
+                    z_pos + 0.001,
+                    tile_size,
+                    tile_size,
+                    0.002,
+                    ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.75),
+                    stamp,
                 )
                 markers.append(m_king)
             except ValueError:
-                markers.append(self._create_delete_marker('chess/highlights', 104, stamp))
+                markers.append(
+                    self._create_delete_marker("chess/highlights", 104, stamp)
+                )
         else:
-            markers.append(self._create_delete_marker('chess/highlights', 104, stamp))
+            markers.append(self._create_delete_marker("chess/highlights", 104, stamp))
 
         return markers
 
-    def _build_arrow_markers(self, msg: ChessGameStatus, stamp) -> List[Marker]:
-        markers: List[Marker] = []
+    def _build_arrow_markers(self, msg: ChessGameStatus, stamp: Any) -> list[Marker]:
+        markers: list[Marker] = []
         last_move = msg.last_move_details
         best_move = msg.best_move_details
 
@@ -392,12 +395,16 @@ class ChessRvizVisualizer(Node):
             p_to = self.square_to_metric(last_move.to_square)
             if p_from and p_to:
                 arrow = self._create_trajectory_arrow(
-                    'chess/move_arrows', 201, p_from, p_to,
-                    ColorRGBA(r=0.0, g=0.8, b=1.0, a=0.9), stamp
+                    "chess/move_arrows",
+                    201,
+                    p_from,
+                    p_to,
+                    ColorRGBA(r=0.0, g=0.8, b=1.0, a=0.9),
+                    stamp,
                 )
                 markers.append(arrow)
         else:
-            markers.append(self._create_delete_marker('chess/move_arrows', 201, stamp))
+            markers.append(self._create_delete_marker("chess/move_arrows", 201, stamp))
 
         # 2. Engine Best Move Arrow (Màu Xanh lá dạ quang đề xuất)
         if best_move.from_square and best_move.to_square:
@@ -405,87 +412,56 @@ class ChessRvizVisualizer(Node):
             bp_to = self.square_to_metric(best_move.to_square)
             if bp_from and bp_to:
                 arrow_best = self._create_trajectory_arrow(
-                    'chess/move_arrows', 202, bp_from, bp_to,
-                    ColorRGBA(r=0.1, g=1.0, b=0.2, a=0.85), stamp
+                    "chess/move_arrows",
+                    202,
+                    bp_from,
+                    bp_to,
+                    ColorRGBA(r=0.1, g=1.0, b=0.2, a=0.85),
+                    stamp,
                 )
                 markers.append(arrow_best)
         else:
-            markers.append(self._create_delete_marker('chess/move_arrows', 202, stamp))
+            markers.append(self._create_delete_marker("chess/move_arrows", 202, stamp))
 
         # 3. Castling Secondary Rook Arrow (Màu Cam cho quân Xe nhập thành)
-        if last_move.is_castling and last_move.castling_rook_from and last_move.castling_rook_to:
+        if (
+            last_move.is_castling
+            and last_move.castling_rook_from
+            and last_move.castling_rook_to
+        ):
             rp_from = self.square_to_metric(last_move.castling_rook_from)
             rp_to = self.square_to_metric(last_move.castling_rook_to)
             if rp_from and rp_to:
                 arrow_rook = self._create_trajectory_arrow(
-                    'chess/move_arrows', 203, rp_from, rp_to,
-                    ColorRGBA(r=1.0, g=0.55, b=0.0, a=0.85), stamp
+                    "chess/move_arrows",
+                    203,
+                    rp_from,
+                    rp_to,
+                    ColorRGBA(r=1.0, g=0.55, b=0.0, a=0.85),
+                    stamp,
                 )
                 markers.append(arrow_rook)
         else:
-            markers.append(self._create_delete_marker('chess/move_arrows', 203, stamp))
+            markers.append(self._create_delete_marker("chess/move_arrows", 203, stamp))
 
         return markers
-
-    def _build_hud_marker(self, msg: ChessGameStatus, stamp) -> Marker:
-        marker = Marker()
-        marker.header.frame_id = self.frame_id
-        marker.header.stamp = stamp
-        marker.ns = 'chess/status_hud'
-        marker.id = 300
-        marker.type = Marker.TEXT_VIEW_FACING
-        marker.action = Marker.ADD
-
-        # Đặt bảng lơ lửng phía mép trên của bàn cờ
-        marker.pose.position.x = 0.0
-        marker.pose.position.y = 0.23
-        marker.pose.position.z = self.board_z + 0.12
-        marker.pose.orientation.w = 1.0
-
-        marker.scale.z = 0.016  # Kích thước font 16mm
-
-        phase_str = PHASE_LABELS.get(msg.game_phase, "UNKNOWN")
-        turn_str = "WHITE" if msg.active_color == 'w' else "BLACK"
-        eval_score = msg.eval_centipawns / 100.0
-
-        last_str = f"{msg.last_move_details.uci} ({msg.last_move_details.san})" if msg.last_move_details.uci else "None"
-        best_str = f"{msg.best_move_details.uci} ({msg.best_move_details.san})" if msg.best_move_details.uci else "None"
-
-        alert_str = ""
-        if msg.is_checkmate:
-            alert_str = " | [CHECKMATE!]"
-        elif msg.is_check:
-            alert_str = " | [CHECK!]"
-        elif msg.is_draw:
-            alert_str = " | [DRAW]"
-
-        marker.text = (
-            f"● [{phase_str}]{alert_str}\n"
-            f"Turn: {turn_str} | Eval: {eval_score:+.2f} (Stockfish)\n"
-            f"Last Move: {last_str}\n"
-            f"Engine Best: {best_str}"
-        )
-
-        # Đổi màu text theo Game Phase
-        if msg.game_phase == ChessGameStatus.PHASE_WAITING_PLAYER:
-            marker.color = ColorRGBA(r=1.0, g=0.9, b=0.3, a=1.0)  # Vàng
-        elif msg.game_phase == ChessGameStatus.PHASE_ROBOT_THINKING:
-            marker.color = ColorRGBA(r=0.2, g=0.8, b=1.0, a=1.0)  # Xanh lam
-        elif msg.game_phase == ChessGameStatus.PHASE_ROBOT_EXECUTING:
-            marker.color = ColorRGBA(r=1.0, g=0.5, b=0.0, a=1.0)  # Cam
-        elif msg.is_checkmate or msg.game_phase == ChessGameStatus.PHASE_GAME_OVER:
-            marker.color = ColorRGBA(r=1.0, g=0.2, b=0.2, a=1.0)  # Đỏ
-        else:
-            marker.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)  # Trắng
-
-        marker.frame_locked = True
-        return marker
 
     # ---------------------------------------------------------------------
     # Utility Factory Methods
     # ---------------------------------------------------------------------
-    def _create_cube_marker(self, ns: str, m_id: int, x: float, y: float, z: float,
-                            sx: float, sy: float, sz: float, color: ColorRGBA, stamp) -> Marker:
+    def _create_cube_marker(
+        self,
+        ns: str,
+        m_id: int,
+        x: float,
+        y: float,
+        z: float,
+        sx: float,
+        sy: float,
+        sz: float,
+        color: ColorRGBA,
+        stamp,
+    ) -> Marker:
         m = Marker()
         m.header.frame_id = self.frame_id
         m.header.stamp = stamp
@@ -504,8 +480,15 @@ class ChessRvizVisualizer(Node):
         m.frame_locked = True
         return m
 
-    def _create_trajectory_arrow(self, ns: str, m_id: int, p_from: Tuple[float, float],
-                                 p_to: Tuple[float, float], color: ColorRGBA, stamp) -> Marker:
+    def _create_trajectory_arrow(
+        self,
+        ns: str,
+        m_id: int,
+        p_from: tuple[float, float],
+        p_to: tuple[float, float],
+        color: ColorRGBA,
+        stamp: Any,
+    ) -> Marker:
         m = Marker()
         m.header.frame_id = self.frame_id
         m.header.stamp = stamp
@@ -523,7 +506,7 @@ class ChessRvizVisualizer(Node):
         z_lift = self.board_z + 0.025
         m.points = [
             Point(x=p_from[0], y=p_from[1], z=z_lift),
-            Point(x=p_to[0], y=p_to[1], z=z_lift)
+            Point(x=p_to[0], y=p_to[1], z=z_lift),
         ]
         m.color = color
         m.frame_locked = True
@@ -542,7 +525,7 @@ class ChessRvizVisualizer(Node):
 def main(args=None):
     rclpy.init(args=args)
     try:
-        node = ChessRvizVisualizer()
+        node = Chessboard3DVisualizer()
         rclpy.spin(node)
     except (KeyboardInterrupt, ValueError):
         pass
@@ -551,5 +534,5 @@ def main(args=None):
             rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

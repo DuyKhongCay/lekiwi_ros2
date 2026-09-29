@@ -1,12 +1,12 @@
 /**
- * @file chessboard_visualizer_component.cpp
- * @brief Implementation of ChessboardVisualizerComponent 2D panel renderer.
+ * @file chessboard_2d_visualizer.cpp
+ * @brief Implementation of Chessboard2DVisualizer 2D panel renderer.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_chess_master/chessboard_visualizer_component.hpp"
+#include "lekiwi_chess_master/chessboard_2d_visualizer.hpp"
 #include <rclcpp_components/register_node_macro.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
@@ -28,8 +28,8 @@ namespace lekiwi_chess_master
         {"P", "w-pawn.png"}, {"N", "w-knight.png"}, {"B", "w-bishop.png"}, {"R", "w-rook.png"}, {"Q", "w-queen.png"}, {"K", "w-king.png"}, {"p", "b-pawn.png"}, {"n", "b-knight.png"}, {"b", "b-bishop.png"}, {"r", "b-rook.png"}, {"q", "b-queen.png"}, {"k", "b-king.png"}};
   }
 
-  ChessboardVisualizerComponent::ChessboardVisualizerComponent(const rclcpp::NodeOptions &options)
-      : Node("chessboard_visualizer_component", options)
+  Chessboard2DVisualizer::Chessboard2DVisualizer(const rclcpp::NodeOptions &options)
+      : Node("chessboard_2d_visualizer", options)
   {
     game_status_topic_ = declare_parameter<std::string>("game_status_topic", "/chess/game_status");
     raw_fen_topic_ = declare_parameter<std::string>("raw_fen_topic", "/chess/raw_fen");
@@ -50,7 +50,7 @@ namespace lekiwi_chess_master
     }
 
     RCLCPP_INFO(get_logger(),
-                "Starting ChessboardVisualizerComponent (Status: %s, RawFEN: %s, 2D Topic: %s, Rate: %.1f Hz)",
+                "Starting Chessboard2DVisualizer (Status: %s, RawFEN: %s, 2D Topic: %s, Rate: %.1f Hz)",
                 game_status_topic_.c_str(), raw_fen_topic_.c_str(), board_2d_topic_.c_str(), render_rate_hz_);
 
     board_2d_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
@@ -58,22 +58,22 @@ namespace lekiwi_chess_master
 
     game_status_sub_ = create_subscription<ChessGameStatus>(
         game_status_topic_, rclcpp::SystemDefaultsQoS(),
-        std::bind(&ChessboardVisualizerComponent::gameStatusCallback, this, std::placeholders::_1));
+        std::bind(&Chessboard2DVisualizer::gameStatusCallback, this, std::placeholders::_1));
 
     raw_fen_sub_ = create_subscription<std_msgs::msg::String>(
         raw_fen_topic_, rclcpp::SensorDataQoS(),
-        std::bind(&ChessboardVisualizerComponent::rawFenCallback, this, std::placeholders::_1));
+        std::bind(&Chessboard2DVisualizer::rawFenCallback, this, std::placeholders::_1));
 
     if (render_rate_hz_ > 0.0)
     {
       auto period = std::chrono::duration<double>(1.0 / render_rate_hz_);
       render_timer_ = create_wall_timer(
           std::chrono::duration_cast<std::chrono::nanoseconds>(period),
-          std::bind(&ChessboardVisualizerComponent::onRenderTimer, this));
+          std::bind(&Chessboard2DVisualizer::onRenderTimer, this));
     }
   }
 
-  void ChessboardVisualizerComponent::gameStatusCallback(const ChessGameStatus::ConstSharedPtr msg)
+  void Chessboard2DVisualizer::gameStatusCallback(const ChessGameStatus::ConstSharedPtr msg)
   {
     if (!msg)
     {
@@ -88,7 +88,7 @@ namespace lekiwi_chess_master
     renderAndPublish();
   }
 
-  void ChessboardVisualizerComponent::rawFenCallback(const std_msgs::msg::String::ConstSharedPtr msg)
+  void Chessboard2DVisualizer::rawFenCallback(const std_msgs::msg::String::ConstSharedPtr msg)
   {
     if (!msg)
     {
@@ -111,7 +111,7 @@ namespace lekiwi_chess_master
     }
   }
 
-  void ChessboardVisualizerComponent::onRenderTimer()
+  void Chessboard2DVisualizer::onRenderTimer()
   {
     bool should_render = false;
     {
@@ -128,7 +128,7 @@ namespace lekiwi_chess_master
     }
   }
 
-  BoardLayout ChessboardVisualizerComponent::calculateLayout(int width, int height)
+  BoardLayout Chessboard2DVisualizer::calculateLayout(int width, int height)
   {
     BoardLayout layout;
     layout.panel_w = width;
@@ -147,7 +147,7 @@ namespace lekiwi_chess_master
     return layout;
   }
 
-  std::array<char, 64> ChessboardVisualizerComponent::parseFenToOccupancy(const std::string &fen)
+  std::array<char, 64> Chessboard2DVisualizer::parseFenToOccupancy(const std::string &fen)
   {
     std::array<char, 64> board{};
     board.fill('\0');
@@ -177,7 +177,7 @@ namespace lekiwi_chess_master
     return board;
   }
 
-  bool ChessboardVisualizerComponent::parseSquareToCoord(
+  bool Chessboard2DVisualizer::parseSquareToCoord(
       const std::string &sq, const BoardLayout &layout, cv::Point &out_center)
   {
     if (sq.length() < 2)
@@ -197,7 +197,7 @@ namespace lekiwi_chess_master
     return true;
   }
 
-  void ChessboardVisualizerComponent::tintSquare(
+  void Chessboard2DVisualizer::tintSquare(
       cv::Mat &panel, const std::string &sq, const cv::Scalar &color, double alpha, const BoardLayout &layout)
   {
     cv::Point center;
@@ -215,7 +215,7 @@ namespace lekiwi_chess_master
     }
   }
 
-  void ChessboardVisualizerComponent::overlayAlphaSprite(
+  void Chessboard2DVisualizer::overlayAlphaSprite(
       cv::Mat &dst, const cv::Mat &sprite, int ox, int oy)
   {
     if (sprite.empty() || sprite.channels() != 4)
@@ -251,7 +251,7 @@ namespace lekiwi_chess_master
     }
   }
 
-  void ChessboardVisualizerComponent::drawMoveArrow(
+  void Chessboard2DVisualizer::drawMoveArrow(
       cv::Mat &panel, const std::string &move_uci, const BoardLayout &layout, const cv::Scalar &color)
   {
     if (move_uci.length() < 4)
@@ -294,7 +294,7 @@ namespace lekiwi_chess_master
     cv::circle(panel, pt_start, thickness, color, -1, cv::LINE_AA);
   }
 
-  void ChessboardVisualizerComponent::loadPieceSprites(int cell_size, const std::string &pieces_dir)
+  void Chessboard2DVisualizer::loadPieceSprites(int cell_size, const std::string &pieces_dir)
   {
     sprite_cache_.clear();
     cached_cell_size_ = cell_size;
@@ -316,7 +316,7 @@ namespace lekiwi_chess_master
     }
   }
 
-  void ChessboardVisualizerComponent::drawBoardTiles(cv::Mat &panel, const BoardLayout &layout) const
+  void Chessboard2DVisualizer::drawBoardTiles(cv::Mat &panel, const BoardLayout &layout) const
   {
     const cv::Scalar light_tile(240, 217, 181); // #F0D9B5 (BGR)
     const cv::Scalar dark_tile(181, 136, 99);   // #B58863 (BGR)
@@ -333,7 +333,7 @@ namespace lekiwi_chess_master
     }
   }
 
-  void ChessboardVisualizerComponent::drawMoveHighlights(
+  void Chessboard2DVisualizer::drawMoveHighlights(
       cv::Mat &panel, const std::string &last_move, const std::string &best_move, const BoardLayout &layout) const
   {
     if (last_move.length() >= 4)
@@ -348,7 +348,7 @@ namespace lekiwi_chess_master
     }
   }
 
-  int ChessboardVisualizerComponent::drawPieceSprites(
+  int Chessboard2DVisualizer::drawPieceSprites(
       cv::Mat &panel, const std::array<char, 64> &occupancy_board, const BoardLayout &layout)
   {
     int piece_count = 0;
@@ -378,7 +378,7 @@ namespace lekiwi_chess_master
     return piece_count;
   }
 
-  void ChessboardVisualizerComponent::drawMoveArrows(
+  void Chessboard2DVisualizer::drawMoveArrows(
       cv::Mat &panel, const std::string &last_move, const std::string &best_move, const BoardLayout &layout) const
   {
     // Green arrow for last executed move
@@ -393,7 +393,7 @@ namespace lekiwi_chess_master
     }
   }
 
-  void ChessboardVisualizerComponent::drawBoardCoordinates(cv::Mat &panel, const BoardLayout &layout) const
+  void Chessboard2DVisualizer::drawBoardCoordinates(cv::Mat &panel, const BoardLayout &layout) const
   {
     cv::rectangle(panel, cv::Rect(layout.start_x, layout.start_y, layout.board_size, layout.board_size),
                   cv::Scalar(60, 70, 80), 2);
@@ -415,7 +415,7 @@ namespace lekiwi_chess_master
     }
   }
 
-  void ChessboardVisualizerComponent::drawHeaderAndFooter(
+  void Chessboard2DVisualizer::drawHeaderAndFooter(
       cv::Mat &panel, const BoardDisplayContext &ctx, int piece_count, const BoardLayout &layout) const
   {
     // Header status
@@ -483,7 +483,7 @@ namespace lekiwi_chess_master
                 cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
   }
 
-  void ChessboardVisualizerComponent::render2DBoardPanel(
+  void Chessboard2DVisualizer::render2DBoardPanel(
       cv::Mat &panel, const BoardDisplayContext &ctx)
   {
     BoardLayout layout = calculateLayout(board_panel_size_, board_panel_size_);
@@ -505,7 +505,7 @@ namespace lekiwi_chess_master
     drawHeaderAndFooter(panel, ctx, piece_count, layout);
   }
 
-  BoardDisplayContext ChessboardVisualizerComponent::buildDisplayContext() const
+  BoardDisplayContext Chessboard2DVisualizer::buildDisplayContext() const
   {
     auto ctx = has_status_ ? BoardDisplayContext::fromGameStatus(latest_status_)
                            : BoardDisplayContext{};
@@ -520,7 +520,7 @@ namespace lekiwi_chess_master
     return ctx;
   }
 
-  void ChessboardVisualizerComponent::renderAndPublish()
+  void Chessboard2DVisualizer::renderAndPublish()
   {
     BoardDisplayContext ctx;
     {
@@ -545,4 +545,4 @@ namespace lekiwi_chess_master
 
 } // namespace lekiwi_chess_master
 
-RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_chess_master::ChessboardVisualizerComponent)
+RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_chess_master::Chessboard2DVisualizer)

@@ -16,6 +16,10 @@ Panels:
         - /Chessboard AprilTag Markers1/Topic1
         - /Move Feasibility Plan1
         - /Move Feasibility Plan1/Topic1
+        - /3D Chessboard & Pieces1
+        - /3D Chessboard & Pieces1/Topic1
+        - /Robot Mission Status HUD1
+        - /Robot Mission Status HUD1/Topic1
         - /Left Camera1/Topic1
       Splitter Ratio: 0.5
     Tree Height: 461
@@ -339,6 +343,32 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /workspace_checker/feasibility_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: 3D Chessboard & Pieces
+      Namespaces:
+        chess/highlights: true
+        chess/move_arrows: true
+        chess/pieces: true
+      Topic:
+        Depth: 10
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /chess/game_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Robot Mission Status HUD
+      Namespaces:
+        mission/robot_hud: true
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /chess_mission_orchestrator/status_markers
       Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
