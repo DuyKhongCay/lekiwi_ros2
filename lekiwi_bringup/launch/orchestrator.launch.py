@@ -1,7 +1,7 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-"""Launch LeKiwi orchestration and readiness subsystem (TF gatekeeper, workspace checker, orchestrators)."""
+"""Launch LeKiwi orchestration and readiness subsystem from lekiwi_bringup."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -12,12 +12,12 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    pkg_share = FindPackageShare("lekiwi_orchestrator")
+    """Launch LeKiwi orchestration nodes (readiness supervisor, workspace checker, mission conductor)."""
+    bringup_share = FindPackageShare("lekiwi_bringup")
     default_params_file = PathJoinSubstitution(
-        [pkg_share, "config", "orchestrator_params.yaml"]
+        [bringup_share, "config", "control", "orchestrator.yaml"]
     )
 
-    # Minimal CLI Arguments - specific node settings are loaded from orchestrator_params.yaml
     params_file_arg = DeclareLaunchArgument(
         "params_file",
         default_value=default_params_file,
@@ -30,7 +30,7 @@ def generate_launch_description():
     )
     start_mission_arg = DeclareLaunchArgument(
         "start_mission",
-        default_value="true",
+        default_value="false",
         description="Whether to start the autonomous chess mission orchestrator",
     )
     start_readiness_arg = DeclareLaunchArgument(

@@ -27,7 +27,10 @@ from lekiwi_orchestrator.fsm import (
     PERCEPTION_CONTEXT_NAMES,
     MissionState,
 )
-from lekiwi_orchestrator.visualizer import MissionStatusMarkerBuilder, VisualizerConfig
+from lekiwi_orchestrator.mission_status_visualizer import (
+    MissionStatusMarkerBuilder,
+    VisualizerConfig,
+)
 
 
 @dataclass(frozen=True)

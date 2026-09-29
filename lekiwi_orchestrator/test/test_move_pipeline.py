@@ -9,7 +9,10 @@ import pytest
 import rclpy
 from geometry_msgs.msg import Point
 from lekiwi_orchestrator.fsm import MotionExecutionState
-from lekiwi_orchestrator.motion_dispatcher import SimulatedActionDispatcher
+from lekiwi_orchestrator.motion_dispatcher import (
+    ActionDispatcherInterface,
+    ActionResult,
+)
 from lekiwi_orchestrator.move_pipeline import (
     ChessMoveGoal,
     ExecutionStage,
@@ -20,6 +23,39 @@ from lekiwi_orchestrator.perception_manager import PerceptionContextCoordinator
 from rclpy.node import Node
 
 from lekiwi_interfaces.srv import CheckMoveFeasibility
+
+
+class DummyPipelineDispatcher(ActionDispatcherInterface):
+    """Local test stub for testing move pipeline execution in isolation."""
+
+    def check_feasibility(
+        self, goal, timeout_sec=5.0, on_success=None, on_error=None
+    ) -> bool:
+        if on_success:
+            resp = CheckMoveFeasibility.Response()
+            resp.feasible = True
+            on_success(resp)
+        return True
+
+    def send_navigation_goal(
+        self, target_pose, timeout_sec=60.0, on_completed=None
+    ) -> bool:
+        if on_completed:
+            on_completed(ActionResult(success=True, message="Mock nav ok"))
+        return True
+
+    def send_manipulation_goal(
+        self, goal, timeout_sec=60.0, on_feedback=None, on_completed=None
+    ) -> bool:
+        if on_completed:
+            on_completed(ActionResult(success=True, message="Mock manip ok"))
+        return True
+
+    def cancel_active_goal(self) -> None:
+        pass
+
+    def destroy(self) -> None:
+        pass
 
 
 @pytest.fixture(scope="module")
@@ -149,7 +185,7 @@ def test_chess_move_goal_from_uci():
 
 def test_move_pipeline_executor_lifecycle(ros_context):
     node = Node("test_pipeline_executor_node")
-    dispatcher = SimulatedActionDispatcher(node)
+    dispatcher = DummyPipelineDispatcher()
     perception = PerceptionContextCoordinator(
         node=node,
         perception_context_topic="/test/pipeline/perception_context",
@@ -213,7 +249,7 @@ def test_move_pipeline_executor_lifecycle(ros_context):
 
 def test_move_pipeline_executor_cancellation(ros_context):
     node = Node("test_pipeline_cancel_node")
-    dispatcher = SimulatedActionDispatcher(node)
+    dispatcher = DummyPipelineDispatcher()
     perception = PerceptionContextCoordinator(
         node=node,
         perception_context_topic="/test/cancel/perception_context",
@@ -277,7 +313,7 @@ def test_stage_pipeline_builder_custom_registry(base_goal):
 def test_move_pipeline_grasp_readiness_recovery(ros_context):
     """Verify that when grasp readiness is False, observation recovery is invoked without crashing."""
     node = Node("test_grasp_readiness_node")
-    dispatcher = SimulatedActionDispatcher(node)
+    dispatcher = DummyPipelineDispatcher()
     perception = PerceptionContextCoordinator(
         node=node,
         perception_context_topic="/test/grasp/perception_context",
@@ -320,7 +356,7 @@ def test_move_pipeline_grasp_readiness_recovery(ros_context):
 def test_move_pipeline_grasp_unready_without_recovery_fails(ros_context):
     """Verify that when grasp is unready and no recovery callback exists, failure is reported."""
     node = Node("test_grasp_fail_node")
-    dispatcher = SimulatedActionDispatcher(node)
+    dispatcher = DummyPipelineDispatcher()
     perception = PerceptionContextCoordinator(
         node=node,
         perception_context_topic="/test/grasp_fail/perception_context",

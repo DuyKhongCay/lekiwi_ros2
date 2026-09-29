@@ -19,6 +19,7 @@ High-level autonomous chess mission orchestrator, readiness-gated navigation sta
    - FOV & observation geometry calculations (`compute_observation_pose`, `generate_candidate_observation_poses`).
 4. **Motion Dispatching, Nav2 Lifecycle & Active Observation (`motion_dispatcher.py`)**:
    - Action dispatching abstraction (`ActionDispatcherInterface`, `RosActionDispatcher`, `SimulatedActionDispatcher`): handles Nav2 goal dispatching, manipulation action execution, and watchdog monitoring with full test mockability.
+   - Action dispatching abstraction (`ActionDispatcherInterface`, `RosActionDispatcher`): handles Nav2 goal dispatching (with `mock_nav2` tabletop bypass), manipulation action execution, and watchdog monitoring with full test mockability.
    - Nav2 lifecycle management: handles readiness-gated Nav2 lifecycle startup (`/lifecycle_manager_navigation/manage_nodes`), heartbeat timeout expiration, and backoff retries.
    - Active observation navigator (`ActiveObservationNavigator`): repositions robot base to alternative candidate viewpoints when board scanning is occluded or timed out.
 5. **Consolidated Health & Self-Healing (`health_monitor.py`)**:
@@ -70,9 +71,14 @@ High-level autonomous chess mission orchestrator, readiness-gated navigation sta
 
 ## 🚀 Launch & Usage
 
+The orchestration and readiness subsystem launch files and YAML configurations are centralized in `lekiwi_bringup`:
+
 ```bash
-# Launch full orchestration layer
-ros2 launch lekiwi_orchestrator orchestrator.launch.py
+# Launch full orchestration layer from lekiwi_bringup
+ros2 launch lekiwi_bringup orchestrator.launch.py
+
+# Launch with autonomous mission execution enabled
+ros2 launch lekiwi_bringup orchestrator.launch.py start_mission:=true
 ```
 
 ---

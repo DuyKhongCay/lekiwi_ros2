@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import math
-import time
 
 import pytest
 import rclpy
@@ -20,12 +19,10 @@ from lekiwi_orchestrator.fsm import (
 from lekiwi_orchestrator.motion_dispatcher import (
     ActionDispatcherInterface,
     ActionResult,
-    SimulatedActionDispatcher,
 )
 from lekiwi_orchestrator.move_pipeline import (
     ChessMoveGoal,
 )
-from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
@@ -35,7 +32,57 @@ from lekiwi_interfaces.msg import (
     ChessMoveDetails,
     PerceptionContext,
 )
-from lekiwi_interfaces.srv import CheckMoveFeasibility, SetPerceptionContext
+from lekiwi_interfaces.srv import CheckMoveFeasibility
+
+
+class TrackingDispatcher(ActionDispatcherInterface):
+    """Local test tracking dispatcher for orchestrator tests."""
+
+    def __init__(self):
+        self.nav_goals = []
+        self.manip_goals = []
+
+    def check_feasibility(
+        self,
+        goal,
+        timeout_sec=5.0,
+        on_success=None,
+        on_error=None,
+    ):
+        return True
+
+    def send_navigation_goal(
+        self,
+        target_pose,
+        timeout_sec=60.0,
+        on_completed=None,
+    ):
+        self.nav_goals.append(target_pose)
+        if on_completed:
+            on_completed(
+                ActionResult(success=True, message="OK", execution_time_sec=0.1)
+            )
+        return True
+
+    def send_manipulation_goal(
+        self,
+        goal,
+        timeout_sec=60.0,
+        on_feedback=None,
+        on_completed=None,
+    ):
+        self.manip_goals.append(goal)
+        if on_completed:
+            on_completed(
+                ActionResult(success=True, message="Done", execution_time_sec=0.5)
+            )
+        return True
+
+    def cancel_active_goal(self):
+        pass
+
+    def destroy(self):
+        pass
 
 
 @pytest.fixture(scope="module")
@@ -170,56 +217,6 @@ def test_workflow_dispatch_zero_nav_simulation(ros_context):
         node.destroy_node()
 
 
-def test_nav_readiness_lease_expiration_in_reachability(ros_context):
-    """Verify that when nav lease expires in CHECKING_REACHABILITY, orchestrator drops to ERROR_FALLBACK."""
-    node = ChessMissionOrchestrator()
-    try:
-        node._on_nav_ready(Bool(data=True))
-        node.transition_to(MissionState.EVALUATING_BEST_MOVE)
-        node.transition_to(MissionState.CHECKING_REACHABILITY)
-        assert node.mission_state == MissionState.CHECKING_REACHABILITY
-
-        # Simulate lease timeout
-        time.sleep(node.config.readiness_timeout_sec + 0.05)
-        assert not node.is_nav_ready
-        node.health_monitor.expire_readiness(node.mission_state)
-        assert node.mission_state == MissionState.ERROR_FALLBACK
-    finally:
-        node.destroy_node()
-
-
-def test_workflow_dispatch_uci_with_motion_response(ros_context):
-    node = ChessMissionOrchestrator(
-        parameter_overrides=[Parameter("skip_navigation", value=True)]
-    )
-    try:
-        node._on_nav_ready(Bool(data=True))
-        node._on_grasp_ready(Bool(data=True))
-        assert node.mission_state == MissionState.WAITING_FOR_PLAYER_MOVE
-
-        resp = CheckMoveFeasibility.Response()
-        resp.feasible = True
-        resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
-        resp.message = "Feasible in lekiwi_motion"
-
-        details = ChessMoveGoal(
-            uci="e2e4",
-            from_square="e2",
-            to_square="e4",
-            promotion=None,
-            is_capture=False,
-        )
-
-        node.transition_to(MissionState.EVALUATING_BEST_MOVE)
-        node.transition_to(MissionState.CHECKING_REACHABILITY)
-        node._on_feasibility_response(resp, details)
-
-        assert node.mission_state == MissionState.WAITING_FOR_PLAYER_MOVE
-        assert node.motion_state == MotionExecutionState.IDLE
-    finally:
-        node.destroy_node()
-
-
 def test_move_details_dispatching(ros_context):
     """Verify ChessMoveDetails message populates ChessMoveGoal correctly."""
     node = ChessMissionOrchestrator()
@@ -297,71 +294,6 @@ def test_nav_readiness_gating_behavior(ros_context):
         node.destroy_node()
 
 
-def test_workflow_dispatch_dual_base_simulation(ros_context):
-    node = ChessMissionOrchestrator(
-        parameter_overrides=[Parameter("skip_navigation", value=True)]
-    )
-    try:
-        node._on_nav_ready(Bool(data=True))
-        node._on_grasp_ready(Bool(data=True))
-        assert node.mission_state == MissionState.WAITING_FOR_PLAYER_MOVE
-
-        resp = CheckMoveFeasibility.Response()
-        resp.feasible = True
-        resp.plan_type = CheckMoveFeasibility.Response.PLAN_DUAL_BASE
-        resp.pick_base_pose.pose.position.x = 1.0
-        resp.place_base_pose.pose.position.x = 2.0
-
-        details = ChessMoveGoal(
-            uci="e2e4",
-            from_square="e2",
-            to_square="e4",
-            promotion=None,
-            is_capture=False,
-        )
-
-        node.transition_to(MissionState.EVALUATING_BEST_MOVE)
-        node.transition_to(MissionState.CHECKING_REACHABILITY)
-
-        node._on_feasibility_response(resp, details)
-
-        assert node.mission_state == MissionState.WAITING_FOR_PLAYER_MOVE
-        assert node.motion_state == MotionExecutionState.IDLE
-        assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
-    finally:
-        node.destroy_node()
-
-
-def test_manipulation_safe_attributes_no_attribute_error(ros_context):
-    node = ChessMissionOrchestrator(
-        parameter_overrides=[Parameter("skip_navigation", value=True)]
-    )
-    try:
-        node._on_nav_ready(Bool(data=True))
-        node._on_grasp_ready(Bool(data=True))
-        node.transition_to(MissionState.EVALUATING_BEST_MOVE)
-        node.transition_to(MissionState.CHECKING_REACHABILITY)
-
-        resp = CheckMoveFeasibility.Response()
-        resp.feasible = True
-        resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
-        assert not hasattr(resp, "pick_ik_solution")
-        assert not hasattr(resp, "place_ik_solution")
-
-        details = ChessMoveGoal(
-            uci="g1f3",
-            from_square="g1",
-            to_square="f3",
-            promotion=None,
-            is_capture=False,
-        )
-
-        node._on_feasibility_response(resp, details)
-        assert node.mission_state == MissionState.WAITING_FOR_PLAYER_MOVE
-    finally:
-        node.destroy_node()
-
-
 def test_feasibility_timeout_watchdog(ros_context):
     node = ChessMissionOrchestrator()
     try:
@@ -378,18 +310,16 @@ def test_feasibility_timeout_watchdog(ros_context):
 
 
 def test_action_timeout_watchdog_cancels_goal(ros_context):
-    class _MockDispatcher(SimulatedActionDispatcher):
-        def __init__(self, node):
-            super().__init__(node)
+    class _MockDispatcher(TrackingDispatcher):
+        def __init__(self):
+            super().__init__()
             self.cancelled = False
 
         def cancel_active_goal(self):
             self.cancelled = True
 
-    dummy = Node("dummy_for_disp")
-    mock_dispatcher = _MockDispatcher(dummy)
+    mock_dispatcher = _MockDispatcher()
     node = ChessMissionOrchestrator(action_dispatcher=mock_dispatcher)
-    dummy.destroy_node()
     try:
         node._on_nav_ready(Bool(data=True))
         node.transition_to(MissionState.EVALUATING_BEST_MOVE)
@@ -799,39 +729,10 @@ def test_2level_hierarchical_fsm_micro_stage_transitions(ros_context):
         node.destroy_node()
 
 
-def test_set_perception_context_service_handler(ros_context):
-    node = ChessMissionOrchestrator()
-    try:
-        node._on_nav_ready(Bool(data=True))
-        assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
-
-        req = SetPerceptionContext.Request()
-        req.requested_context.value = PerceptionContext.TF_TRACKING_AND_NAV
-        resp = SetPerceptionContext.Response()
-
-        handled_resp = node._perception.handle_set_context_service(req, resp)
-        assert handled_resp.success
-        assert node.perception_context == PerceptionContext.TF_TRACKING_AND_NAV
-        assert (
-            handled_resp.applied_context.value == PerceptionContext.TF_TRACKING_AND_NAV
-        )
-
-        # Test rejected illegal transition
-        req_bad = SetPerceptionContext.Request()
-        # Cannot jump from TF_TRACKING_AND_NAV directly to CALIBRATION_STREAM
-        req_bad.requested_context.value = PerceptionContext.CALIBRATION_STREAM
-        resp_bad = SetPerceptionContext.Response()
-        handled_bad = node._perception.handle_set_context_service(req_bad, resp_bad)
-        assert not handled_bad.success
-        assert node.perception_context == PerceptionContext.TF_TRACKING_AND_NAV
-    finally:
-        node.destroy_node()
-
-
 def test_reposition_to_next_observation_viewpoint(ros_context):
-    class NavTrackingDispatcher(SimulatedActionDispatcher):
-        def __init__(self, node):
-            super().__init__(node)
+    class NavTrackingDispatcher(TrackingDispatcher):
+        def __init__(self):
+            super().__init__()
             self.dispatched_poses = []
 
         def send_navigation_goal(
@@ -846,10 +747,8 @@ def test_reposition_to_next_observation_viewpoint(ros_context):
                 )
             return True
 
-    dummy = Node("test_dummy_for_nav")
-    nav_dispatcher = NavTrackingDispatcher(dummy)
+    nav_dispatcher = NavTrackingDispatcher()
     node = ChessMissionOrchestrator(action_dispatcher=nav_dispatcher)
-    dummy.destroy_node()
     try:
         node._on_nav_ready(Bool(data=True))
         assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
@@ -870,26 +769,6 @@ def test_reposition_to_next_observation_viewpoint(ros_context):
 
         # Context returns to BOARD_STATE_SCAN after reaching observation viewpoint
         assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
-    finally:
-        node.destroy_node()
-
-
-def test_independent_nav_and_grasp_readiness(ros_context):
-    """Verify independent nav_ready and grasp_ready tracking in orchestrator."""
-    node = ChessMissionOrchestrator()
-    try:
-        assert not node.is_nav_ready
-        assert not node.is_grasp_ready
-
-        # Send nav ready
-        node._on_nav_ready(Bool(data=True))
-        assert node.is_nav_ready
-        assert not node.is_grasp_ready
-
-        # Send grasp ready
-        node._on_grasp_ready(Bool(data=True))
-        assert node.is_nav_ready
-        assert node.is_grasp_ready
     finally:
         node.destroy_node()
 

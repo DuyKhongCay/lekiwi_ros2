@@ -60,7 +60,7 @@ from lekiwi_orchestrator.move_pipeline import (
 from lekiwi_orchestrator.perception_manager import (
     PerceptionContextCoordinator,
 )
-from lekiwi_orchestrator.visualizer import VisualizerConfig
+from lekiwi_orchestrator.mission_status_visualizer import VisualizerConfig
 
 
 class OrchestratorConfig:
@@ -218,6 +218,14 @@ class ChessMissionOrchestrator(Node):
                 check_feasibility_service_name=self.config.check_feasibility_srv,
                 callback_group=self._cb_group_client,
             )
+        self._dispatcher = action_dispatcher or RosActionDispatcher(
+            self,
+            nav2_action_name=self.config.navigate_to_pose_action,
+            manipulation_action_name=self.config.execute_chess_move_action,
+            check_feasibility_service_name=self.config.check_feasibility_srv,
+            callback_group=self._cb_group_client,
+            mock_nav2=self.config.skip_navigation,
+        )
 
         self._observation_nav = ActiveObservationNavigator(
             node=self,

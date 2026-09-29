@@ -33,9 +33,14 @@ def ros_context():
         rclpy.shutdown()
 
 
-def test_simulated_action_dispatcher(ros_context):
-    node = Node("test_sim_dispatcher_node")
-    dispatcher = SimulatedActionDispatcher(node)
+def test_ros_action_dispatcher_mock_nav2(monkeypatch, ros_context):
+    """Verify RosActionDispatcher with mock_nav2=True bypasses Nav2 without creating Nav2 client."""
+    monkeypatch.setattr(
+        "lekiwi_orchestrator.motion_dispatcher.ActionClient",
+        lambda *args, **kwargs: Mock(),
+    )
+    node = Node("test_mock_nav_disp_node")
+    dispatcher = RosActionDispatcher(node=node, mock_nav2=True)
     try:
         # Feasibility check
         feasibility_result = []
@@ -46,8 +51,11 @@ def test_simulated_action_dispatcher(ros_context):
         assert success
         assert len(feasibility_result) == 1
         assert feasibility_result[0] is True
+        assert dispatcher._nav2_client is None
+        assert dispatcher._manipulation_client is not None
 
         # Navigation goal
+        # Navigation goal should complete immediately with mock success
         nav_results = []
         target_pose = PoseStamped()
         target_pose.pose.position.x = 1.0
@@ -74,8 +82,23 @@ def test_simulated_action_dispatcher(ros_context):
 
 
 def test_active_observation_navigator(ros_context):
+    class PureNavMock(INavigationDispatcher):
+        def __init__(self):
+            self.dispatched_poses = []
+
+        def send_navigation_goal(
+            self, target_pose, timeout_sec=60.0, on_completed=None
+        ) -> bool:
+            self.dispatched_poses.append(target_pose)
+            if on_completed:
+                on_completed(ActionResult(success=True, message="Mock nav ok"))
+            return True
+
+        def cancel_active_goal(self) -> None:
+            pass
+
     node = Node("test_active_obs_nav_node")
-    dispatcher = SimulatedActionDispatcher(node)
+    dispatcher = PureNavMock()
     navigator = ActiveObservationNavigator(
         node=node,
         dispatcher=dispatcher,
@@ -125,41 +148,6 @@ def test_segregated_interfaces_compliance():
     assert issubclass(SimulatedActionDispatcher, INavigationDispatcher)
     assert issubclass(SimulatedActionDispatcher, IManipulationDispatcher)
     assert issubclass(SimulatedActionDispatcher, ActionDispatcherInterface)
-
-
-def test_active_observation_navigator_accepts_pure_navigation_dispatcher(ros_context):
-    """Verify ISP: ActiveObservationNavigator only requires INavigationDispatcher, not a fat interface."""
-
-    class PureNavigationMock(INavigationDispatcher):
-        def __init__(self):
-            self.dispatched_poses = []
-            self.cancel_called = False
-
-        def send_navigation_goal(
-            self,
-            target_pose: PoseStamped,
-            timeout_sec: float = 60.0,
-            on_completed=None,
-        ) -> bool:
-            self.dispatched_poses.append(target_pose)
-            if on_completed:
-                on_completed(ActionResult(success=True, message="Pure nav ok"))
-            return True
-
-        def cancel_active_goal(self) -> None:
-            self.cancel_called = True
-
-    node = Node("test_isp_navigator_node")
-    try:
-        nav_dispatcher = PureNavigationMock()
-        navigator = ActiveObservationNavigator(node=node, dispatcher=nav_dispatcher)
-
-        dispatched = navigator.reposition_to_next_viewpoint(board_x=0.0, board_y=0.0)
-        assert dispatched is True
-        assert len(nav_dispatcher.dispatched_poses) == 1
-        assert navigator.viewpoint_index == 1
-    finally:
-        node.destroy_node()
 
 
 def test_ros_action_dispatcher_initialization_and_destroy(monkeypatch):

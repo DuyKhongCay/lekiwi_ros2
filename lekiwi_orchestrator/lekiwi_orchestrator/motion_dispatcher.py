@@ -10,6 +10,10 @@ Follows Dependency Inversion Principle (DIP):
 2. RosActionDispatcher provides production hardware ROS 2 communication with watchdogs.
 3. SimulatedActionDispatcher enables fast in-memory CI/CD testing.
 4. ActiveObservationNavigator manages base repositioning to candidate vantage points
+2. RosActionDispatcher provides production ROS 2 communication with watchdogs,
+   with optional mock_nav2 bypass for tabletop setups where base navigation is mocked
+   and manipulation is handled directly by lekiwi_manipulation.
+3. ActiveObservationNavigator manages base repositioning to candidate vantage points
    when perception is occluded or legal FEN detection times out.
 """
 
@@ -114,6 +118,12 @@ class ActionDispatcherInterface(
 class RosActionDispatcher(ActionDispatcherInterface):
     """Concrete production action dispatcher communicating over ROS 2 Action and Service servers."""
 
+    """Concrete action dispatcher communicating over ROS 2 Action and Service servers.
+
+    Supports mock_nav2 for tabletop setups where base navigation is bypassed
+    while manipulation is delegated directly to ROS 2 (lekiwi_manipulation).
+    """
+
     def __init__(
         self,
         node: Node,
@@ -121,9 +131,11 @@ class RosActionDispatcher(ActionDispatcherInterface):
         manipulation_action_name: str = "/manipulation/execute_chess_move",
         check_feasibility_service_name: str = "/workspace/check_move_feasibility",
         callback_group: CallbackGroup | None = None,
+        mock_nav2: bool = False,
     ) -> None:
         self._node = node
         self._callback_group = callback_group
+        self._mock_nav2 = mock_nav2
         self._active_goal_handle = None
         self._action_timer = None
         self._feasibility_timer = None
@@ -141,7 +153,7 @@ class RosActionDispatcher(ActionDispatcherInterface):
                 nav2_action_name,
                 callback_group=callback_group,
             )
-            if NavigateToPose is not None
+            if (NavigateToPose is not None and not mock_nav2)
             else None
         )
         self._manipulation_client = (
@@ -273,6 +285,21 @@ class RosActionDispatcher(ActionDispatcherInterface):
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
+        if self._mock_nav2:
+            self._node.get_logger().info(
+                f"[MOCK NAV2] Base repositioning bypassed to "
+                f"({target_pose.pose.position.x:.2f}, {target_pose.pose.position.y:.2f})"
+            )
+            if on_completed:
+                on_completed(
+                    ActionResult(
+                        success=True,
+                        message="Mock navigation completed (tabletop mode)",
+                        execution_time_sec=0.05,
+                    )
+                )
+            return True
+
         if self._nav2_client is None or not self._nav2_client.server_is_ready():
             self._node.get_logger().error(
                 "Nav2 action client is unavailable or server is not ready!"
