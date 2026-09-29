@@ -55,10 +55,17 @@ Torque startup policy is `preserve`: startup and shutdown emit no torque command
 ## Validation
 
 ```bash
-colcon build --base-paths lekiwi_ros2/lekiwi_description lekiwi_ros2/lekiwi_control --packages-select lekiwi_description lekiwi_control --symlink-install --cmake-args -GNinja -DBUILD_TESTING=ON
+colcon build --packages-select lekiwi_motion --symlink-install --cmake-args -DBUILD_TESTING=ON
 source install/setup.bash
-colcon test --packages-select lekiwi_control --event-handlers console_cohesion+
-colcon test-result --test-result-base build/lekiwi_control --verbose
+colcon test --packages-select lekiwi_motion --event-handlers console_cohesion+
+colcon test-result --test-result-base build/lekiwi_motion --verbose
 ```
 
-Workspace GTests cover extraction failures, both IK branches, independent KDL FK against the expanded production xacro, standoff/dual-base planning, budgets, configuration validation and read-only parameters. Test paths are supplied by CMake. The board-coverage test reads the deployed control YAML and records the reachable count rather than assuming all 64 squares are reachable. The runtime pytest loads/unloads the installed component on a localhost ROS domain with synthetic TF and robot descriptions, testing model updates, stale/tilted/missing TF, retained delivery and service output. Other GTests cover torque ordering and the readiness policy. These checks establish L1–L3 software behavior, not hardware calibration or physical collision safety.
+GTests cover:
+- **ChessboardMapper**: UCI move notation parsing, file/rank index mapping, and coordinate symmetry.
+- **FeasibilityMarkerBuilder**: 3D RViz visualization markers for single/dual/triple-base plans and HUD text alerts.
+- **SystemReadinessEvaluator**: Two-tier readiness evaluation (Navigation Readiness vs Grasp Readiness), EKF variance checks, and stationarity detection.
+- **TorqueCommandState**: Multi-group joint slicing, torque state toggles, and parameter validation.
+- **WorkspaceKinematics**: Analytical IK roundtrip against URDF link lengths, multi-tier base standoff planning (Zero-Nav, Single-Base, Dual-Base, Triple-Base capture).
+
+These unit tests establish L1 deterministic software behavior without requiring live hardware or physical collision simulators.

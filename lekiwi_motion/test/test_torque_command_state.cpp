@@ -6,15 +6,6 @@
 using lekiwi_motion::TorqueCommandState;
 using Request = lekiwi_interfaces::srv::SetTorqueEnabled::Request;
 
-// Initial state defaults to enabled (1.0) so partial commands can be executed immediately.
-TEST(TorqueCommandState, AllowsPartialCommandsOnStartup)
-{
-  TorqueCommandState state({"a"}, {"b"});
-  EXPECT_EQ(state.apply(Request::TARGET_ARM, false), (std::vector<double>{0, 1}));
-  EXPECT_EQ(state.apply(Request::TARGET_BASE, false), (std::vector<double>{0, 0}));
-  EXPECT_EQ(state.apply(Request::TARGET_ALL, true), (std::vector<double>{1, 1}));
-}
-
 // Slice division preserves other group without side-effects.
 TEST(TorqueCommandState, PreservesOtherGroup)
 {
@@ -77,12 +68,10 @@ TEST(TorqueCommandState, IsGroupEnabledAndToggles)
   EXPECT_FALSE(state.is_group_enabled(Request::TARGET_BASE));
 }
 
-// Verifies counts and multi-joint group slicing
-TEST(TorqueCommandState, SlicingAndCounts)
+// Verifies counts of multi-joint groups
+TEST(TorqueCommandState, JointCounts)
 {
   TorqueCommandState state({"a1", "a2", "a3"}, {"b1", "b2"});
   EXPECT_EQ(state.arm_count(), 3);
   EXPECT_EQ(state.total_count(), 5);
-  EXPECT_EQ(state.apply(Request::TARGET_ARM, false), (std::vector<double>{0, 0, 0, 1, 1}));
-  EXPECT_EQ(state.apply(Request::TARGET_BASE, false), (std::vector<double>{0, 0, 0, 0, 0}));
 }

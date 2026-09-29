@@ -158,10 +158,7 @@ install(DIRECTORY include/
 if(BUILD_TESTING)
   # C++ pure logic unit tests (không cần ROS runtime)
   find_package(ament_cmake_gtest REQUIRED)
-  find_package(kdl_parser REQUIRED)
-  find_package(orocos_kdl REQUIRED)
   find_package(lekiwi_description REQUIRED)
-  find_package(yaml-cpp REQUIRED)
   find_program(XACRO_EXECUTABLE xacro REQUIRED)
   get_filename_component(DESCRIPTION_SHARE "${lekiwi_description_DIR}/.." ABSOLUTE)
   file(GLOB DESCRIPTION_INPUTS CONFIGURE_DEPENDS
