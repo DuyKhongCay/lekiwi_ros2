@@ -1,5 +1,5 @@
 /**
- * @file chess_overlay_component.hpp
+ * @file chess_overlay_visualizer.hpp
  * @brief Perception overlay renderer: AprilTag corners, 81-point grid, and YOLO detections.
  *
  * Subscribes to raw camera image, /chess/detections_2d, /chess/tag_centers, and /chess/grid_points.
@@ -35,13 +35,13 @@ namespace lekiwi_perception
 {
 
   /**
-   * @brief Headless component rendering piece bounding box overlays, tag corner coordinates, and chessboard grid.
+   * @brief Headless visualizer rendering piece bounding box overlays, tag corner coordinates, and chessboard grid.
    */
-  class ChessOverlayComponent : public rclcpp::Node
+  class ChessOverlayVisualizer : public rclcpp::Node
   {
   public:
-    explicit ChessOverlayComponent(const rclcpp::NodeOptions &options);
-    ~ChessOverlayComponent() override = default;
+    explicit ChessOverlayVisualizer(const rclcpp::NodeOptions &options);
+    ~ChessOverlayVisualizer() override = default;
 
   private:
     void cameraImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg);

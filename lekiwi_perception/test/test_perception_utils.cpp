@@ -184,35 +184,35 @@ TEST_F(PerceptionUtilsTest, PerceptionLifecycleHelperConcurrency)
 
   constexpr int kIterations = 5000;
 
-  // Thread 1: Continuously toggles allowed modes
+  // Thread 1: Continuously toggles allowed contexts
   std::thread writer_modes([&]()
                            {
     for (int i = 0; i < kIterations; ++i)
     {
       if (i % 2 == 0)
       {
-        helper.set_allowed_modes({0, 1});
+        helper.set_allowed_contexts({0, 1});
       }
       else
       {
-        helper.set_allowed_modes({1, 2, 3});
+        helper.set_allowed_contexts({1, 2, 3});
       }
     } });
 
-  // Thread 2: Continuously changes current camera mode
+  // Thread 2: Continuously changes current camera context
   std::thread writer_state([&]()
                            {
     for (int i = 0; i < kIterations; ++i)
     {
-      helper.set_current_mode(static_cast<uint8_t>(i % 4));
+      helper.set_current_context(static_cast<uint8_t>(i % 4));
     } });
 
-  // Thread 3: Continuously reads is_mode_allowed()
+  // Thread 3: Continuously reads is_context_allowed()
   std::thread reader([&]()
                      {
     for (int i = 0; i < kIterations; ++i)
     {
-      (void)helper.is_mode_allowed();
+      (void)helper.is_context_allowed();
     } });
 
   writer_modes.join();

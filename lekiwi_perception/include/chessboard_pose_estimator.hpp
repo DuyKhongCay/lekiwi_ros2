@@ -44,6 +44,8 @@
 #include "rclcpp_lifecycle/lifecycle_publisher.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "visualization_msgs/msg/marker.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 
 #include "tf2/LinearMath/Transform.hpp"
 #include "tf2_ros/buffer.h"
@@ -82,10 +84,13 @@ namespace lekiwi_perception
 
         CovarianceResult compute_covariance(double speed, double wz, int used_tags) const;
 
+        visualization_msgs::msg::MarkerArray build_board_markers() const;
+
     private:
         void load_parameters();
         void init_detector();
         void publish_static_transforms();
+        void publish_board_markers();
         void reset_state();
 
         // Subscriptions
@@ -133,6 +138,7 @@ namespace lekiwi_perception
         std::string base_frame_{"base_footprint"};
         std::vector<double> chessboard_pose_in_map_{0.0, 0.0, 0.004, 0.0, 0.0, 0.0};
         bool publish_static_tf_{true};
+        std::string board_markers_topic_{"chessboard_tag_markers"};
 
         // Dynamic Velocity-Dependent Covariance Parameters
         std::string odom_topic_{"/omni_base_controller/odom"};
@@ -165,6 +171,8 @@ namespace lekiwi_perception
         rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr robot_pose_pub_;
         rclcpp_lifecycle::LifecyclePublisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_detections_pub_;
         rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PolygonStamped>::SharedPtr tag_centers_pub_;
+        rclcpp_lifecycle::LifecyclePublisher<visualization_msgs::msg::MarkerArray>::SharedPtr board_markers_pub_;
+        rclcpp::TimerBase::SharedPtr board_markers_timer_;
 
         std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

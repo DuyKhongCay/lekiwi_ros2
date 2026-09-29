@@ -119,6 +119,63 @@ TEST_F(ChessboardCovarianceTest, DefensiveNanInfHandling)
   EXPECT_NEAR(res_neg.rot_var, 0.04, 1e-6); // wz=2.0 -> clamped to 0.04
 }
 
+TEST_F(ChessboardCovarianceTest, BuildBoardMarkersLifecycle)
+{
+  // Before configuration (tags not loaded), returns DELETEALL marker
+  auto markers_empty = estimator_->build_board_markers();
+  ASSERT_EQ(markers_empty.markers.size(), 1U);
+  EXPECT_EQ(markers_empty.markers[0].action, visualization_msgs::msg::Marker::DELETEALL);
+
+  // Transition to configure
+  estimator_->trigger_transition(
+      rclcpp_lifecycle::Transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE));
+
+  auto markers_configured = estimator_->build_board_markers();
+  // Expect DELETEALL (1) + tags (4) + labels (4) + gridlines (1) + squares (1) = 11 markers
+  ASSERT_EQ(markers_configured.markers.size(), 11U);
+  EXPECT_EQ(markers_configured.markers[0].action, visualization_msgs::msg::Marker::DELETEALL);
+
+  bool has_tags = false;
+  bool has_labels = false;
+  bool has_grid = false;
+  bool has_squares = false;
+
+  for (const auto &m : markers_configured.markers)
+  {
+    if (m.ns == "chessboard/tags")
+    {
+      has_tags = true;
+      EXPECT_EQ(m.type, visualization_msgs::msg::Marker::CUBE);
+      EXPECT_TRUE(m.frame_locked);
+    }
+    else if (m.ns == "chessboard/labels")
+    {
+      has_labels = true;
+      EXPECT_EQ(m.type, visualization_msgs::msg::Marker::TEXT_VIEW_FACING);
+      EXPECT_TRUE(m.frame_locked);
+    }
+    else if (m.ns == "chessboard/gridlines")
+    {
+      has_grid = true;
+      EXPECT_EQ(m.type, visualization_msgs::msg::Marker::LINE_LIST);
+      EXPECT_EQ(m.points.size(), 36U); // 9 horizontal + 9 vertical lines = 18 lines * 2 = 36 points
+      EXPECT_TRUE(m.frame_locked);
+    }
+    else if (m.ns == "chessboard/squares")
+    {
+      has_squares = true;
+      EXPECT_EQ(m.type, visualization_msgs::msg::Marker::CUBE_LIST);
+      EXPECT_EQ(m.points.size(), 32U); // 32 dark squares
+      EXPECT_TRUE(m.frame_locked);
+    }
+  }
+
+  EXPECT_TRUE(has_tags);
+  EXPECT_TRUE(has_labels);
+  EXPECT_TRUE(has_grid);
+  EXPECT_TRUE(has_squares);
+}
+
 int main(int argc, char **argv)
 {
   ::testing::InitGoogleTest(&argc, argv);

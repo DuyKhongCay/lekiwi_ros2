@@ -30,6 +30,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(vision_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn highgui calib3d aruco)
 find_package(PkgConfig REQUIRED)
 
@@ -87,7 +88,7 @@ target_link_libraries(lekiwi_pieces_postprocess PRIVATE
 add_library(lekiwi_perception_component SHARED
   src/hailo/hailo_gst_pipeline.cpp
   src/hailo/chess_vision_mapper.cpp
-  src/chess_overlay_component.cpp
+  src/chess_overlay_visualizer.cpp
   src/hailo_chess_inference_component.cpp
   src/camera_streamer_component.cpp
   src/apriltag/pose_solver.cpp
@@ -127,6 +128,7 @@ ament_target_dependencies(lekiwi_perception_component
   tf2_geometry_msgs
   tf2_ros
   vision_msgs
+  visualization_msgs
 )
 
 rclcpp_components_register_node(lekiwi_perception_component
@@ -135,8 +137,8 @@ rclcpp_components_register_node(lekiwi_perception_component
 )
 
 rclcpp_components_register_node(lekiwi_perception_component
-  PLUGIN "lekiwi_perception::ChessOverlayComponent"
-  EXECUTABLE chess_overlay_node
+  PLUGIN "lekiwi_perception::ChessOverlayVisualizer"
+  EXECUTABLE chess_overlay_visualizer_node
 )
 
 rclcpp_components_register_node(lekiwi_perception_component
@@ -159,7 +161,7 @@ install(TARGETS
 )
 install(TARGETS
   hailo_chess_inference_node
-  chess_overlay_node
+  chess_overlay_visualizer_node
   camera_streamer_node
   chessboard_pose_estimator_node
   DESTINATION lib/${PROJECT_NAME}
@@ -191,18 +193,6 @@ if(BUILD_TESTING)
   ament_add_gtest(test_pose_solver test/test_pose_solver.cpp)
   if(TARGET test_pose_solver)
     target_link_libraries(test_pose_solver lekiwi_perception_component ${OpenCV_LIBRARIES} Eigen3::Eigen)
-    ament_target_dependencies(test_pose_solver
-      rclcpp
-      diagnostic_updater
-      sensor_msgs
-      geometry_msgs
-      std_msgs
-      lekiwi_interfaces
-      tf2
-      tf2_ros
-      tf2_geometry_msgs
-      cv_bridge
-    )
   endif()
 
   ament_add_gtest(test_perception_utils test/test_perception_utils.cpp)
@@ -210,9 +200,9 @@ if(BUILD_TESTING)
     target_link_libraries(test_perception_utils lekiwi_perception_component)
   endif()
 
-  ament_add_gtest(test_chess_overlay_component test/test_chess_overlay_component.cpp)
-  if(TARGET test_chess_overlay_component)
-    target_link_libraries(test_chess_overlay_component lekiwi_perception_component ${OpenCV_LIBRARIES})
+  ament_add_gtest(test_chess_overlay_visualizer test/test_chess_overlay_visualizer.cpp)
+  if(TARGET test_chess_overlay_visualizer)
+    target_link_libraries(test_chess_overlay_visualizer lekiwi_perception_component ${OpenCV_LIBRARIES})
   endif()
 
   ament_add_gtest(test_chessboard_covariance test/test_chessboard_covariance.cpp)

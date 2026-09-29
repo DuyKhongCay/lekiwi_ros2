@@ -43,6 +43,7 @@ namespace lekiwi_perception
         "chessboard_pose_in_map", {0.0, 0.0, 0.004, 0.0, 0.0, 0.0});
 
     declare_parameter<bool>("publish_tf", true);
+    declare_parameter<std::string>("board_markers_topic", "chessboard_tag_markers");
 
     declare_parameter<std::vector<int64_t>>("tags.ids", {0, 1, 2, 3});
     declare_parameter<std::vector<std::string>>("tags.names", {"A1", "H1", "H8", "A8"});
@@ -95,6 +96,8 @@ namespace lekiwi_perception
             "/chessboard/robot_pose", rclcpp::QoS(10));
         tag_centers_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
             "/chess/tag_centers", rclcpp::QoS(1).transient_local().reliable());
+        board_markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
+            board_markers_topic_, rclcpp::QoS(1).transient_local().reliable());
       }
 
       camera_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
@@ -154,10 +157,19 @@ namespace lekiwi_perception
     {
       tag_centers_pub_->on_activate();
     }
+    if (board_markers_pub_)
+    {
+      board_markers_pub_->on_activate();
+    }
 
     if (!calib_)
     {
       publish_static_transforms();
+      publish_board_markers();
+      board_markers_timer_ = create_wall_timer(
+          std::chrono::seconds(10),
+          [this]()
+          { publish_board_markers(); });
     }
 
     if (lifecycle_helper_)
@@ -172,6 +184,7 @@ namespace lekiwi_perception
   ChessboardPoseEstimator::CallbackReturn ChessboardPoseEstimator::on_deactivate(
       const rclcpp_lifecycle::State & /*state*/)
   {
+    board_markers_timer_.reset();
     if (tag_detections_pub_)
     {
       tag_detections_pub_->on_deactivate();
@@ -183,6 +196,10 @@ namespace lekiwi_perception
     if (tag_centers_pub_)
     {
       tag_centers_pub_->on_deactivate();
+    }
+    if (board_markers_pub_)
+    {
+      board_markers_pub_->on_deactivate();
     }
 
     RCLCPP_INFO(get_logger(), "ChessboardPoseEstimator deactivated.");
@@ -219,6 +236,8 @@ namespace lekiwi_perception
       lifecycle_helper_->reset();
       lifecycle_helper_.reset();
     }
+    board_markers_timer_.reset();
+    board_markers_pub_.reset();
     tag_detections_pub_.reset();
     robot_pose_pub_.reset();
     tag_centers_pub_.reset();
@@ -253,6 +272,7 @@ namespace lekiwi_perception
 
     chessboard_pose_in_map_ = get_parameter("chessboard_pose_in_map").as_double_array();
     publish_static_tf_ = get_parameter("publish_tf").as_bool();
+    board_markers_topic_ = get_parameter("board_markers_topic").as_string();
 
     odom_topic_ = get_parameter("odom_topic").as_string();
     odom_timeout_sec_ = get_parameter("odom_timeout_sec").as_double();
@@ -350,6 +370,182 @@ namespace lekiwi_perception
     static_tf_broadcaster_->sendTransform(static_tf);
     RCLCPP_INFO(get_logger(), "Broadcasted static transform: '%s' -> '%s'",
                 map_frame_.c_str(), chessboard_frame_.c_str());
+  }
+
+  visualization_msgs::msg::MarkerArray ChessboardPoseEstimator::build_board_markers() const
+  {
+    visualization_msgs::msg::MarkerArray markers;
+
+    // 0. Cleanup: clear stale markers from RViz scene graph
+    visualization_msgs::msg::Marker clear_marker;
+    clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+    markers.markers.push_back(clear_marker);
+
+    if (tag_configs_.empty())
+    {
+      return markers;
+    }
+
+    double min_x = std::numeric_limits<double>::max();
+    double max_x = std::numeric_limits<double>::lowest();
+    double min_y = std::numeric_limits<double>::max();
+    double max_y = std::numeric_limits<double>::lowest();
+    double sum_z = 0.0;
+
+    int idx = 0;
+    for (const auto &[id, cfg] : tag_configs_)
+    {
+      (void)id;
+      min_x = std::min(min_x, cfg.center.x);
+      max_x = std::max(max_x, cfg.center.x);
+      min_y = std::min(min_y, cfg.center.y);
+      max_y = std::max(max_y, cfg.center.y);
+      sum_z += cfg.center.z;
+
+      // 1. AprilTag Corner Cube Marker
+      visualization_msgs::msg::Marker box;
+      box.header.frame_id = chessboard_frame_;
+      box.ns = "chessboard/tags";
+      box.id = idx;
+      box.type = visualization_msgs::msg::Marker::CUBE;
+      box.action = visualization_msgs::msg::Marker::ADD;
+      box.pose.position.x = cfg.center.x;
+      box.pose.position.y = cfg.center.y;
+      box.pose.position.z = cfg.center.z;
+
+      tf2::Quaternion q;
+      q.setRPY(0.0, 0.0, cfg.yaw);
+      box.pose.orientation = tf2::toMsg(q);
+
+      box.scale.x = tag_size_;
+      box.scale.y = tag_size_;
+      box.scale.z = 0.002;
+      box.color.r = 0.0f;
+      box.color.g = 0.9f;
+      box.color.b = 0.2f;
+      box.color.a = 0.85f; // Bright green
+      box.frame_locked = true;
+      markers.markers.push_back(box);
+
+      // 2. Corner Text Label (A1, H1, H8, A8)
+      visualization_msgs::msg::Marker text;
+      text.header.frame_id = chessboard_frame_;
+      text.ns = "chessboard/labels";
+      text.id = 100 + idx;
+      text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+      text.action = visualization_msgs::msg::Marker::ADD;
+      text.pose.position.x = cfg.center.x;
+      text.pose.position.y = cfg.center.y;
+      text.pose.position.z = cfg.center.z + 0.005; // 5mm above tag
+      text.pose.orientation.w = 1.0;
+      text.scale.z = 0.015; // 15mm font height
+      text.color.r = 1.0f;
+      text.color.g = 1.0f;
+      text.color.b = 0.0f;
+      text.color.a = 1.0f; // Bright yellow
+      text.text = cfg.name;
+      text.frame_locked = true;
+      markers.markers.push_back(text);
+
+      ++idx;
+    }
+
+    const double base_z = sum_z / static_cast<double>(tag_configs_.size());
+    const double step_x = (max_x - min_x) / 8.0;
+    const double step_y = (max_y - min_y) / 8.0;
+
+    // 3. 8x8 Gridlines (LINE_LIST)
+    visualization_msgs::msg::Marker grid_lines;
+    grid_lines.header.frame_id = chessboard_frame_;
+    grid_lines.ns = "chessboard/gridlines";
+    grid_lines.id = 200;
+    grid_lines.type = visualization_msgs::msg::Marker::LINE_LIST;
+    grid_lines.action = visualization_msgs::msg::Marker::ADD;
+    grid_lines.pose.orientation.w = 1.0;
+    grid_lines.scale.x = 0.0015; // 1.5mm line width
+    grid_lines.color.r = 0.2f;
+    grid_lines.color.g = 0.6f;
+    grid_lines.color.b = 1.0f;
+    grid_lines.color.a = 0.9f; // Light blue
+    grid_lines.frame_locked = true;
+    grid_lines.points.reserve(36);
+
+    for (int col = 0; col <= 8; ++col)
+    {
+      const double x_line = min_x + col * step_x;
+      geometry_msgs::msg::Point p_start;
+      p_start.x = x_line;
+      p_start.y = min_y;
+      p_start.z = base_z;
+      geometry_msgs::msg::Point p_end;
+      p_end.x = x_line;
+      p_end.y = max_y;
+      p_end.z = base_z;
+      grid_lines.points.push_back(p_start);
+      grid_lines.points.push_back(p_end);
+    }
+
+    for (int row = 0; row <= 8; ++row)
+    {
+      const double y_line = min_y + row * step_y;
+      geometry_msgs::msg::Point p_start;
+      p_start.x = min_x;
+      p_start.y = y_line;
+      p_start.z = base_z;
+      geometry_msgs::msg::Point p_end;
+      p_end.x = max_x;
+      p_end.y = y_line;
+      p_end.z = base_z;
+      grid_lines.points.push_back(p_start);
+      grid_lines.points.push_back(p_end);
+    }
+    markers.markers.push_back(grid_lines);
+
+    // 4. Dark Squares (CUBE_LIST)
+    visualization_msgs::msg::Marker black_squares;
+    black_squares.header.frame_id = chessboard_frame_;
+    black_squares.ns = "chessboard/squares";
+    black_squares.id = 300;
+    black_squares.type = visualization_msgs::msg::Marker::CUBE_LIST;
+    black_squares.action = visualization_msgs::msg::Marker::ADD;
+    black_squares.pose.orientation.w = 1.0;
+    black_squares.scale.x = step_x * 0.96;
+    black_squares.scale.y = step_y * 0.96;
+    black_squares.scale.z = 0.0005;
+    black_squares.color.r = 0.2f;
+    black_squares.color.g = 0.2f;
+    black_squares.color.b = 0.2f;
+    black_squares.color.a = 0.6f; // Dark translucent
+    black_squares.frame_locked = true;
+    black_squares.points.reserve(32);
+
+    for (int row = 0; row < 8; ++row)
+    {
+      for (int col = 0; col < 8; ++col)
+      {
+        if ((row + col) % 2 == 0)
+        {
+          geometry_msgs::msg::Point pt;
+          pt.x = min_x + (col + 0.5) * step_x;
+          pt.y = min_y + (row + 0.5) * step_y;
+          pt.z = base_z - 0.0005;
+          black_squares.points.push_back(pt);
+        }
+      }
+    }
+    markers.markers.push_back(black_squares);
+
+    return markers;
+  }
+
+  void ChessboardPoseEstimator::publish_board_markers()
+  {
+    if (!board_markers_pub_ || !board_markers_pub_->is_activated() || tag_configs_.empty())
+    {
+      return;
+    }
+    board_markers_pub_->publish(build_board_markers());
+    RCLCPP_DEBUG(get_logger(), "Published board markers to topic: '%s'", board_markers_topic_.c_str());
   }
 
   void ChessboardPoseEstimator::on_camera_info(

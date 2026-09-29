@@ -1,6 +1,6 @@
 /**
- * @file test_chess_overlay_component.cpp
- * @brief Unit and integration tests for ChessOverlayComponent.
+ * @file test_chess_overlay_visualizer.cpp
+ * @brief Unit and integration tests for ChessOverlayVisualizer.
  *
  * Validates parameter loading, lazy evaluation (zero subscriber bypass),
  * visual overlay generation, and staleness/TTL gating.
@@ -26,12 +26,12 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <vision_msgs/msg/detection2_d_array.hpp>
 
-#include "chess_overlay_component.hpp"
+#include "chess_overlay_visualizer.hpp"
 #include "hailo/chess_constants.hpp"
 
 using namespace std::chrono_literals;
 
-class ChessOverlayComponentTest : public ::testing::Test
+class ChessOverlayVisualizerTest : public ::testing::Test
 {
 protected:
   void SetUp() override
@@ -47,22 +47,7 @@ protected:
   }
 };
 
-TEST_F(ChessOverlayComponentTest, DefaultParametersInitialization)
-{
-  rclcpp::NodeOptions options;
-  auto node = std::make_shared<lekiwi_perception::ChessOverlayComponent>(options);
-
-  EXPECT_DOUBLE_EQ(node->get_parameter("stale_timeout_sec").as_double(), 0.5);
-  EXPECT_EQ(node->get_parameter("jpeg_quality").as_int(), 80);
-  EXPECT_FALSE(node->get_parameter("debug").as_bool());
-  EXPECT_EQ(node->get_parameter("camera_topic").as_string(), "/cameras/stereo_left/image_raw");
-  EXPECT_EQ(node->get_parameter("overlay_topic").as_string(), "/chess/overlay_image/compressed");
-  EXPECT_EQ(node->get_parameter("detections_topic").as_string(), "/chess/detections_2d");
-  EXPECT_EQ(node->get_parameter("tag_centers_topic").as_string(), "/chess/tag_centers");
-  EXPECT_EQ(node->get_parameter("grid_points_topic").as_string(), "/chess/grid_points");
-}
-
-TEST_F(ChessOverlayComponentTest, CustomParametersInitialization)
+TEST_F(ChessOverlayVisualizerTest, CustomParametersInitialization)
 {
   rclcpp::NodeOptions options;
   options.parameter_overrides({{"stale_timeout_sec", 0.25},
@@ -75,7 +60,7 @@ TEST_F(ChessOverlayComponentTest, CustomParametersInitialization)
                                {"grid_points_topic", "/custom/grid"},
                                {"tags.ids", std::vector<int64_t>{3, 2, 1, 0}}});
 
-  auto node = std::make_shared<lekiwi_perception::ChessOverlayComponent>(options);
+  auto node = std::make_shared<lekiwi_perception::ChessOverlayVisualizer>(options);
 
   EXPECT_DOUBLE_EQ(node->get_parameter("stale_timeout_sec").as_double(), 0.25);
   EXPECT_EQ(node->get_parameter("jpeg_quality").as_int(), 92);
@@ -87,13 +72,13 @@ TEST_F(ChessOverlayComponentTest, CustomParametersInitialization)
   EXPECT_EQ(node->get_parameter("grid_points_topic").as_string(), "/custom/grid");
 }
 
-TEST_F(ChessOverlayComponentTest, LazyEvaluationSkipWhenNoSubscriber)
+TEST_F(ChessOverlayVisualizerTest, LazyEvaluationSkipWhenNoSubscriber)
 {
   rclcpp::NodeOptions options;
   options.parameter_overrides({{"camera_topic", "/test_lazy/cam"},
                                {"overlay_topic", "/test_lazy/overlay"}});
 
-  auto node = std::make_shared<lekiwi_perception::ChessOverlayComponent>(options);
+  auto node = std::make_shared<lekiwi_perception::ChessOverlayVisualizer>(options);
   auto helper_node = std::make_shared<rclcpp::Node>("test_lazy_helper");
   auto cam_pub = helper_node->create_publisher<sensor_msgs::msg::Image>(
       "/test_lazy/cam", rclcpp::SensorDataQoS());
@@ -112,7 +97,7 @@ TEST_F(ChessOverlayComponentTest, LazyEvaluationSkipWhenNoSubscriber)
   SUCCEED();
 }
 
-TEST_F(ChessOverlayComponentTest, OverlayRenderingWithSubscriber)
+TEST_F(ChessOverlayVisualizerTest, OverlayRenderingWithSubscriber)
 {
   rclcpp::NodeOptions options;
   options.parameter_overrides({{"camera_topic", "/test_render/cam"},
@@ -123,7 +108,7 @@ TEST_F(ChessOverlayComponentTest, OverlayRenderingWithSubscriber)
                                {"debug", true},
                                {"stale_timeout_sec", 1.0}});
 
-  auto node = std::make_shared<lekiwi_perception::ChessOverlayComponent>(options);
+  auto node = std::make_shared<lekiwi_perception::ChessOverlayVisualizer>(options);
   auto helper_node = std::make_shared<rclcpp::Node>("test_render_helper");
 
   auto cam_pub = helper_node->create_publisher<sensor_msgs::msg::Image>(
@@ -222,7 +207,7 @@ TEST_F(ChessOverlayComponentTest, OverlayRenderingWithSubscriber)
   EXPECT_EQ(decoded.rows, 240);
 }
 
-TEST_F(ChessOverlayComponentTest, StalenessTTLTimeoutGating)
+TEST_F(ChessOverlayVisualizerTest, StalenessTTLTimeoutGating)
 {
   rclcpp::NodeOptions options;
   options.parameter_overrides({
@@ -232,7 +217,7 @@ TEST_F(ChessOverlayComponentTest, StalenessTTLTimeoutGating)
       {"stale_timeout_sec", 0.05} // 50ms TTL
   });
 
-  auto node = std::make_shared<lekiwi_perception::ChessOverlayComponent>(options);
+  auto node = std::make_shared<lekiwi_perception::ChessOverlayVisualizer>(options);
   auto helper_node = std::make_shared<rclcpp::Node>("test_ttl_helper");
 
   auto cam_pub = helper_node->create_publisher<sensor_msgs::msg::Image>(

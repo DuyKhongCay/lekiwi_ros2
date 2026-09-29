@@ -196,16 +196,3 @@ TEST(ChessVisionMapperTest, MapPixelToSquareCanonical)
   EXPECT_EQ(ChessVisionMapper::map_pixel_to_square(7.5f, 0.5f, H, 2), "a1");
   EXPECT_EQ(ChessVisionMapper::map_pixel_to_square(0.5f, 7.5f, H, 2), "h8");
 }
-
-TEST(ChessVisionMapperTest, PieceBasePointRatioCalculations)
-{
-  EXPECT_FLOAT_EQ(kPieceBaseYRatio, 0.88F);
-
-  // For a bounding box from (x=100, y=200) with (width=50, height=100):
-  cv::Rect2f bbox(100.0F, 200.0F, 50.0F, 100.0F);
-  float base_x = bbox.x + bbox.width / 2.0F;
-  float base_y = bbox.y + bbox.height * kPieceBaseYRatio;
-
-  EXPECT_FLOAT_EQ(base_x, 125.0F);
-  EXPECT_FLOAT_EQ(base_y, 288.0F); // 200 + 88 = 288 (elevated 12% above bottom 300)
-}

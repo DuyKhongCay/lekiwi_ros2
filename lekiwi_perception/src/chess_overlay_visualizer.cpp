@@ -1,12 +1,12 @@
 /**
- * @file chess_overlay_component.cpp
- * @brief Implementation of ChessOverlayComponent perception overlay renderer.
+ * @file chess_overlay_visualizer.cpp
+ * @brief Implementation of ChessOverlayVisualizer perception overlay renderer.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
  */
 
-#include "chess_overlay_component.hpp"
+#include "chess_overlay_visualizer.hpp"
 #include "hailo/chess_constants.hpp"
 #include <rclcpp_components/register_node_macro.hpp>
 
@@ -17,8 +17,8 @@
 namespace lekiwi_perception
 {
 
-  ChessOverlayComponent::ChessOverlayComponent(const rclcpp::NodeOptions &options)
-      : Node("chess_overlay_component", options)
+  ChessOverlayVisualizer::ChessOverlayVisualizer(const rclcpp::NodeOptions &options)
+      : Node("chess_overlay_visualizer", options)
   {
     camera_topic_ = declare_parameter<std::string>("camera_topic", "/cameras/stereo_left/image_raw");
     detections_topic_ = declare_parameter<std::string>("detections_topic", "/chess/detections_2d");
@@ -37,51 +37,51 @@ namespace lekiwi_perception
     }
 
     RCLCPP_INFO(get_logger(),
-                "Starting ChessOverlayComponent (Camera: %s, Overlay: %s, JPEG Quality: %d, TTL: %.2fs)",
+                "Starting ChessOverlayVisualizer (Camera: %s, Overlay: %s, JPEG Quality: %d, TTL: %.2fs)",
                 camera_topic_.c_str(), overlay_topic_.c_str(), jpeg_quality_, stale_timeout_sec_);
 
     camera_sub_ = create_subscription<sensor_msgs::msg::Image>(
         camera_topic_, rclcpp::SensorDataQoS(),
-        std::bind(&ChessOverlayComponent::cameraImageCallback, this, std::placeholders::_1));
+        std::bind(&ChessOverlayVisualizer::cameraImageCallback, this, std::placeholders::_1));
 
     detections_sub_ = create_subscription<vision_msgs::msg::Detection2DArray>(
         detections_topic_, rclcpp::SensorDataQoS(),
-        std::bind(&ChessOverlayComponent::detectionsCallback, this, std::placeholders::_1));
+        std::bind(&ChessOverlayVisualizer::detectionsCallback, this, std::placeholders::_1));
 
     tag_centers_sub_ = create_subscription<geometry_msgs::msg::PolygonStamped>(
         tag_centers_topic_, rclcpp::QoS(1).transient_local().reliable(),
-        std::bind(&ChessOverlayComponent::tagCentersCallback, this, std::placeholders::_1));
+        std::bind(&ChessOverlayVisualizer::tagCentersCallback, this, std::placeholders::_1));
 
     grid_points_sub_ = create_subscription<geometry_msgs::msg::PolygonStamped>(
         grid_points_topic_, rclcpp::SensorDataQoS(),
-        std::bind(&ChessOverlayComponent::gridPointsCallback, this, std::placeholders::_1));
+        std::bind(&ChessOverlayVisualizer::gridPointsCallback, this, std::placeholders::_1));
 
     overlay_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
         overlay_topic_, rclcpp::SensorDataQoS());
   }
 
-  void ChessOverlayComponent::detectionsCallback(const vision_msgs::msg::Detection2DArray::ConstSharedPtr msg)
+  void ChessOverlayVisualizer::detectionsCallback(const vision_msgs::msg::Detection2DArray::ConstSharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     latest_detections_ = msg->detections;
     last_detections_time_ = now();
   }
 
-  void ChessOverlayComponent::tagCentersCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
+  void ChessOverlayVisualizer::tagCentersCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     latest_tag_centers_ = msg->polygon.points;
     last_tag_centers_time_ = now();
   }
 
-  void ChessOverlayComponent::gridPointsCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
+  void ChessOverlayVisualizer::gridPointsCallback(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     latest_grid_points_ = msg->polygon.points;
     last_grid_points_time_ = now();
   }
 
-  void ChessOverlayComponent::drawTextBadge(
+  void ChessOverlayVisualizer::drawTextBadge(
       cv::Mat &frame,
       const std::string &text,
       const cv::Point &pos,
@@ -116,7 +116,7 @@ namespace lekiwi_perception
         cv::FONT_HERSHEY_SIMPLEX, font_scale, text_color, 1, cv::LINE_AA);
   }
 
-  void ChessOverlayComponent::drawPieceDetections(
+  void ChessOverlayVisualizer::drawPieceDetections(
       cv::Mat &frame, const std::vector<vision_msgs::msg::Detection2D> &detections)
   {
     for (const auto &det : detections)
@@ -149,7 +149,7 @@ namespace lekiwi_perception
     }
   }
 
-  void ChessOverlayComponent::drawTagCenters(
+  void ChessOverlayVisualizer::drawTagCenters(
       cv::Mat &frame, const std::vector<geometry_msgs::msg::Point32> &tag_pts)
   {
     if (tag_pts.empty() || frame.cols <= 0 || frame.rows <= 0)
@@ -196,7 +196,7 @@ namespace lekiwi_perception
     }
   }
 
-  void ChessOverlayComponent::drawChessboardGrid(
+  void ChessOverlayVisualizer::drawChessboardGrid(
       cv::Mat &frame, const std::vector<geometry_msgs::msg::Point32> &grid_pts)
   {
     if (grid_pts.size() != hailo::kGridPointsCount || frame.cols <= 0 || frame.rows <= 0)
@@ -248,7 +248,7 @@ namespace lekiwi_perception
     }
   }
 
-  void ChessOverlayComponent::cameraImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg)
+  void ChessOverlayVisualizer::cameraImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg)
   {
     // Lazy Evaluation: Don't do heavy cloning, overlay drawing, and JPEG compression if nobody is listening
     if (overlay_pub_->get_subscription_count() == 0)
@@ -325,4 +325,4 @@ namespace lekiwi_perception
 
 } // namespace lekiwi_perception
 
-RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_perception::ChessOverlayComponent)
+RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_perception::ChessOverlayVisualizer)

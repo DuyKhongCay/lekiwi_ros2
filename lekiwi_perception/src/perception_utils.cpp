@@ -378,7 +378,7 @@ namespace lekiwi_perception::utils
       autostart_timer_->cancel();
       autostart_timer_.reset();
     }
-    mode_sub_.reset();
+    context_sub_.reset();
     perf_tracker().reset();
   }
 
