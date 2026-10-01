@@ -17,11 +17,11 @@ import threading
 from typing import Any
 
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
+from lekiwi_interfaces.msg import PerceptionContext
+from lekiwi_interfaces.srv import SetPerceptionContext
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-from lekiwi_interfaces.msg import PerceptionContext
-from lekiwi_interfaces.srv import SetPerceptionContext
 from lekiwi_orchestrator.fsm import (
     PERCEPTION_CONTEXT_NAMES,
     is_perception_transition_allowed,
@@ -46,9 +46,16 @@ def compute_observation_pose(
     standoff_distance: float = 0.65,
     angle_offset: float = 0.0,
     frame_id: str = "map",
+    robot_color: str = "b",
 ) -> PoseStamped:
     """
     Compute a single observation PoseStamped oriented towards the chessboard center.
+
+    In the calibrated chessboard reference frame:
+    - +X is File A -> H (left to right)
+    - +Y is Rank 1 -> 8 (White to Black)
+    - Black player sits at +Y (facing -Y toward board center)
+    - White player sits at -Y (facing +Y toward board center)
 
     :param board_x: X coordinate of chessboard center in reference frame.
     :param board_y: Y coordinate of chessboard center in reference frame.
@@ -56,10 +63,14 @@ def compute_observation_pose(
     :param standoff_distance: Distance (m) from board center to robot base footprint.
     :param angle_offset: Angular offset (radians) relative to the baseline orientation.
     :param frame_id: Reference frame for PoseStamped header (typically 'map').
+    :param robot_color: 'b' / 'black' or 'w' / 'white' to position base on robot's side.
     """
-    viewpoint_angle = board_yaw + angle_offset
-    robot_x = board_x - standoff_distance * math.cos(viewpoint_angle)
-    robot_y = board_y - standoff_distance * math.sin(viewpoint_angle)
+    is_white = robot_color.lower().startswith("w")
+    base_color_angle = -math.pi / 2.0 if is_white else math.pi / 2.0
+    viewpoint_angle = board_yaw + base_color_angle + angle_offset
+
+    robot_x = board_x + standoff_distance * math.cos(viewpoint_angle)
+    robot_y = board_y + standoff_distance * math.sin(viewpoint_angle)
 
     facing_yaw = math.atan2(board_y - robot_y, board_x - robot_x)
 
@@ -78,23 +89,25 @@ def generate_candidate_observation_poses(
     board_yaw: float = 0.0,
     standoff_distance: float = 0.65,
     frame_id: str = "map",
+    robot_color: str = "b",
 ) -> list[PoseStamped]:
     """
-    Generate an ordered list of candidate observation poses covering different viewpoints.
+    Generate an ordered list of candidate observation poses covering different viewpoints,
+    strictly restricted to the robot's playing hemisphere to avoid entering opponent's space.
 
     Order of viewpoints:
     1. Primary Baseline (offset 0.0)
-    2. Diagonal Right (+45 degrees / +pi/4)
-    3. Diagonal Left (-45 degrees / -pi/4)
-    4. Lateral Right (+90 degrees / +pi/2)
-    5. Lateral Left (-90 degrees / -pi/2)
+    2. Diagonal Right (+18 degrees)
+    3. Diagonal Left (-18 degrees)
+    4. Wide Diagonal Right (+32 degrees)
+    5. Wide Diagonal Left (-32 degrees)
     """
     angle_offsets = [
         0.0,
-        math.pi / 4.0,
-        -math.pi / 4.0,
-        math.pi / 2.0,
-        -math.pi / 2.0,
+        math.radians(18.0),
+        -math.radians(18.0),
+        math.radians(32.0),
+        -math.radians(32.0),
     ]
 
     return [
@@ -105,6 +118,7 @@ def generate_candidate_observation_poses(
             standoff_distance=standoff_distance,
             angle_offset=offset,
             frame_id=frame_id,
+            robot_color=robot_color,
         )
         for offset in angle_offsets
     ]

@@ -24,8 +24,10 @@ from visualization_msgs.msg import MarkerArray
 
 from lekiwi_orchestrator.fsm import (
     MISSION_STATE_NAMES,
+    MOTION_STATE_NAMES,
     PERCEPTION_CONTEXT_NAMES,
     MissionState,
+    MotionExecutionState,
 )
 from lekiwi_orchestrator.mission_status_visualizer import (
     MissionStatusMarkerBuilder,
@@ -41,6 +43,7 @@ class OrchestratorStateSnapshot:
     perception_context: int
     last_goal_move: str | None = None
     execution_stage: str | None = None
+    motion_state: MotionExecutionState = MotionExecutionState.IDLE
 
 
 @dataclass(frozen=True)
@@ -184,7 +187,9 @@ class NodeHealthMonitor:
             self.last_nav_heartbeat = time.monotonic()
             self.nav_ready = bool(msg.data)
 
-            if self.nav_ready and not previous:
+            if self.nav_ready and (
+                not previous or state == MissionState.WAITING_FOR_TF_READY
+            ):
                 self._node.get_logger().info(
                     ">>> [ORCHESTRATOR] Navigation Ready confirmed! Base odometry/TF active."
                 )
@@ -372,6 +377,10 @@ class NodeHealthMonitor:
         diag.values = [
             KeyValue(
                 key="mission_state", value=MISSION_STATE_NAMES.get(state, "UNKNOWN")
+            ),
+            KeyValue(
+                key="micro_state",
+                value=MOTION_STATE_NAMES.get(snapshot.motion_state, "IDLE"),
             ),
             KeyValue(
                 key="perception_context",

@@ -9,6 +9,8 @@ import math
 
 import pytest
 import rclpy
+from lekiwi_interfaces.msg import PerceptionContext
+from lekiwi_interfaces.srv import SetPerceptionContext
 from lekiwi_orchestrator.perception_manager import (
     PerceptionContextCoordinator,
     compute_observation_pose,
@@ -16,9 +18,6 @@ from lekiwi_orchestrator.perception_manager import (
     yaw_to_quaternion,
 )
 from rclpy.node import Node
-
-from lekiwi_interfaces.msg import PerceptionContext
-from lekiwi_interfaces.srv import SetPerceptionContext
 
 
 @pytest.fixture(scope="module")
@@ -42,49 +41,70 @@ def test_yaw_to_quaternion():
     assert abs(q_pi.w) < 1e-6
 
 
-def test_compute_observation_pose_baseline():
-    pose = compute_observation_pose(
-        board_x=1.0,
-        board_y=2.0,
-        board_yaw=0.0,
-        standoff_distance=0.6,
-        angle_offset=0.0,
-    )
-    assert abs(pose.pose.position.x - 0.4) < 1e-5
-    assert abs(pose.pose.position.y - 2.0) < 1e-5
-    assert abs(pose.pose.orientation.z) < 1e-5
-    assert abs(pose.pose.orientation.w - 1.0) < 1e-5
-
-
-def test_compute_observation_pose_quarter_turn():
+def test_compute_observation_pose_black_baseline():
     pose = compute_observation_pose(
         board_x=0.0,
         board_y=0.0,
         board_yaw=0.0,
-        standoff_distance=1.0,
-        angle_offset=math.pi / 2.0,
+        standoff_distance=0.65,
+        angle_offset=0.0,
+        robot_color="b",
     )
+    # Black sits at +Y, facing -Y towards (0, 0)
     assert abs(pose.pose.position.x) < 1e-5
-    assert abs(pose.pose.position.y - (-1.0)) < 1e-5
-    half_angle = (math.pi / 2.0) * 0.5
-    assert abs(pose.pose.orientation.z - math.sin(half_angle)) < 1e-5
-    assert abs(pose.pose.orientation.w - math.cos(half_angle)) < 1e-5
+    assert abs(pose.pose.position.y - 0.65) < 1e-5
+    # facing_yaw = -pi/2 -> quaternion z = sin(-pi/4) = -0.7071, w = cos(-pi/4) = 0.7071
+    assert math.isclose(pose.pose.orientation.z, -math.sin(math.pi / 4.0), abs_tol=1e-4)
+    assert math.isclose(pose.pose.orientation.w, math.cos(math.pi / 4.0), abs_tol=1e-4)
 
 
-def test_generate_candidate_observation_poses():
-    poses = generate_candidate_observation_poses(
-        board_x=0.5,
-        board_y=0.5,
+def test_compute_observation_pose_white_baseline():
+    pose = compute_observation_pose(
+        board_x=0.0,
+        board_y=0.0,
         board_yaw=0.0,
-        standoff_distance=0.7,
+        standoff_distance=0.65,
+        angle_offset=0.0,
+        robot_color="w",
+    )
+    # White sits at -Y, facing +Y towards (0, 0)
+    assert abs(pose.pose.position.x) < 1e-5
+    assert abs(pose.pose.position.y - (-0.65)) < 1e-5
+    # facing_yaw = +pi/2 -> quaternion z = sin(pi/4) = 0.7071, w = cos(pi/4) = 0.7071
+    assert math.isclose(pose.pose.orientation.z, math.sin(math.pi / 4.0), abs_tol=1e-4)
+    assert math.isclose(pose.pose.orientation.w, math.cos(math.pi / 4.0), abs_tol=1e-4)
+
+
+def test_generate_candidate_observation_poses_black_stays_in_hemisphere():
+    poses = generate_candidate_observation_poses(
+        board_x=0.0,
+        board_y=0.0,
+        board_yaw=0.0,
+        standoff_distance=0.65,
+        robot_color="b",
     )
     assert len(poses) == 5
     for p in poses:
-        dist = math.hypot(
-            p.pose.position.x - 0.5,
-            p.pose.position.y - 0.5,
-        )
-        assert abs(dist - 0.7) < 1e-4
+        dist = math.hypot(p.pose.position.x, p.pose.position.y)
+        assert abs(dist - 0.65) < 1e-4
+        # All candidate poses for Black MUST remain strictly on Black's side (y > 0)
+        assert p.pose.position.y > 0.50
+
+
+def test_generate_candidate_observation_poses_white_stays_in_hemisphere():
+    poses = generate_candidate_observation_poses(
+        board_x=0.0,
+        board_y=0.0,
+        board_yaw=0.0,
+        standoff_distance=0.65,
+        robot_color="w",
+    )
+    assert len(poses) == 5
+    for p in poses:
+        dist = math.hypot(p.pose.position.x, p.pose.position.y)
+        assert abs(dist - 0.65) < 1e-4
+        # All candidate poses for White MUST remain strictly on White's side (y < 0)
+        assert p.pose.position.y < -0.50
 
 
 def test_perception_coordinator_lifecycle(ros_context):

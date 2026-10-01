@@ -15,14 +15,15 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from geometry_msgs.msg import Point, PoseStamped
-
 from lekiwi_interfaces.msg import ChessMoveDetails, PerceptionContext
 from lekiwi_interfaces.srv import CheckMoveFeasibility
+
 from lekiwi_orchestrator.fsm import (
     MOTION_STATE_NAMES,
     MotionExecutionState,
@@ -30,11 +31,13 @@ from lekiwi_orchestrator.fsm import (
 )
 
 if TYPE_CHECKING:
+    from rclpy.callback_groups import CallbackGroup
     from rclpy.node import Node
 
     from lekiwi_orchestrator.motion_dispatcher import (
         ActionDispatcherInterface,
         ActionResult,
+        ActiveObservationNavigator,
     )
     from lekiwi_orchestrator.perception_manager import PerceptionContextCoordinator
 
@@ -461,7 +464,14 @@ class MovePipelineExecutor:
         on_pipeline_failed: Callable[[str], None] | None = None,
         on_motion_state_changed: Callable[[MotionExecutionState], None] | None = None,
         grasp_readiness_provider: Callable[[], bool] | None = None,
-        on_observation_recovery_requested: Callable[[], bool] | None = None,
+        pre_grasp_settle_sec: float = 2.0,
+        observation_pose_provider: Callable[[], PoseStamped | None] | None = None,
+        navigation_enabled: bool = True,
+        observation_navigator: ActiveObservationNavigator | None = None,
+        observation_scan_timeout_sec: float = 10.0,
+        board_verified_provider: Callable[[], bool] | None = None,
+        max_observation_attempts: int = 3,
+        callback_group: CallbackGroup | None = None,
     ) -> None:
         self._node = node
         self._dispatcher = dispatcher
@@ -473,13 +483,30 @@ class MovePipelineExecutor:
         self._on_pipeline_failed = on_pipeline_failed
         self._on_motion_state_changed = on_motion_state_changed
         self._grasp_readiness_provider = grasp_readiness_provider or (lambda: True)
-        self._on_observation_recovery_requested = on_observation_recovery_requested
+        self._pre_grasp_settle_sec = max(0.0, float(pre_grasp_settle_sec))
+        self._observation_pose_provider = observation_pose_provider
+        self._navigation_enabled = navigation_enabled
+        self._observation_nav = observation_navigator
+        self._observation_scan_timeout_sec = max(1.0, float(observation_scan_timeout_sec))
+        self._board_verified_provider = board_verified_provider
+        self._max_observation_attempts = max(1, int(max_observation_attempts))
+        self._callback_group = callback_group
 
         self._lock = threading.RLock()
         self._motion_state = MotionExecutionState.IDLE
         self._stages: list[ExecutionStage] = []
         self._current_stage: ExecutionStage | None = None
         self._feasibility_resp: CheckMoveFeasibility.Response | None = None
+        self._verification_timer: Any | None = None
+        self._observation_attempt: int = 0
+
+    @property
+    def observation_navigator(self) -> ActiveObservationNavigator | None:
+        return self._observation_nav
+
+    @observation_navigator.setter
+    def observation_navigator(self, nav: ActiveObservationNavigator | None) -> None:
+        self._observation_nav = nav
 
     @property
     def motion_state(self) -> MotionExecutionState:
@@ -531,6 +558,11 @@ class MovePipelineExecutor:
             self._stages = list(stages)
             self._feasibility_resp = feasibility_resp
             self._current_stage = None
+            self._observation_attempt = 0
+            self._cancel_verification_timer()
+
+        if self._observation_nav is not None:
+            self._observation_nav.reset_viewpoint_index()
 
         self._node.get_logger().info(
             f"[PIPELINE EXECUTOR] Starting execution of {len(stages)} stages..."
@@ -554,26 +586,28 @@ class MovePipelineExecutor:
         if stage.target_pose is not None:
             self._execute_nav_stage(stage)
         else:
-            if not self._grasp_readiness_provider():
-                self._node.get_logger().warn(
-                    f"[PRE-GRASP GATE] Starting stage '{stage.name}' without navigation, "
-                    f"but grasp readiness is FALSE (standstill/chessboard TF missing). "
-                    f"Initiating active observation recovery..."
-                )
-                if self._on_observation_recovery_requested:
-                    triggered = self._on_observation_recovery_requested()
-                    if triggered:
-                        with self._lock:
-                            self._stages.clear()
-                            self._current_stage = None
-                            self._feasibility_resp = None
-                            self.transition_motion_to(MotionExecutionState.IDLE)
-                        return
+            if not self._wait_for_grasp_readiness(self._pre_grasp_settle_sec):
                 self._handle_failure(
-                    f"Grasp readiness check failed before stage '{stage.name}' and active observation unavailable"
+                    f"Grasp readiness check failed before stage '{stage.name}' "
+                    f"(settle timeout {self._pre_grasp_settle_sec:.1f}s expired)"
                 )
                 return
             self._execute_manip_stage(stage)
+
+    def _wait_for_grasp_readiness(self, timeout_sec: float) -> bool:
+        """Poll grasp readiness provider until True or timeout_sec expires."""
+        if self._grasp_readiness_provider():
+            return True
+        if timeout_sec <= 0.0:
+            return False
+
+        start_time = time.monotonic()
+        poll_interval = 0.05
+        while (time.monotonic() - start_time) < timeout_sec:
+            time.sleep(poll_interval)
+            if self._grasp_readiness_provider():
+                return True
+        return self._grasp_readiness_provider()
 
     def _execute_nav_stage(self, stage: ExecutionStage) -> None:
         nav_state = stage.nav_motion_state or MotionExecutionState.NAV_TO_PICK
@@ -601,25 +635,13 @@ class MovePipelineExecutor:
             return
 
         self._node.get_logger().info(
-            f"Nav2 navigation for stage '{stage.name}' completed successfully! Checking grasp readiness..."
+            f"Nav2 navigation for stage '{stage.name}' completed successfully! "
+            f"Checking grasp readiness (settle window: {self._pre_grasp_settle_sec:.1f}s)..."
         )
-        if not self._grasp_readiness_provider():
-            self._node.get_logger().warn(
-                f"[PRE-GRASP GATE] Standoff reached for stage '{stage.name}', "
-                f"but grasp readiness is FALSE (visual tag occluded / base moving). "
-                f"Initiating active observation recovery without crashing."
-            )
-            if self._on_observation_recovery_requested:
-                triggered = self._on_observation_recovery_requested()
-                if triggered:
-                    with self._lock:
-                        self._stages.clear()
-                        self._current_stage = None
-                        self._feasibility_resp = None
-                        self.transition_motion_to(MotionExecutionState.IDLE)
-                    return
+        if not self._wait_for_grasp_readiness(self._pre_grasp_settle_sec):
             self._handle_failure(
-                f"Grasp readiness check failed before stage '{stage.name}' and active observation unavailable"
+                f"Grasp readiness check failed before stage '{stage.name}' "
+                f"after standoff reached (settle timeout {self._pre_grasp_settle_sec:.1f}s expired)"
             )
             return
 
@@ -675,14 +697,190 @@ class MovePipelineExecutor:
             self._advance_stage()
 
     def _execute_post_move_verify(self) -> None:
-        """One-shot post-move verification before concluding move."""
+        """Post-move verification: navigate base back to observation pose to bring full board into FOV."""
+        self._observation_attempt = 0
+        if not self._navigation_enabled or self._observation_pose_provider is None:
+            self._node.get_logger().info(
+                "[VERIFICATION] Observation navigation skipped (disabled or no provider). Switching to BOARD_STATE_SCAN."
+            )
+            self._start_post_move_verification_window()
+            return
+
+        obs_pose = self._observation_pose_provider()
+        if obs_pose is None:
+            self._node.get_logger().info(
+                "[VERIFICATION] No observation pose provided. Switching to BOARD_STATE_SCAN."
+            )
+            self._start_post_move_verification_window()
+            return
+
         self._node.get_logger().info(
-            "[VERIFICATION] Post-move board state verification completed."
+            f"[POST-MOVE VERIFICATION] Repositioning base to observation standoff "
+            f"({obs_pose.pose.position.x:.3f}, {obs_pose.pose.position.y:.3f}) "
+            "to bring full chessboard into FOV..."
         )
+        self.transition_motion_to(MotionExecutionState.POST_MOVE_VERIFYING)
+        self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
+
+        dispatched = self._dispatcher.send_navigation_goal(
+            target_pose=obs_pose,
+            timeout_sec=self._action_timeout_sec,
+            on_completed=self._on_post_move_nav_completed,
+        )
+        if not dispatched:
+            self._node.get_logger().warn(
+                "[POST-MOVE VERIFICATION] Failed to dispatch observation navigation. "
+                "Falling back to verification window."
+            )
+            self._start_post_move_verification_window()
+
+    def _on_post_move_nav_completed(self, result: ActionResult) -> None:
+        if not result.success:
+            self._node.get_logger().warn(
+                f"[POST-MOVE VERIFICATION] Observation navigation ended with warning: {result.message}"
+            )
+        else:
+            self._node.get_logger().info(
+                "[POST-MOVE VERIFICATION] Reached observation viewpoint. "
+                "Full chessboard in FOV. Starting verification window."
+            )
+        self._start_post_move_verification_window()
+
+    def _start_post_move_verification_window(self) -> None:
+        """Begin verification window: verify board state or reposition if occluded."""
+        self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
+
+        if self._is_board_verified():
+            self._node.get_logger().info(
+                "[POST-MOVE VERIFICATION] Board state verified. Completing stage."
+            )
+            self._cancel_verification_timer()
+            self._advance_stage()
+            return
+
+        if not self._navigation_enabled or self._observation_nav is None:
+            self._node.get_logger().info(
+                "[POST-MOVE VERIFICATION] Active observation navigator not configured. Completing stage."
+            )
+            self._advance_stage()
+            return
+
+        self._start_verification_timer()
+
+    def _is_board_verified(self) -> bool:
+        if self._board_verified_provider is None:
+            return True
+        try:
+            return bool(self._board_verified_provider())
+        except Exception as exc:  # noqa: BLE001
+            self._node.get_logger().warn(f"Error checking board verification: {exc}")
+            return False
+
+    def _start_verification_timer(self) -> None:
+        self._cancel_verification_timer()
+        timeout = max(1.0, float(self._observation_scan_timeout_sec))
+        self._node.get_logger().info(
+            f"[POST-MOVE VERIFICATION] Verification window active ({timeout:.1f}s)..."
+        )
+        if hasattr(self._node, "create_timer"):
+            kwargs = {}
+            if self._callback_group is not None:
+                kwargs["callback_group"] = self._callback_group
+            self._verification_timer = self._node.create_timer(
+                timeout,
+                self._on_verification_timeout,
+                **kwargs,
+            )
+
+    def _cancel_verification_timer(self) -> None:
+        with self._lock:
+            if self._verification_timer is not None:
+                try:
+                    self._verification_timer.cancel()
+                    if hasattr(self._node, "destroy_timer"):
+                        self._node.destroy_timer(self._verification_timer)
+                except Exception as exc:  # noqa: BLE001
+                    self._node.get_logger().warn(
+                        f"Error cancelling verification timer: {exc}"
+                    )
+                self._verification_timer = None
+
+    def _on_verification_timeout(self) -> None:
+        self._cancel_verification_timer()
+        with self._lock:
+            if self._motion_state != MotionExecutionState.POST_MOVE_VERIFYING:
+                return
+
+        if self._is_board_verified():
+            self._node.get_logger().info(
+                "[POST-MOVE VERIFICATION] Board verified before repositioning."
+            )
+            self._advance_stage()
+            return
+
+        if self._observation_nav is None or not self._navigation_enabled:
+            self._node.get_logger().warn(
+                "[POST-MOVE VERIFICATION] Verification timed out and active vision unavailable. Completing stage."
+            )
+            self._advance_stage()
+            return
+
+        self._observation_attempt += 1
+        if self._observation_attempt > self._max_observation_attempts:
+            self._node.get_logger().warn(
+                f"[POST-MOVE VERIFICATION] Reached max observation attempts ({self._max_observation_attempts}). Completing stage."
+            )
+            self._advance_stage()
+            return
+
+        self._node.get_logger().warn(
+            f"[ACTIVE VISION] Board verification timed out. Attempt {self._observation_attempt}/{self._max_observation_attempts}. "
+            "Repositioning base to next candidate vantage point..."
+        )
+        self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
+        dispatched = self._observation_nav.reposition_to_next_viewpoint(
+            board_x=0.0,
+            board_y=0.0,
+            board_yaw=0.0,
+            timeout_sec=self._action_timeout_sec,
+            on_completed=self._on_reposition_completed,
+        )
+        if not dispatched:
+            self._node.get_logger().error(
+                "[POST-MOVE VERIFICATION] Failed to dispatch reposition goal. Completing stage."
+            )
+            self._advance_stage()
+
+    def _on_reposition_completed(self, result: ActionResult) -> None:
+        with self._lock:
+            if self._motion_state != MotionExecutionState.POST_MOVE_VERIFYING:
+                return
+
+        if result.success:
+            self._node.get_logger().info(
+                "[POST-MOVE VERIFICATION] Reached next observation viewpoint. Checking board..."
+            )
+        else:
+            self._node.get_logger().warn(
+                f"[POST-MOVE VERIFICATION] Failed to reach observation viewpoint: {result.message}"
+            )
+
+        self._start_post_move_verification_window()
+
+    def notify_board_verified(self) -> None:
+        """External notification that chessboard has been successfully detected and verified."""
+        with self._lock:
+            if self._motion_state != MotionExecutionState.POST_MOVE_VERIFYING:
+                return
+        self._node.get_logger().info(
+            "[POST-MOVE VERIFICATION] Board verified via external notification."
+        )
+        self._cancel_verification_timer()
         self._advance_stage()
 
     def _handle_failure(self, error_msg: str) -> None:
         self._node.get_logger().error(error_msg)
+        self._cancel_verification_timer()
         with self._lock:
             self._stages.clear()
             self._current_stage = None
@@ -693,9 +891,16 @@ class MovePipelineExecutor:
 
     def cancel(self) -> None:
         """Cancel active physical actions and reset executor state."""
+        self._cancel_verification_timer()
+        self._observation_attempt = 0
         self._dispatcher.cancel_active_goal()
         with self._lock:
             self._stages.clear()
             self._current_stage = None
             self._feasibility_resp = None
             self.transition_motion_to(MotionExecutionState.IDLE)
+
+    def destroy(self) -> None:
+        """Clean up active timers and cancel any ongoing goals."""
+        self._cancel_verification_timer()
+        self.cancel()

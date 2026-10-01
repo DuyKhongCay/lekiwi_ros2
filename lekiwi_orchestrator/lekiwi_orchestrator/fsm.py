@@ -59,7 +59,8 @@ ALLOWED_MISSION_TRANSITIONS: dict[MacroMissionState, set[MacroMissionState]] = {
     MacroMissionState.WAITING_FOR_TF_READY: {
         MacroMissionState.WAITING_FOR_TF_READY,
         MacroMissionState.WAITING_FOR_PLAYER_MOVE,
-        MacroMissionState.EVALUATING_BEST_MOVE,  # Robot White plays first
+        MacroMissionState.EVALUATING_BEST_MOVE,  # Robot White plays first or recovering move
+        MacroMissionState.CHECKING_REACHABILITY,  # Direct move dispatch upon recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.WAITING_FOR_PLAYER_MOVE: {

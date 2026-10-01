@@ -5,6 +5,7 @@
 
 import itertools
 
+from lekiwi_interfaces.msg import PerceptionContext
 from lekiwi_orchestrator.fsm import (
     MacroMissionState,
     MissionState,
@@ -13,8 +14,6 @@ from lekiwi_orchestrator.fsm import (
     is_motion_transition_allowed,
     is_perception_transition_allowed,
 )
-
-from lekiwi_interfaces.msg import PerceptionContext
 
 
 def test_level1_macro_mission_canonical_workflow():

@@ -24,13 +24,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
+from lekiwi_interfaces.srv import CheckMoveFeasibility
 from rclpy.action import ActionClient
 from rclpy.callback_groups import CallbackGroup
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 
-from lekiwi_interfaces.srv import CheckMoveFeasibility
 from lekiwi_orchestrator.perception_manager import generate_candidate_observation_poses
 
 if TYPE_CHECKING:
@@ -436,10 +437,34 @@ class RosActionDispatcher(ActionDispatcherInterface):
         try:
             res_obj = future.result() if hasattr(future, "result") else future
             result = getattr(res_obj, "result", res_obj)
-            success = bool(getattr(result, "success", False))
-            message = str(
-                getattr(result, "message", "OK" if success else "unknown failure")
+            status = getattr(res_obj, "status", None)
+
+            # 1. Đánh giá trạng thái thành công chuẩn ROS 2 Action:
+            # Nếu có GoalStatus từ Action Server: STATUS_SUCCEEDED (4) là thành công
+            has_status = isinstance(status, int)
+            is_goal_succeeded = (
+                (status == GoalStatus.STATUS_SUCCEEDED) if has_status else False
             )
+
+            # Nếu result có thuộc tính 'success' riêng (như ExecuteChessMove.Result), ưu tiên kết hợp:
+            if hasattr(result, "success"):
+                success = bool(result.success) and (not has_status or is_goal_succeeded)
+            else:
+                # Action chuẩn như Nav2 NavigateToPose:
+                success = is_goal_succeeded
+
+            # 2. Xử lý message thông báo sạch sẽ:
+            if hasattr(result, "message") and result.message:
+                message = str(result.message)
+            elif hasattr(result, "error_msg") and result.error_msg:
+                message = str(result.error_msg)
+            else:
+                message = (
+                    "Action succeeded"
+                    if success
+                    else f"Action failed with status {status}"
+                )
+
             exec_time = float(getattr(result, "execution_time_sec", 0.0))
             on_completed(
                 ActionResult(
@@ -573,24 +598,34 @@ class ActiveObservationNavigator:
         dispatcher: INavigationDispatcher,
         map_frame: str = "map",
         standoff_distance: float = 0.65,
+        robot_color: str = "b",
     ) -> None:
         self._node = node
         self._dispatcher = dispatcher
         self._map_frame = map_frame
         self._standoff_distance = standoff_distance
+        self._robot_color = robot_color
         self._viewpoint_index = 0
 
     @property
     def viewpoint_index(self) -> int:
         return self._viewpoint_index
 
+    @property
+    def robot_color(self) -> str:
+        return self._robot_color
+
+    @robot_color.setter
+    def robot_color(self, color: str) -> None:
+        self._robot_color = color
+
     def reset_viewpoint_index(self) -> None:
         self._viewpoint_index = 0
 
     def reposition_to_next_viewpoint(
         self,
-        board_x: float = 0.5,
-        board_y: float = 0.5,
+        board_x: float = 0.0,
+        board_y: float = 0.0,
         board_yaw: float = 0.0,
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
@@ -601,6 +636,7 @@ class ActiveObservationNavigator:
             board_yaw=board_yaw,
             standoff_distance=self._standoff_distance,
             frame_id=self._map_frame,
+            robot_color=self._robot_color,
         )
         if not candidates:
             return False

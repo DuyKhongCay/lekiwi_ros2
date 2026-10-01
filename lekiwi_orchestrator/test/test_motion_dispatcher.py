@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 from unittest.mock import Mock
 
 import pytest
@@ -41,6 +42,44 @@ def test_ros_action_dispatcher_mock_nav2(monkeypatch, ros_context):
     )
     node = Node("test_mock_nav_disp_node")
     dispatcher = RosActionDispatcher(node=node, mock_nav2=True)
+
+    mock_feas = Mock()
+    mock_feas.service_is_ready.return_value = True
+
+    def fake_call_async(req):
+        fut = Mock()
+        fut.done.return_value = True
+        fut.result.return_value = Mock(feasible=True)
+        fut.add_done_callback = lambda cb: cb(fut)
+        return fut
+
+    mock_feas.call_async = fake_call_async
+    dispatcher._feasibility_client = mock_feas
+
+    mock_manip = Mock()
+    mock_manip.server_is_ready.return_value = True
+
+    def fake_send_goal(goal, feedback_callback=None):
+        fut = Mock()
+        fut.done.return_value = True
+        gh = Mock(accepted=True)
+        res_fut = Mock()
+        res_val = Mock()
+        res_val.success = True
+        res_val.message = "OK"
+        res_val.execution_time_sec = 0.1
+        res_wrapped = Mock()
+        res_wrapped.result = res_val
+        res_fut.result.return_value = res_wrapped
+        res_fut.add_done_callback = lambda cb: cb(res_fut)
+        gh.get_result_async = lambda: res_fut
+        fut.result.return_value = gh
+        fut.add_done_callback = lambda cb: cb(fut)
+        return fut
+
+    mock_manip.send_goal_async = fake_send_goal
+    dispatcher._manipulation_client = mock_manip
+
     try:
         # Feasibility check
         feasibility_result = []
@@ -170,3 +209,108 @@ def test_ros_action_dispatcher_initialization_and_destroy(monkeypatch):
     assert dispatcher._feasibility_client is None
     assert dispatcher._nav2_client is None
     assert dispatcher._manipulation_client is None
+
+
+def test_wrap_completed_nav2_standard_action_status_succeeded(monkeypatch):
+    """Verify standard ROS 2 Action without result.success (e.g. Nav2 NavigateToPose) evaluates GoalStatus.STATUS_SUCCEEDED as True."""
+    from action_msgs.msg import GoalStatus
+
+    monkeypatch.setattr(
+        "lekiwi_orchestrator.motion_dispatcher.ActionClient",
+        lambda *args, **kwargs: Mock(),
+    )
+    node = Mock()
+    dispatcher = RosActionDispatcher(node=node, mock_nav2=True)
+
+    # Simulated Nav2 result object (has no 'success' field, only error_code or empty)
+    class Nav2Result:
+        error_code = 0
+        execution_time_sec = 1.25
+
+    mock_wrapped_res = Mock()
+    mock_wrapped_res.status = GoalStatus.STATUS_SUCCEEDED
+    mock_wrapped_res.result = Nav2Result()
+
+    mock_future = Mock()
+    mock_future.result.return_value = mock_wrapped_res
+
+    outcomes = []
+    dispatcher._wrap_completed(
+        future=mock_future,
+        on_completed=lambda res: outcomes.append(res),
+    )
+
+    assert len(outcomes) == 1
+    result = outcomes[0]
+    assert result.success is True
+    assert result.message == "Action succeeded"
+    assert math.isclose(result.execution_time_sec, 1.25, abs_tol=1e-3)
+
+
+def test_wrap_completed_nav2_standard_action_status_failed(monkeypatch):
+    """Verify standard ROS 2 Action without result.success evaluates aborted status as False with meaningful message."""
+    from action_msgs.msg import GoalStatus
+
+    monkeypatch.setattr(
+        "lekiwi_orchestrator.motion_dispatcher.ActionClient",
+        lambda *args, **kwargs: Mock(),
+    )
+    node = Mock()
+    dispatcher = RosActionDispatcher(node=node, mock_nav2=True)
+
+    class Nav2Result:
+        error_code = 100
+
+    mock_wrapped_res = Mock()
+    mock_wrapped_res.status = GoalStatus.STATUS_ABORTED
+    mock_wrapped_res.result = Nav2Result()
+
+    mock_future = Mock()
+    mock_future.result.return_value = mock_wrapped_res
+
+    outcomes = []
+    dispatcher._wrap_completed(
+        future=mock_future,
+        on_completed=lambda res: outcomes.append(res),
+    )
+
+    assert len(outcomes) == 1
+    result = outcomes[0]
+    assert result.success is False
+    assert result.message == f"Action failed with status {GoalStatus.STATUS_ABORTED}"
+
+
+def test_wrap_completed_with_custom_error_msg_and_success_precedence(monkeypatch):
+    """Verify actions with custom success attribute and error_msg are respected."""
+    from action_msgs.msg import GoalStatus
+
+    monkeypatch.setattr(
+        "lekiwi_orchestrator.motion_dispatcher.ActionClient",
+        lambda *args, **kwargs: Mock(),
+    )
+    node = Mock()
+    dispatcher = RosActionDispatcher(node=node, mock_nav2=True)
+
+    class CustomManipResult:
+        success = False
+        error_msg = "Kinematic limit reached"
+        execution_time_sec = 0.5
+
+    mock_wrapped_res = Mock()
+    mock_wrapped_res.status = GoalStatus.STATUS_SUCCEEDED
+    mock_wrapped_res.result = CustomManipResult()
+
+    mock_future = Mock()
+    mock_future.result.return_value = mock_wrapped_res
+
+    outcomes = []
+    dispatcher._wrap_completed(
+        future=mock_future,
+        on_completed=lambda res: outcomes.append(res),
+    )
+
+    assert len(outcomes) == 1
+    result = outcomes[0]
+    assert result.success is False
+    assert result.message == "Kinematic limit reached"
+    assert math.isclose(result.execution_time_sec, 0.5, abs_tol=1e-3)

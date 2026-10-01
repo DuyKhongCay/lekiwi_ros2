@@ -13,18 +13,16 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from rclpy.time import Time
-from std_msgs.msg import Bool
-from std_srvs.srv import Trigger
-
+from diagnostic_msgs.msg import DiagnosticStatus
 from lekiwi_orchestrator.fsm import MissionState
 from lekiwi_orchestrator.health_monitor import (
     HealthMonitorConfig,
     NodeHealthMonitor,
     OrchestratorStateSnapshot,
 )
+from rclpy.time import Time
+from std_msgs.msg import Bool
+from std_srvs.srv import Trigger
 
 
 @pytest.fixture

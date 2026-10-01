@@ -19,21 +19,23 @@ import threading
 from typing import Any
 
 import rclpy
-from rclpy.callback_groups import (
-    MutuallyExclusiveCallbackGroup,
-    ReentrantCallbackGroup,
-)
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Bool
-from std_srvs.srv import Trigger
-
+from geometry_msgs.msg import PoseStamped
 from lekiwi_interfaces.msg import (
     ChessGameStatus,
     ChessMoveDetails,
     PerceptionContext,
 )
 from lekiwi_interfaces.srv import CheckMoveFeasibility
+from rclpy.callback_groups import (
+    MutuallyExclusiveCallbackGroup,
+    ReentrantCallbackGroup,
+)
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool
+from std_srvs.srv import Trigger
+
 from lekiwi_orchestrator.fsm import (
     MISSION_STATE_NAMES,
     MacroMissionState,
@@ -45,12 +47,11 @@ from lekiwi_orchestrator.health_monitor import (
     NodeHealthMonitor,
     OrchestratorStateSnapshot,
 )
+from lekiwi_orchestrator.mission_status_visualizer import VisualizerConfig
 from lekiwi_orchestrator.motion_dispatcher import (
     ActionDispatcherInterface,
-    ActionResult,
     ActiveObservationNavigator,
     RosActionDispatcher,
-    SimulatedActionDispatcher,
 )
 from lekiwi_orchestrator.move_pipeline import (
     ChessMoveGoal,
@@ -59,8 +60,8 @@ from lekiwi_orchestrator.move_pipeline import (
 )
 from lekiwi_orchestrator.perception_manager import (
     PerceptionContextCoordinator,
+    compute_observation_pose,
 )
-from lekiwi_orchestrator.mission_status_visualizer import VisualizerConfig
 
 
 class OrchestratorConfig:
@@ -73,7 +74,8 @@ class OrchestratorConfig:
         node.declare_parameter("feasibility_timeout_sec", 5.0)
         node.declare_parameter("action_timeout_sec", 60.0)
         node.declare_parameter("readiness_timeout_sec", 1.0)
-        node.declare_parameter("skip_navigation", False)
+        node.declare_parameter("pre_grasp_settle_sec", 2.0)
+        node.declare_parameter("navigation", True)
 
         node.declare_parameter("recovery.auto_recovery_enabled", True)
         node.declare_parameter("recovery.auto_recovery_timeout_sec", 5.0)
@@ -119,7 +121,10 @@ class OrchestratorConfig:
         )
         self.action_timeout_sec = float(node.get_parameter("action_timeout_sec").value)
         self.readiness_timeout_sec = readiness_to
-        self.skip_navigation = bool(node.get_parameter("skip_navigation").value)
+        self.pre_grasp_settle_sec = float(
+            node.get_parameter("pre_grasp_settle_sec").value
+        )
+        self.navigation = bool(node.get_parameter("navigation").value)
 
         self.auto_recovery_enabled = bool(
             node.get_parameter("recovery.auto_recovery_enabled").value
@@ -191,6 +196,7 @@ class ChessMissionOrchestrator(Node):
         self._mission_state = MacroMissionState.BOOT_INITIALIZING
         self._current_goal_move: str | None = None
         self._current_move_details: ChessMoveGoal | None = None
+        self._pending_recovery_move: ChessMoveGoal | None = None
         self._last_processed_fen: str | None = None
 
         # Callback Groups
@@ -208,8 +214,6 @@ class ChessMissionOrchestrator(Node):
         # Pillar 2: Motion Dispatcher & Active Observation Subsystem
         if action_dispatcher is not None:
             self._dispatcher = action_dispatcher
-        elif self.config.skip_navigation:
-            self._dispatcher = SimulatedActionDispatcher(self)
         else:
             self._dispatcher = RosActionDispatcher(
                 self,
@@ -217,21 +221,15 @@ class ChessMissionOrchestrator(Node):
                 manipulation_action_name=self.config.execute_chess_move_action,
                 check_feasibility_service_name=self.config.check_feasibility_srv,
                 callback_group=self._cb_group_client,
+                mock_nav2=not self.config.navigation,
             )
-        self._dispatcher = action_dispatcher or RosActionDispatcher(
-            self,
-            nav2_action_name=self.config.navigate_to_pose_action,
-            manipulation_action_name=self.config.execute_chess_move_action,
-            check_feasibility_service_name=self.config.check_feasibility_srv,
-            callback_group=self._cb_group_client,
-            mock_nav2=self.config.skip_navigation,
-        )
 
         self._observation_nav = ActiveObservationNavigator(
             node=self,
             dispatcher=self._dispatcher,
             map_frame=self.config.map_frame,
             standoff_distance=self.config.observation_standoff_distance,
+            robot_color=self.config.robot_color,
         )
 
         # Pillar 3: Move Pipeline Execution Engine (Drives Stages & Level 2 FSM)
@@ -244,7 +242,12 @@ class ChessMissionOrchestrator(Node):
             on_pipeline_completed=self._on_move_pipeline_completed,
             on_pipeline_failed=self._on_move_pipeline_failed,
             grasp_readiness_provider=lambda: self.is_grasp_ready,
-            on_observation_recovery_requested=self.reposition_to_next_observation_viewpoint,
+            pre_grasp_settle_sec=self.config.pre_grasp_settle_sec,
+            observation_pose_provider=self._get_primary_observation_pose,
+            navigation_enabled=self.config.navigation,
+            observation_navigator=self._observation_nav,
+            observation_scan_timeout_sec=self.config.observation_scan_timeout_sec,
+            callback_group=self._cb_group_client,
         )
 
         # Health, Lease, Auto-Recovery & Diagnostics Manager
@@ -326,7 +329,7 @@ class ChessMissionOrchestrator(Node):
         if hasattr(self, "_health_monitor"):
             self._health_monitor.destroy()
         if hasattr(self, "_pipeline_executor"):
-            self._pipeline_executor.cancel()
+            self._pipeline_executor.destroy()
         if hasattr(self, "_perception"):
             self._perception.destroy()
         if hasattr(self, "_dispatcher") and self._dispatcher is not None:
@@ -341,13 +344,22 @@ class ChessMissionOrchestrator(Node):
                 else None
             )
             stage_name = stage.name if stage else None
+            motion_st = (
+                self._pipeline_executor.motion_state
+                if hasattr(self, "_pipeline_executor")
+                else MotionExecutionState.IDLE
+            )
             return OrchestratorStateSnapshot(
                 mission_state=self._mission_state,
                 perception_context=(
                     self._perception.context if hasattr(self, "_perception") else 0
                 ),
-                last_goal_move=self._current_goal_move,
+                last_goal_move=(
+                    self._current_goal_move
+                    or (self._pending_recovery_move.uci if self._pending_recovery_move else None)
+                ),
                 execution_stage=stage_name,
+                motion_state=motion_st,
             )
 
     def _get_diagnostics_state(
@@ -380,6 +392,11 @@ class ChessMissionOrchestrator(Node):
     def current_move_details(self) -> ChessMoveGoal | None:
         with self._state_lock:
             return self._current_move_details
+
+    @property
+    def pending_recovery_move(self) -> ChessMoveGoal | None:
+        with self._state_lock:
+            return self._pending_recovery_move
 
     @property
     def is_nav_ready(self) -> bool:
@@ -416,6 +433,18 @@ class ChessMissionOrchestrator(Node):
     @property
     def observation_navigator(self) -> ActiveObservationNavigator:
         return self._observation_nav
+
+    def _get_primary_observation_pose(self) -> PoseStamped:
+        """Compute primary baseline observation standoff pose facing the chessboard center."""
+        return compute_observation_pose(
+            board_x=0.0,
+            board_y=0.0,
+            board_yaw=0.0,
+            standoff_distance=self.config.observation_standoff_distance,
+            angle_offset=0.0,
+            frame_id=self.config.map_frame,
+            robot_color=self.config.robot_color,
+        )
 
     # ================= State Machine Management =================
 
@@ -472,12 +501,23 @@ class ChessMissionOrchestrator(Node):
                 )
                 return False
 
+            # Preserve interrupted move goal before cancelling active execution
+            if self._pending_recovery_move is None:
+                if self._current_move_details is not None:
+                    self._pending_recovery_move = self._current_move_details
+                elif self._current_goal_move:
+                    self._pending_recovery_move = ChessMoveGoal.from_uci_or_details(self._current_goal_move)
+
+            if self._pending_recovery_move is not None:
+                self.get_logger().info(
+                    f"[RECOVERY] Preserved interrupted move '{self._pending_recovery_move.uci}' "
+                    f"for automatic resumption upon nav ready."
+                )
+
             self._health_monitor.cancel_recovery_timer()
             if hasattr(self, "_dispatcher") and self._dispatcher is not None:
                 self._dispatcher.cancel_active_goal()
             self._pipeline_executor.cancel()
-            self._current_goal_move = None
-            self._last_processed_fen = None
 
             self.get_logger().info(
                 f"[RECOVERY] Resetting system state ({reason}). Transitioning to WAITING_FOR_TF_READY."
@@ -492,36 +532,6 @@ class ChessMissionOrchestrator(Node):
     ) -> Trigger.Response:
         return self._health_monitor.handle_recover_service(request, response)
 
-    # ================= Active Observation / Viewpoint Repositioning =================
-
-    def reposition_to_next_observation_viewpoint(
-        self,
-        board_x: float = 0.5,
-        board_y: float = 0.5,
-        board_yaw: float = 0.0,
-    ) -> bool:
-        """Reposition robot base to next candidate observation standoff when board scan is occluded."""
-        self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
-
-        def _on_repositioned(res: ActionResult) -> None:
-            if res.success:
-                self.get_logger().info(
-                    "[ACTIVE PERCEPTION] Reached observation viewpoint. Resuming board scan."
-                )
-                self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
-            else:
-                self.get_logger().warn(
-                    f"[ACTIVE PERCEPTION] Failed to reach observation viewpoint: {res.message}"
-                )
-
-        return self._observation_nav.reposition_to_next_viewpoint(
-            board_x=board_x,
-            board_y=board_y,
-            board_yaw=board_yaw,
-            timeout_sec=self.config.action_timeout_sec,
-            on_completed=_on_repositioned,
-        )
-
     # ================= Subscription Callbacks =================
 
     def _on_nav_ready(self, msg: Bool) -> None:
@@ -534,20 +544,42 @@ class ChessMissionOrchestrator(Node):
 
     def _on_nav_ready_confirmed(self, is_ready: bool = True) -> None:
         """Callback invoked by health monitor when Navigation readiness goes True."""
-        if is_ready and self.mission_state == MacroMissionState.WAITING_FOR_TF_READY:
-            initial_state = (
-                MacroMissionState.EVALUATING_BEST_MOVE
-                if self.config.robot_color == "w"
-                else MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        if not is_ready:
+            return
+
+        with self._state_lock:
+            if self._mission_state != MacroMissionState.WAITING_FOR_TF_READY:
+                return
+            pending_goal = self._pending_recovery_move
+
+        if pending_goal is not None:
+            self.get_logger().info(
+                f"[RECOVERY RESUME] Resuming interrupted move '{pending_goal.uci}' "
+                "after navigation/TF confirmed ready."
             )
-            self.transition_to(initial_state)
-            self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
+            self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
+            if self.transition_to(MacroMissionState.EVALUATING_BEST_MOVE):
+                with self._state_lock:
+                    self._pending_recovery_move = None
+                self._dispatch_move_workflow(pending_goal.uci, move_details=pending_goal)
+            return
+
+        initial_state = (
+            MacroMissionState.EVALUATING_BEST_MOVE
+            if self.config.robot_color == "w"
+            else MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        )
+        self.transition_to(initial_state)
+        self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
 
     def _on_game_status(self, msg: ChessGameStatus) -> None:
         """Process game state updates from lekiwi_chess_master referee."""
         if msg.is_checkmate or msg.is_draw:
             with self._state_lock:
                 current_state = self._mission_state
+                self._pending_recovery_move = None
+                self._current_goal_move = None
+                self._current_move_details = None
             if current_state != MacroMissionState.GAME_OVER:
                 self.transition_to(MacroMissionState.GAME_OVER)
                 reason = "CHECKMATE" if msg.is_checkmate else "DRAW"
@@ -556,6 +588,9 @@ class ChessMissionOrchestrator(Node):
                 )
                 self._perception.set_context(PerceptionContext.IDLE_STANDBY)
             return
+
+        if msg.is_board_stable and msg.full_fen != self._last_processed_fen:
+            self._pipeline_executor.notify_board_verified()
 
         is_robot_turn = msg.active_color == self.config.robot_color
         best_uci = msg.best_move_details.uci
@@ -573,6 +608,13 @@ class ChessMissionOrchestrator(Node):
             return
 
         with self._state_lock:
+            if self._pending_recovery_move is not None and msg.full_fen != self._last_processed_fen:
+                self.get_logger().info(
+                    f"[ORCHESTRATOR] Discarding stale recovery move '{self._pending_recovery_move.uci}' "
+                    f"due to new board FEN: {msg.full_fen}"
+                )
+                self._pending_recovery_move = None
+
             eligible_state = self._mission_state in (
                 MacroMissionState.WAITING_FOR_PLAYER_MOVE,
                 MacroMissionState.EVALUATING_BEST_MOVE,
@@ -580,6 +622,7 @@ class ChessMissionOrchestrator(Node):
             )
             if not eligible_state or msg.full_fen == self._last_processed_fen:
                 return
+
             self._last_processed_fen = msg.full_fen
             self._current_goal_move = msg.best_move_details.uci
 
@@ -589,6 +632,7 @@ class ChessMissionOrchestrator(Node):
             f"(SAN: {details.san}, Piece: {details.piece_type}, "
             f"Capture: {details.is_capture}, Eval: {msg.eval_centipawns} cp, Color: {msg.active_color})"
         )
+        self._observation_nav.reset_viewpoint_index()
         self._dispatch_move_workflow(details.uci, move_details=details)
 
     # ================= Workflow Orchestration =================
@@ -617,10 +661,12 @@ class ChessMissionOrchestrator(Node):
 
         with self._state_lock:
             self._current_move_details = details
+            self._current_goal_move = details.uci
 
         if self._mission_state in (
             MacroMissionState.WAITING_FOR_PLAYER_MOVE,
             MacroMissionState.TURN_COMPLETED,
+            MacroMissionState.WAITING_FOR_TF_READY,
         ) and not self.transition_to(MacroMissionState.EVALUATING_BEST_MOVE):
             return
 
@@ -646,6 +692,10 @@ class ChessMissionOrchestrator(Node):
     def _on_feasibility_response(
         self, resp: CheckMoveFeasibility.Response, details: ChessMoveGoal
     ) -> None:
+        with self._state_lock:
+            self._current_move_details = details
+            self._current_goal_move = details.uci
+
         if not resp.feasible:
             self.get_logger().error(
                 f"Move {details.uci} declared NOT FEASIBLE: {resp.message}"
@@ -665,6 +715,10 @@ class ChessMissionOrchestrator(Node):
 
     def _on_move_pipeline_completed(self) -> None:
         """Conclude robot turn and return to waiting for opponent."""
+        with self._state_lock:
+            self._pending_recovery_move = None
+            self._current_goal_move = None
+            self._current_move_details = None
         self.transition_to(MacroMissionState.TURN_COMPLETED)
         self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
         self.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
@@ -685,8 +739,10 @@ class ChessMissionOrchestrator(Node):
 def main(args: Any = None) -> None:
     rclpy.init(args=args)
     node = ChessMissionOrchestrator()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

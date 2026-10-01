@@ -9,6 +9,12 @@ import math
 
 import pytest
 import rclpy
+from lekiwi_interfaces.msg import (
+    ChessGameStatus,
+    ChessMoveDetails,
+    PerceptionContext,
+)
+from lekiwi_interfaces.srv import CheckMoveFeasibility
 from lekiwi_orchestrator.chess_mission_orchestrator import (
     ChessMissionOrchestrator,
 )
@@ -19,6 +25,7 @@ from lekiwi_orchestrator.fsm import (
 from lekiwi_orchestrator.motion_dispatcher import (
     ActionDispatcherInterface,
     ActionResult,
+    SimulatedActionDispatcher,
 )
 from lekiwi_orchestrator.move_pipeline import (
     ChessMoveGoal,
@@ -26,13 +33,6 @@ from lekiwi_orchestrator.move_pipeline import (
 from rclpy.parameter import Parameter
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
-
-from lekiwi_interfaces.msg import (
-    ChessGameStatus,
-    ChessMoveDetails,
-    PerceptionContext,
-)
-from lekiwi_interfaces.srv import CheckMoveFeasibility
 
 
 class TrackingDispatcher(ActionDispatcherInterface):
@@ -185,9 +185,12 @@ def test_illegal_state_transition_guard(ros_context):
 
 
 def test_workflow_dispatch_zero_nav_simulation(ros_context):
+    sim_dispatcher = SimulatedActionDispatcher(None)
     node = ChessMissionOrchestrator(
-        parameter_overrides=[Parameter("skip_navigation", value=True)]
+        parameter_overrides=[Parameter("navigation", value=False)],
+        action_dispatcher=sim_dispatcher,
     )
+    sim_dispatcher._node = node
     try:
         node._on_nav_ready(Bool(data=True))
         node._on_grasp_ready(Bool(data=True))
@@ -511,8 +514,11 @@ def test_workflow_dispatch_capture_single_base_sequence(ros_context):
         node.transition_to(MissionState.CHECKING_REACHABILITY)
         node._on_feasibility_response(resp, details)
 
-        # 1 Nav goal to common standoff
-        assert len(dispatcher.nav_goals) == 1
+        # 2 Nav goals: common standoff + post-move observation standoff retreat
+        assert len(dispatcher.nav_goals) == 2
+        assert dispatcher.nav_goals[0].pose.position.x == 0.5
+        assert math.isclose(dispatcher.nav_goals[1].pose.position.x, 0.0, abs_tol=1e-3)
+        assert math.isclose(dispatcher.nav_goals[1].pose.position.y, 0.65, abs_tol=1e-3)
         # 2 Manipulation goals: Clear d5 (is_capture=True), then Move e4->d5 (is_capture=False)
         assert len(dispatcher.manip_goals) == 2
         assert dispatcher.manip_goals[0].is_capture is True
@@ -601,11 +607,13 @@ def test_workflow_dispatch_capture_triple_base_sequence(ros_context):
         node.transition_to(MissionState.CHECKING_REACHABILITY)
         node._on_feasibility_response(resp, details)
 
-        # 3 Nav goals: clear_base -> pick_base -> place_base
-        assert len(dispatcher.nav_goals) == 3
+        # 4 Nav goals: clear_base -> pick_base -> place_base -> observation standoff retreat
+        assert len(dispatcher.nav_goals) == 4
         assert dispatcher.nav_goals[0].pose.position.x == 1.0
         assert dispatcher.nav_goals[1].pose.position.x == 2.0
         assert dispatcher.nav_goals[2].pose.position.x == 1.0
+        assert math.isclose(dispatcher.nav_goals[3].pose.position.x, 0.0, abs_tol=1e-3)
+        assert math.isclose(dispatcher.nav_goals[3].pose.position.y, 0.65, abs_tol=1e-3)
 
         # 3 Manipulation goals: Clear h8 -> Pick a1 -> Place h8
         assert len(dispatcher.manip_goals) == 3
@@ -694,8 +702,8 @@ def test_2level_hierarchical_fsm_micro_stage_transitions(ros_context):
         node.transition_to(MissionState.CHECKING_REACHABILITY)
         node._on_feasibility_response(resp, details)
 
-        # 4 actions dispatched: NAV to pick, MANIP pick, NAV to place, MANIP place
-        assert len(dispatcher.snapshots) == 4
+        # 5 actions dispatched: NAV to pick, MANIP pick, NAV to place, MANIP place, NAV retreat to observation standoff
+        assert len(dispatcher.snapshots) == 5
         # 1. Nav to pick
         assert dispatcher.snapshots[0] == (
             "NAV",
@@ -720,6 +728,12 @@ def test_2level_hierarchical_fsm_micro_stage_transitions(ros_context):
             MotionExecutionState.PLACING_PIECE,
             PerceptionContext.MANIPULATION_ACTOR,
         )
+        # 5. Post move verify retreat to observation standoff
+        assert dispatcher.snapshots[4] == (
+            "NAV",
+            MotionExecutionState.POST_MOVE_VERIFYING,
+            PerceptionContext.TF_TRACKING_AND_NAV,
+        )
 
         # After final stage finishes, transitions through POST_MOVE_VERIFYING then to IDLE
         assert node.motion_state == MotionExecutionState.IDLE
@@ -729,48 +743,7 @@ def test_2level_hierarchical_fsm_micro_stage_transitions(ros_context):
         node.destroy_node()
 
 
-def test_reposition_to_next_observation_viewpoint(ros_context):
-    class NavTrackingDispatcher(TrackingDispatcher):
-        def __init__(self):
-            super().__init__()
-            self.dispatched_poses = []
 
-        def send_navigation_goal(
-            self, target_pose, timeout_sec=60.0, on_completed=None
-        ):
-            self.dispatched_poses.append(target_pose)
-            if on_completed:
-                on_completed(
-                    ActionResult(
-                        success=True, message="Reached standoff", execution_time_sec=0.1
-                    )
-                )
-            return True
-
-    nav_dispatcher = NavTrackingDispatcher()
-    node = ChessMissionOrchestrator(action_dispatcher=nav_dispatcher)
-    try:
-        node._on_nav_ready(Bool(data=True))
-        assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
-
-        # Trigger active repositioning
-        success = node.reposition_to_next_observation_viewpoint(
-            board_x=1.0, board_y=1.0
-        )
-        assert success
-        assert len(nav_dispatcher.dispatched_poses) == 1
-        # Target pose standoff ~ 0.65m away from (1.0, 1.0)
-        pose = nav_dispatcher.dispatched_poses[0]
-        dx = pose.pose.position.x - 1.0
-        dy = pose.pose.position.y - 1.0
-        assert (
-            abs(math.hypot(dx, dy) - node.config.observation_standoff_distance) < 1e-4
-        )
-
-        # Context returns to BOARD_STATE_SCAN after reaching observation viewpoint
-        assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
-    finally:
-        node.destroy_node()
 
 
 def test_dispatch_move_workflow_blocked_when_nav_unready(ros_context):
@@ -782,3 +755,76 @@ def test_dispatch_move_workflow_blocked_when_nav_unready(ros_context):
         assert node.mission_state == MissionState.WAITING_FOR_TF_READY
     finally:
         node.destroy_node()
+
+
+def test_recovery_retains_and_resumes_interrupted_move(ros_context):
+    """Verify recovery retains interrupted move and resumes execution instead of falling back to player wait."""
+    dispatcher = TrackingDispatcher()
+    node = ChessMissionOrchestrator(action_dispatcher=dispatcher)
+    try:
+        # 1. Nav ready -> Black robot waits for player move
+        node._on_nav_ready(Bool(data=True))
+        node._on_grasp_ready(Bool(data=True))
+        assert node.mission_state == MissionState.WAITING_FOR_PLAYER_MOVE
+
+        # 2. Dispatch a move for the robot
+        node._dispatch_move_workflow("c7c5")
+        assert node.current_move_details.uci == "c7c5"
+        assert node.mission_state == MissionState.CHECKING_REACHABILITY
+
+        # 3. Simulate failure during reachability / execution
+        node._on_feasibility_error("Reachability query timeout")
+        assert node.mission_state == MissionState.ERROR_FALLBACK
+
+        # 4. Trigger recovery
+        recovered = node.trigger_recovery(reason="test_recovery")
+        assert recovered
+        assert node.mission_state == MissionState.WAITING_FOR_TF_READY
+        assert node.pending_recovery_move is not None
+        assert node.pending_recovery_move.uci == "c7c5"
+
+        # 5. Nav ready confirmed (e.g. next tick of /system/nav_ready)
+        node._on_nav_ready(Bool(data=True))
+
+        # 6. Crucial check: Robot MUST NOT forget its move and MUST NOT transition to WAITING_FOR_PLAYER_MOVE!
+        assert node.mission_state != MissionState.WAITING_FOR_PLAYER_MOVE
+        # It must have resumed execution workflow (now in CHECKING_REACHABILITY)
+        assert node.mission_state == MissionState.CHECKING_REACHABILITY
+        assert node.current_move_details.uci == "c7c5"
+        assert node.pending_recovery_move is None
+    finally:
+        node.destroy_node()
+
+
+def test_recovery_discards_stale_move_if_fen_changes(ros_context):
+    """Verify pending recovery move is discarded if board FEN changes before resumption."""
+    node = ChessMissionOrchestrator()
+    try:
+        node._on_nav_ready(Bool(data=True))
+        node.transition_to(MissionState.EVALUATING_BEST_MOVE)
+        node.transition_to(MissionState.CHECKING_REACHABILITY)
+        node.transition_to(MissionState.ERROR_FALLBACK)
+
+        goal = ChessMoveGoal(
+            uci="e7e5", from_square="e7", to_square="e5", is_capture=False
+        )
+        node._current_move_details = goal
+        node.trigger_recovery(reason="test")
+        assert node.pending_recovery_move.uci == "e7e5"
+
+        # New game status arrives with different FEN (e.g. board modified)
+        status = ChessGameStatus()
+        status.active_color = "b"
+        status.full_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+        status.is_board_stable = True
+        status.game_phase = ChessGameStatus.PHASE_ROBOT_READY
+        status.best_move_details.uci = "d7d5"
+        node._on_game_status(status)
+
+        # Stale recovery move e7e5 should be cleared
+        assert node.pending_recovery_move is None
+    finally:
+        node.destroy_node()
+
+
+
