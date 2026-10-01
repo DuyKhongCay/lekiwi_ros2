@@ -25,6 +25,15 @@ namespace lekiwi_perception
   HailoChessInferenceComponent::HailoChessInferenceComponent(const rclcpp::NodeOptions &options)
       : rclcpp_lifecycle::LifecycleNode("hailo_chess_inference", options)
   {
+    declare_parameter<bool>("autostart", true);
+    autostart_ = get_parameter("autostart").as_bool();
+    if (autostart_)
+    {
+      lifecycle_helper_ = std::make_unique<utils::PerceptionLifecycleHelper>(
+          this, "hailo8_npu", "NPU_Pipeline_Status");
+      lifecycle_helper_->setup_autostart(true);
+    }
+
     gst_init(nullptr, nullptr);
   }
 
@@ -84,8 +93,11 @@ namespace lekiwi_perception
           this->handle_sample(sample, pipeline);
         });
 
-    lifecycle_helper_ = std::make_unique<utils::PerceptionLifecycleHelper>(
-        this, "hailo8_npu", "NPU_Pipeline_Status");
+    if (!lifecycle_helper_)
+    {
+      lifecycle_helper_ = std::make_unique<utils::PerceptionLifecycleHelper>(
+          this, "hailo8_npu", "NPU_Pipeline_Status");
+    }
     lifecycle_helper_->setup_perception_context_sub({lekiwi_interfaces::msg::PerceptionContext::BOARD_STATE_SCAN,
                                                      lekiwi_interfaces::msg::PerceptionContext::POST_MOVE_VERIFY});
     lifecycle_helper_->diagnostics().updater().add(

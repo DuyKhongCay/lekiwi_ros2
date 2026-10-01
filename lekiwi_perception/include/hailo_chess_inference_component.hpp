@@ -134,6 +134,7 @@ namespace lekiwi_perception
     rclcpp::TimerBase::SharedPtr bus_timer_;
 
     // Composition helper for Lifecycle, Mode Gating, Autostart & Diagnostics
+    bool autostart_{true};
     std::unique_ptr<utils::PerceptionLifecycleHelper> lifecycle_helper_;
 
     std::atomic<PipelineState> pipeline_state_{PipelineState::STOPPED};

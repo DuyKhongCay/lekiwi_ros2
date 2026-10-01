@@ -64,6 +64,7 @@ namespace lekiwi_perception
      * @param[out] rvec 3x1 Rodrigues rotation vector of the board in camera optical frame.
      * @param[out] tvec 3x1 translation vector of the board in camera optical frame.
      * @param[in,out] used_tags_cnt In: minimum tags required (>= 1). Out: actual number of valid board tags used.
+     * @param[in] use_extrinsic_guess If true, uses existing non-empty rvec and tvec as initial guess for LM optimization.
      * @return True if estimation succeeds with >= minimum required tags, false otherwise.
      */
     static bool estimate_board_pose(
@@ -74,7 +75,8 @@ namespace lekiwi_perception
         const cv::Mat &dist_coeffs,
         cv::Mat &rvec,
         cv::Mat &tvec,
-        int &used_tags_cnt);
+        int &used_tags_cnt,
+        bool use_extrinsic_guess = false);
   };
 
 } // namespace lekiwi_perception

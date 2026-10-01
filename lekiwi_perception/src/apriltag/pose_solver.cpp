@@ -48,7 +48,8 @@ namespace lekiwi_perception
       const cv::Mat &dist_coeffs,
       cv::Mat &rvec,
       cv::Mat &tvec,
-      int &used_tags_cnt)
+      int &used_tags_cnt,
+      bool use_extrinsic_guess)
   {
     const int min_required_tags = std::max(1, used_tags_cnt);
     used_tags_cnt = 0;
@@ -87,9 +88,10 @@ namespace lekiwi_perception
     bool solve_ok = false;
     try
     {
+      const bool can_use_guess = use_extrinsic_guess && !rvec.empty() && !tvec.empty();
       solve_ok = cv::solvePnP(
           object_points, image_points, camera_mat, dist_coeffs,
-          rvec, tvec, false, cv::SOLVEPNP_ITERATIVE);
+          rvec, tvec, can_use_guess, cv::SOLVEPNP_ITERATIVE);
     }
     catch (const cv::Exception &)
     {
