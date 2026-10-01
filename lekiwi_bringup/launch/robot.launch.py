@@ -14,6 +14,7 @@ def generate_launch_description():
     """Top-level Bringup: Compose LeKiwi robot subsystems with streamlined configuration."""
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")
+    manipulation_share = FindPackageShare("lekiwi_manipulation")
 
     # Global and Subsystem Arguments
     declared_arguments = [
@@ -29,7 +30,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "start_mission",
-            default_value="false",
+            default_value="true",
             description="Start autonomous chess mission orchestrator",
         ),
         DeclareLaunchArgument(
@@ -79,8 +80,23 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "navigation",
-            default_value="false",
+            default_value="true",
             description="Start Nav2 autonomous navigation stack",
+        ),
+        DeclareLaunchArgument(
+            "chess_master",
+            default_value="true",
+            description="Start LeKiwi chess referee and game engine subsystem",
+        ),
+        DeclareLaunchArgument(
+            "manipulation",
+            default_value="true",
+            description="Start LeKiwi manipulation subsystem (cartesian service and action server)",
+        ),
+        DeclareLaunchArgument(
+            "use_mock_manipulation",
+            default_value="false",
+            description="Use mock_policy_server instead of real hardware manipulation action server",
         ),
     ]
 
@@ -138,6 +154,7 @@ def generate_launch_description():
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "start_mission": LaunchConfiguration("start_mission"),
             "start_readiness_manager": LaunchConfiguration("enable_readiness_checks"),
+            "navigation": LaunchConfiguration("navigation"),
         }.items(),
         condition=IfCondition(LaunchConfiguration("enable_orchestrator")),
     )
@@ -176,7 +193,6 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "autostart": "false",
         }.items(),
         condition=IfCondition(LaunchConfiguration("navigation")),
     )
@@ -192,6 +208,27 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("enable_ekf")),
     )
 
+    chess_master = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([bringup_share, "launch", "chess_master.launch.py"])
+        ),
+        launch_arguments={
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration("chess_master")),
+    )
+
+    manipulation = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([manipulation_share, "launch", "manipulation.launch.py"])
+        ),
+        launch_arguments={
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "use_mock": LaunchConfiguration("use_mock_manipulation"),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration("manipulation")),
+    )
+
     return LaunchDescription(
         [
             *declared_arguments,
@@ -205,5 +242,7 @@ def generate_launch_description():
             teleop_gamepad,
             teleop_uarm,
             navigation,
+            chess_master,
+            manipulation,
         ]
     )

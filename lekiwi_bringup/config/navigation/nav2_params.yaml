@@ -13,7 +13,7 @@ bt_navigator:
     use_sim_time: false
     global_frame: map
     robot_base_frame: base_footprint
-    odom_topic: /odometry/filtered
+    odom_topic: /odometry/local
     bt_loop_duration: 10
     default_server_timeout: 20
     wait_for_service_timeout: 1000
@@ -33,7 +33,9 @@ controller_server:
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     enable_stamped_cmd_vel: true
-    odom_topic: /odometry/filtered
+    odom_topic: /odometry/local
+    current_goal_checker: "general_goal_checker"
+    current_progress_checker: "progress_checker"
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -45,8 +47,8 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.04
-      yaw_goal_tolerance: 0.08
+      xy_goal_tolerance: 0.06
+      yaw_goal_tolerance: 0.10
       stateful: true
 
     FollowPath:
@@ -66,25 +68,25 @@ controller_server:
       decel_lim_x: -1.5
       decel_lim_y: -1.5
       decel_lim_theta: -2.0
-      vx_samples: 15
-      vy_samples: 15
-      vtheta_samples: 20
-      sim_time: 1.5
-      linear_granularity: 0.02
-      angular_granularity: 0.025
+      vx_samples: 7
+      vy_samples: 7
+      vtheta_samples: 9
+      sim_time: 1.0
+      linear_granularity: 0.025
+      angular_granularity: 0.05
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.04
+      xy_goal_tolerance: 0.06
       trans_stopped_velocity: 0.01
-      short_circuit_trajectory_evaluation: true
+      short_circuit_trajectory_evaluation: false
       stateful: true
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.02
+      BaseObstacle.scale: 0.01
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
       PathDist.scale: 32.0
       GoalAlign.scale: 24.0
       GoalAlign.forward_point_distance: 0.1
-      GoalDist.scale: 24.0
+      GoalDist.scale: 36.0
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
@@ -130,8 +132,8 @@ behavior_server:
     global_frame: odom
     robot_base_frame: base_footprint
     transform_timeout: 0.2
-    simulate_ahead_time: 2.0
-    max_rotational_vel: 0.8
+    simulate_ahead_time: 0.8
+    max_rotational_vel: 0.5
     min_rotational_vel: 0.1
     rotational_acc_lim: 2.0
 
@@ -155,7 +157,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_footprint
-      robot_radius: 0.16
+      footprint: "[[0.11, 0.11], [0.11, -0.11], [-0.14, -0.11], [-0.14, 0.11]]"
       resolution: 0.02
       track_unknown_space: false
       plugins: ["static_layer", "inflation_layer"]
@@ -167,8 +169,8 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.22
+        cost_scaling_factor: 15.0
+        inflation_radius: 0.15
 
       always_send_full_costmap: true
 
@@ -184,7 +186,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.02
-      robot_radius: 0.16
+      footprint: "[[0.11, 0.11], [0.11, -0.11], [-0.14, -0.11], [-0.14, 0.11]]"
       plugins: ["static_layer", "inflation_layer"]
 
       static_layer:
@@ -194,8 +196,8 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.22
+        cost_scaling_factor: 15.0
+        inflation_radius: 0.15
 
       always_send_full_costmap: true
 
