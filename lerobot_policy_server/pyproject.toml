@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lerobot_policy_server"
+version = "0.1.0"
+description = "GPU/Host policy inference server for LeKiwi robot (LeRobot) using ZeroMQ transport"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "LeKiwi Robotics Team", email = "dev@lekiwi.labs"}
+]
+keywords = [
+    "robotics",
+    "ros2",
+    "lerobot",
+    "zeromq",
+    "inference-server",
+    "physical-ai"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "pyzmq>=25.0",
+]
+
+[project.optional-dependencies]
+msgpack = ["msgpack>=1.0"]
+cv = ["opencv-python>=4.8"]
+torch = ["torch>=2.0"]
+# Note: LeRobot and its async components can be installed via:
+# pip install lerobot "lerobot[async]"
+
+[project.scripts]
+lerobot-policy-server = "lerobot_policy_server.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lerobot_policy_server = ["py.typed"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
