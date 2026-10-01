@@ -1,6 +1,6 @@
-#include "lekiwi_episode_recorder/gamepad_controller.hpp"
+#include "chess_episode_recorder/gamepad_controller.hpp"
 
-namespace lekiwi_episode_recorder
+namespace chess_episode_recorder
 {
 
 GamepadController::GamepadController(const GamepadConfig &config)
@@ -105,4 +105,4 @@ GamepadAction GamepadController::process_joy(
   return GamepadAction::NONE;
 }
 
-} // namespace lekiwi_episode_recorder
+} // namespace chess_episode_recorder

@@ -5,7 +5,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 
-namespace lekiwi_episode_recorder
+namespace chess_episode_recorder
 {
 
 enum class GamepadAction
@@ -54,4 +54,4 @@ private:
   bool prev_right_{false};
 };
 
-} // namespace lekiwi_episode_recorder
+} // namespace chess_episode_recorder

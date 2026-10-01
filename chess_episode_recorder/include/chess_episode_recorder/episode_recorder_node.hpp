@@ -14,9 +14,9 @@
 #include <sensor_msgs/msg/joy.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
-#include "lekiwi_episode_recorder/gamepad_controller.hpp"
+#include "chess_episode_recorder/gamepad_controller.hpp"
 
-namespace lekiwi_episode_recorder
+namespace chess_episode_recorder
 {
 
 enum class EpisodeState
@@ -110,4 +110,4 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_discard_;
 };
 
-} // namespace lekiwi_episode_recorder
+} // namespace chess_episode_recorder

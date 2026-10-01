@@ -11,7 +11,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    pkg_share = FindPackageShare("lekiwi_episode_recorder")
+    pkg_share = FindPackageShare("chess_episode_recorder")
 
     default_config_path = PathJoinSubstitution(
         [pkg_share, "config", "episode_recorder_params.yaml"]
@@ -53,7 +53,7 @@ def generate_launch_description():
     task = LaunchConfiguration("task")
 
     recorder_node = Node(
-        package="lekiwi_episode_recorder",
+        package="chess_episode_recorder",
         executable="episode_recorder_node",
         name="episode_recorder_node",
         parameters=node_params,

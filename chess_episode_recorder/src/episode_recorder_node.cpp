@@ -1,4 +1,4 @@
-#include "lekiwi_episode_recorder/episode_recorder_node.hpp"
+#include "chess_episode_recorder/episode_recorder_node.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -12,7 +12,7 @@
 #include <rosbag2_storage/storage_options.hpp>
 #include <rosbag2_storage/topic_metadata.hpp>
 
-namespace lekiwi_episode_recorder
+namespace chess_episode_recorder
 {
 
 EpisodeRecorderNode::EpisodeRecorderNode(const rclcpp::NodeOptions &options)
@@ -512,4 +512,4 @@ void EpisodeRecorderNode::handle_discard(
   }
 }
 
-} // namespace lekiwi_episode_recorder
+} // namespace chess_episode_recorder
