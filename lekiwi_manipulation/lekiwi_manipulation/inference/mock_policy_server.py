@@ -17,22 +17,67 @@ from __future__ import annotations
 import time
 from typing import Dict, Optional
 
-from control_msgs.action import FollowJointTrajectory
+from enum import Enum
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from lekiwi_interfaces.action import ExecuteChessMove
 import rclpy
-from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
-from lekiwi_manipulation.trajectory_generator import (
-    ARM_JOINTS_DEFAULT,
-    ChessTrajectoryGenerator,
-    DEFAULT_HOME_POSE,
-    DEFAULT_STOW_POSE,
-    ManipulationPhase,
-    QuinticSplineStrategy,
+ARM_JOINTS_DEFAULT: tuple[str, ...] = (
+    "arm_shoulder_pan",
+    "arm_shoulder_lift",
+    "arm_elbow_flex",
+    "arm_wrist_flex",
+    "arm_wrist_roll",
+    "arm_gripper",
+)
+
+DEFAULT_HOME_POSE: Dict[str, float] = {
+    "arm_shoulder_pan": 0.0,
+    "arm_shoulder_lift": -0.8,
+    "arm_elbow_flex": -1.2,
+    "arm_wrist_flex": 0.5,
+    "arm_wrist_roll": 0.0,
+    "arm_gripper": 0.0,
+}
+
+DEFAULT_STOW_POSE: Dict[str, float] = {
+    "arm_shoulder_pan": 0.0,
+    "arm_shoulder_lift": -1.5,
+    "arm_elbow_flex": -1.5,
+    "arm_wrist_flex": 0.0,
+    "arm_wrist_roll": 0.0,
+    "arm_gripper": 0.0,
+}
+
+
+class ManipulationPhase(str, Enum):
+    """Discrete operational phases of a chess pick-and-place command."""
+
+    IDLE = "IDLE"
+    APPROACH_PICK = "APPROACH_PICK"
+    DESCEND_PICK = "DESCEND_PICK"
+    GRASP = "GRASP"
+    LIFT = "LIFT"
+    TRANSIT_PLACE = "TRANSIT_PLACE"
+    DESCEND_PLACE = "DESCEND_PLACE"
+    RELEASE = "RELEASE"
+    RETRACT_STOW = "RETRACT_STOW"
+
+
+DEFAULT_CHESS_PHASES: tuple[ManipulationPhase, ...] = (
+    ManipulationPhase.APPROACH_PICK,
+    ManipulationPhase.DESCEND_PICK,
+    ManipulationPhase.GRASP,
+    ManipulationPhase.LIFT,
+    ManipulationPhase.TRANSIT_PLACE,
+    ManipulationPhase.DESCEND_PLACE,
+    ManipulationPhase.RELEASE,
+    ManipulationPhase.RETRACT_STOW,
 )
 
 DEFAULT_PHASE_DURATION_SEC = 0.6
@@ -59,25 +104,11 @@ class MockPolicyServer(Node):
         self._simulate_delay = bool(self.get_parameter("simulate_delay").value)
         self._action_name = str(self.get_parameter("action_name").value)
 
-        self._generator = ChessTrajectoryGenerator(
-            strategy=QuinticSplineStrategy(),
-            joint_names=ARM_JOINTS_DEFAULT,
-        )
-
         self._current_phase = ManipulationPhase.IDLE
         self._is_active = False
 
-        # Callback Groups
+        # Callback Group
         self._cbg_server = ReentrantCallbackGroup()
-        self._cbg_client = MutuallyExclusiveCallbackGroup()
-
-        # FollowJointTrajectory client to arm controller
-        self._trajectory_client = ActionClient(
-            self,
-            FollowJointTrajectory,
-            "/arm_trajectory_controller/follow_joint_trajectory",
-            callback_group=self._cbg_client,
-        )
 
         # Action Server
         self._action_server = ActionServer(
@@ -124,8 +155,8 @@ class MockPolicyServer(Node):
         )
         return CancelResponse.ACCEPT
 
-    async def _execute_goal(self, goal_handle) -> ExecuteChessMove.Result:
-        """Execute the multi-phase chess move sequence."""
+    def _execute_goal(self, goal_handle) -> ExecuteChessMove.Result:
+        """Execute the multi-phase chess move sequence in pure simulation."""
         self._is_active = True
         start_time = time.monotonic()
         req: ExecuteChessMove.Goal = goal_handle.request
@@ -135,41 +166,10 @@ class MockPolicyServer(Node):
             f"Executing manipulation sequence for: {req.instruction}"
         )
 
-        # 1. Resolve start, pick, and place joint poses
-        q_start = dict(DEFAULT_STOW_POSE)
-        q_pick = (
-            self._extract_joint_dict(req.pick_ik_hint)
-            if req.pick_ik_hint
-            else dict(DEFAULT_HOME_POSE)
-        )
-        q_place = (
-            self._extract_joint_dict(req.place_ik_hint)
-            if req.place_ik_hint
-            else dict(DEFAULT_HOME_POSE)
-        )
+        total_phases = len(DEFAULT_CHESS_PHASES)
 
-        # 2. Generate trajectory and phase timeline
-        traj, timeline = self._generator.build_full_chess_move_trajectory(
-            q_current=q_start,
-            q_pick=q_pick,
-            q_place=q_place,
-            is_capture=req.is_capture,
-            phase_duration=self._phase_duration,
-        )
-
-        total_phases = len(timeline)
-
-        # 3. If real arm controller is connected, dispatch the trajectory asynchronously
-        if self._trajectory_client.server_is_ready():
-            self.get_logger().info(
-                "Dispatching full trajectory to /arm_trajectory_controller..."
-            )
-            arm_goal = FollowJointTrajectory.Goal()
-            arm_goal.trajectory = traj
-            self._trajectory_client.send_goal_async(arm_goal)
-
-        # 4. Step through phase timeline emitting feedback and checking for preemption
-        for idx, (phase, _) in enumerate(timeline):
+        # Pure Software Mock: Step through phase timeline emitting feedback and checking for preemption
+        for idx, phase in enumerate(DEFAULT_CHESS_PHASES):
             if goal_handle.is_cancel_requested:
                 self.get_logger().warn(f"Goal cancelled during phase {phase.value}!")
                 self._current_phase = ManipulationPhase.IDLE
@@ -191,10 +191,20 @@ class MockPolicyServer(Node):
             self.get_logger().info(f"[PHASE] {phase.value} ({progress:.1f}%)")
 
             if self._simulate_delay:
-                # Sleep asynchronously without blocking executor
-                await self._async_sleep(self._phase_duration)
+                # Sleep in short increments to allow rapid preemption/cancel response
+                if not self._sleep_with_cancel_check(goal_handle, self._phase_duration):
+                    self.get_logger().warn(
+                        f"Goal cancelled during delay in phase {phase.value}!"
+                    )
+                    self._current_phase = ManipulationPhase.IDLE
+                    self._is_active = False
+                    goal_handle.canceled()
+                    result.success = False
+                    result.message = f"Preempted and cancelled during {phase.value}."
+                    result.execution_time_sec = float(time.monotonic() - start_time)
+                    return result
 
-        # 5. Conclude execution successfully
+        # 4. Conclude execution successfully
         elapsed = time.monotonic() - start_time
         self._current_phase = ManipulationPhase.IDLE
         self._is_active = False
@@ -209,11 +219,17 @@ class MockPolicyServer(Node):
         )
         return result
 
-    async def _async_sleep(self, duration_sec: float) -> None:
-        """Asynchronous sleep compatible with rclpy ReentrantCallbackGroup."""
-        import asyncio
-
-        await asyncio.sleep(duration_sec)
+    def _sleep_with_cancel_check(self, goal_handle, duration_sec: float) -> bool:
+        """Sleep incrementally while polling for cancellation. Returns False if cancelled."""
+        step = 0.05
+        elapsed = 0.0
+        while elapsed < duration_sec:
+            if goal_handle.is_cancel_requested:
+                return False
+            chunk = min(step, duration_sec - elapsed)
+            time.sleep(chunk)
+            elapsed += chunk
+        return True
 
     def _extract_joint_dict(self, js: JointState) -> Dict[str, float]:
         """Convert a JointState message into a dictionary of joint positions."""
@@ -235,10 +251,7 @@ class MockPolicyServer(Node):
             KeyValue(key="is_active", value=str(self._is_active)),
             KeyValue(key="current_phase", value=self._current_phase.value),
             KeyValue(key="phase_duration_sec", value=f"{self._phase_duration:.2f}"),
-            KeyValue(
-                key="arm_controller_ready",
-                value=str(self._trajectory_client.server_is_ready()),
-            ),
+            KeyValue(key="simulate_delay", value=str(self._simulate_delay)),
         ]
 
         diag_array = DiagnosticArray()
@@ -250,8 +263,10 @@ class MockPolicyServer(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = MockPolicyServer()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

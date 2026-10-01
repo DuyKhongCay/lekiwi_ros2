@@ -11,10 +11,10 @@ from lekiwi_interfaces.action import ExecuteChessMove
 from rclpy.action import CancelResponse, GoalResponse
 from sensor_msgs.msg import JointState
 
-from lekiwi_manipulation.mock_policy_server import MockPolicyServer
-from lekiwi_manipulation.trajectory_generator import (
+from lekiwi_manipulation.inference.mock_policy_server import (
     ARM_JOINTS_DEFAULT,
     ManipulationPhase,
+    MockPolicyServer,
 )
 
 
@@ -110,7 +110,7 @@ def test_goal_execution_flow_fast(ros_context):
         goal_req.is_capture = False
 
         mock_handle = _MockGoalHandle(goal_req)
-        result = asyncio.run(node._execute_goal(mock_handle))
+        result = node._execute_goal(mock_handle)
 
         assert result.success is True
         assert mock_handle.is_succeeded is True
@@ -137,7 +137,7 @@ def test_goal_preemption_handling(ros_context):
 
         # Cancel after phase 2
         mock_handle = _MockGoalHandle(goal_req, cancel_after_phase=2)
-        result = asyncio.run(node._execute_goal(mock_handle))
+        result = node._execute_goal(mock_handle)
 
         assert result.success is False
         assert mock_handle.is_canceled is True
