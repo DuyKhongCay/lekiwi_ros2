@@ -35,7 +35,7 @@ def generate_launch_description():
     )
     use_mock_arg = DeclareLaunchArgument(
         "use_mock",
-        default_value="false",
+        default_value="true",
         description="If true, runs mock_policy_server instead of real hardware manipulation_action_server",
     )
 

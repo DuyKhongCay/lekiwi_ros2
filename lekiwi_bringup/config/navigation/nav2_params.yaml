@@ -15,7 +15,7 @@ bt_navigator:
     robot_base_frame: base_footprint
     odom_topic: /odometry/local
     bt_loop_duration: 10
-    default_server_timeout: 20
+    default_server_timeout: 1000
     wait_for_service_timeout: 1000
     action_server_result_timeout: 900.0
     navigators: ["navigate_to_pose", "navigate_through_poses"]
@@ -27,11 +27,11 @@ bt_navigator:
 controller_server:
   ros__parameters:
     use_sim_time: false
-    controller_frequency: 20.0
+    controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.3
+    failure_tolerance: 0.5
     enable_stamped_cmd_vel: true
     odom_topic: /odometry/local
     current_goal_checker: "general_goal_checker"
@@ -42,54 +42,115 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.05
-      movement_time_allowance: 10.0
+      required_movement_radius: 0.03
+      movement_time_allowance: 12.0
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.06
-      yaw_goal_tolerance: 0.10
+      xy_goal_tolerance: 0.04
+      yaw_goal_tolerance: 0.08
       stateful: true
 
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
-      debug_trajectory_details: false
-      min_vel_x: -0.25
-      min_vel_y: -0.25
-      max_vel_x: 0.25
-      max_vel_y: 0.25
-      max_vel_theta: 0.8
-      min_speed_xy: 0.0
-      max_speed_xy: 0.30
-      min_speed_theta: 0.0
-      acc_lim_x: 1.5
-      acc_lim_y: 1.5
-      acc_lim_theta: 2.0
-      decel_lim_x: -1.5
-      decel_lim_y: -1.5
-      decel_lim_theta: -2.0
-      vx_samples: 7
-      vy_samples: 7
-      vtheta_samples: 9
-      sim_time: 1.0
-      linear_granularity: 0.025
-      angular_granularity: 0.05
+      plugin: "nav2_mppi_controller::MPPIController"
+      motion_model: "Omni"             # Khai báo mô hình động học đa hướng (Holonomic)
+      time_steps: 30                   # 30 bước dự phóng (1.5s horizon) - tối ưu cho Pi 5
+      model_dt: 0.05                   # Bước thời gian tích phân 50ms
+      batch_size: 500                  # 500 quỹ đạo Monte Carlo (vừa vặn CPU Cortex-A76)
+      iteration_count: 1
+      temperature: 0.3
+      gamma: 0.015
+      prune_distance: 1.5
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.06
-      trans_stopped_velocity: 0.01
-      short_circuit_trajectory_evaluation: false
-      stateful: true
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.01
-      PathAlign.scale: 32.0
-      PathAlign.forward_point_distance: 0.1
-      PathDist.scale: 32.0
-      GoalAlign.scale: 24.0
-      GoalAlign.forward_point_distance: 0.1
-      GoalDist.scale: 36.0
-      RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: -1.0
+      visualize: false                 # Tắt visualize markers trên topic để tiết kiệm CPU
+
+      # --- Giới hạn động học (Kinematic Boundaries) ---
+      vx_max: 0.17                     # Dải thô tối đa theo đề xuất
+      vx_min: -0.17
+      vy_max: 0.17                     # Khả năng đi ngang (strafe)
+      vy_min: -0.17
+      wz_max: 0.70                     # Giới hạn xoay tối đa
+      wz_min: -0.70
+
+      # --- Độ lệch chuẩn phân phối lấy mẫu (Sampling Noise) ---
+      vx_std: 0.06                     # Bước nhảy mẫu mịn ~0.02 - 0.06 m/s
+      vy_std: 0.06
+      wz_std: 0.15
+
+      # --- Giới hạn gia tốc (Accelerations) ---
+      ax_max: 1.2
+      ax_min: -1.5
+      ay_max: 1.2
+      ay_min: -1.5
+      az_max: 2.0
+      az_min: -2.0
+
+      # --- Danh sách Critics chuyên biệt cho Omni ---
+      critics: [
+        "ConstraintCritic",
+        "CostCritic",
+        "GoalCritic",
+        "GoalAngleCritic",
+        "PathAlignCritic",
+        "PathFollowCritic",
+        "TwirlingCritic"
+      ]
+
+      # 1. Ràng buộc vật lý (tốc độ, gia tốc)
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+
+      # 2. Chi phí vật cản từ Costmap (Né bàn cờ)
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        near_collision_cost: 253
+        critical_cost: 300.0
+        collision_cost: 1000000.0
+        near_goal_distance: 0.15       # Cho phép áp sát đích gần bàn cờ mà không bị chặn sớm
+        consider_footprint: false      # Dùng robot_radius dạng tròn để tăng tốc độ tính toán
+
+      # 3. Kéo về đích (Tự động giảm tốc khi d < 0.5m)
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 8.0
+        threshold_to_consider: 0.30    # Vùng chuyển tiếp từ dải thô sang dải mịn
+
+      # 4. Xoay đúng góc yaw tại đích
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.25    # Chỉ xoay căn chỉnh khi đã cách đích < 25cm
+
+      # 5. Bám sát tim đường đi của Global Plan
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 15.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 3
+        threshold_to_consider: 0.50
+        offset_from_furthest: 15
+        use_path_orientations: false   # Omni tịnh tiến dọc path mà không cần xoay thân theo path
+
+      # 6. Thúc đẩy robot tiến dọc theo đường đi
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 6.0
+        offset_from_furthest: 5
+        threshold_to_consider: 0.20
+
+      # 7. Triệt tiêu xoay thân xe không cần thiết (Giữ hướng cho cánh tay & camera)
+      TwirlingCritic:
+        enabled: true
+        twirling_cost_power: 1
+        twirling_cost_weight: 12.0
 
 planner_server:
   ros__parameters:
@@ -132,7 +193,7 @@ behavior_server:
     global_frame: odom
     robot_base_frame: base_footprint
     transform_timeout: 0.2
-    simulate_ahead_time: 0.8
+    simulate_ahead_time: 0.4
     max_rotational_vel: 0.5
     min_rotational_vel: 0.1
     rotational_acc_lim: 2.0
@@ -157,7 +218,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_footprint
-      footprint: "[[0.11, 0.11], [0.11, -0.11], [-0.14, -0.11], [-0.14, 0.11]]"
+      robot_radius: 0.132520
       resolution: 0.02
       track_unknown_space: false
       plugins: ["static_layer", "inflation_layer"]
@@ -169,8 +230,8 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 15.0
-        inflation_radius: 0.15
+        cost_scaling_factor: 12.0
+        inflation_radius: 0.16
 
       always_send_full_costmap: true
 
@@ -186,7 +247,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.02
-      footprint: "[[0.11, 0.11], [0.11, -0.11], [-0.14, -0.11], [-0.14, 0.11]]"
+      robot_radius: 0.132520
       plugins: ["static_layer", "inflation_layer"]
 
       static_layer:
@@ -196,8 +257,8 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 15.0
-        inflation_radius: 0.15
+        cost_scaling_factor: 12.0
+        inflation_radius: 0.16
 
       always_send_full_costmap: true
 

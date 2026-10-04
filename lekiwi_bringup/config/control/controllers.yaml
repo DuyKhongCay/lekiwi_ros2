@@ -71,8 +71,8 @@ omni_base_controller:
   ros__parameters:
     wheel_names: [base_left_wheel, base_back_wheel, base_right_wheel]
     wheel_offset: 1.0471975512
-    robot_radius: 0.143717
-    wheel_radius: 0.070526 
+    robot_radius: 0.132520
+    wheel_radius: 0.064241 
     odom_frame_id: odom
     base_frame_id: base_footprint
     enable_odom_tf: false

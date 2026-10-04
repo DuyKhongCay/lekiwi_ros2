@@ -95,7 +95,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "use_mock_manipulation",
-            default_value="false",
+            default_value="true",
             description="Use mock_policy_server instead of real hardware manipulation action server",
         ),
     ]
@@ -220,7 +220,9 @@ def generate_launch_description():
 
     manipulation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution([manipulation_share, "launch", "manipulation.launch.py"])
+            PathJoinSubstitution(
+                [manipulation_share, "launch", "manipulation.launch.py"]
+            )
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
