@@ -32,6 +32,29 @@ arm_trajectory_controller:
     allow_partial_joints_goal: true
     state_publish_rate: 50.0
     action_monitor_rate: 20.0
+    constraints:
+      stopped_velocity_tolerance: 0.05
+      goal_time: 0.5
+      arm_shoulder_pan:
+        trajectory: 0.10
+        goal: 0.03
+      arm_shoulder_lift:
+        trajectory: 0.10
+        goal: 0.03
+      arm_elbow_flex:
+        trajectory: 0.10
+        goal: 0.03
+      arm_wrist_flex:
+        trajectory: 0.10
+        goal: 0.03
+      arm_wrist_roll:
+        trajectory: 0.10
+        goal: 0.03
+      arm_gripper:
+        trajectory: 0.15
+        goal: 0.05
+
+
 
 arm_forward_controller:
   ros__parameters:
@@ -48,8 +71,8 @@ omni_base_controller:
   ros__parameters:
     wheel_names: [base_left_wheel, base_back_wheel, base_right_wheel]
     wheel_offset: 1.0471975512
-    robot_radius: 0.143717
-    wheel_radius: 0.070526 
+    robot_radius: 0.132520
+    wheel_radius: 0.064241 
     odom_frame_id: odom
     base_frame_id: base_footprint
     enable_odom_tf: false

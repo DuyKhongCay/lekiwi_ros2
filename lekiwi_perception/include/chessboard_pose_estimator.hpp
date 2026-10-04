@@ -193,6 +193,14 @@ namespace lekiwi_perception
         std::atomic<int> last_used_tags_{0};
         std::mutex diag_mutex_;
         std::string last_detected_tag_ids_str_{"None"};
+
+        // Continuous pose tracking & extrinsic guess for PnP
+        cv::Mat last_valid_rvec_;
+        cv::Mat last_valid_tvec_;
+        bool has_valid_pose_{false};
+        rclcpp::Time last_valid_pose_stamp_{0, 0, RCL_ROS_TIME};
+        double max_extrinsic_guess_age_sec_{2.0};
+        double two_tag_max_jump_m_{0.015};
     };
 
 } // namespace lekiwi_perception

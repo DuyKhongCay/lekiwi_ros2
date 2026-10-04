@@ -38,25 +38,13 @@ joy_teleop:
           scale: 0.5
           offset: 0.0
 
-    # 2. Turbo Drive Mode: Deadman LB + RB (buttons 4 & 5)
-    lekiwi_teleop_turbo:
-      type: topic
-      interface_type: geometry_msgs/msg/TwistStamped
-      topic_name: /cmd_vel_teleop
-      deadman_buttons: [4, 5]
-      axis_mappings:
-        twist-linear-x:
-          axis: 1
-          scale: 0.3
-          offset: 0.0
-        twist-linear-y:
-          axis: 0
-          scale: 0.3
-          offset: 0.0
-        twist-angular-z:
-          axis: 3
-          scale: 1
-          offset: 0.0
+    # 2. LB trigger orchestrator recover
+    lekiwi_trigger_recover:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+      service_name: /orchestrator/recover
+      buttons: [4]
+
 
     # 3. Button X (Index 2): Toggle Arm Torque & Controller (Call /set_torque_enabled)
     lekiwi_toggle_arm_torque:

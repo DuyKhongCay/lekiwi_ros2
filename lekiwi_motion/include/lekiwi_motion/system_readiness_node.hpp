@@ -11,7 +11,6 @@
 #include <vector>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
-#include <nav2_msgs/srv/manage_lifecycle_nodes.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -45,7 +44,6 @@ namespace lekiwi_motion
             double max_age_sec,
             bool is_static = false) const;
 
-        void dispatch_nav2_startup();
         void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
 
         void handle_nav_query(
@@ -75,9 +73,6 @@ namespace lekiwi_motion
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr nav_readiness_srv_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr grasp_readiness_srv_;
 
-        // Nav2 Autostart Client
-        rclcpp::Client<nav2_msgs::srv::ManageLifecycleNodes>::SharedPtr nav2_client_;
-
         // Periodic Timer
         rclcpp::TimerBase::SharedPtr eval_timer_;
 
@@ -96,17 +91,12 @@ namespace lekiwi_motion
         std::string base_frame_{"base_footprint"};
         std::string ee_frame_{"gripperframe"};
         std::string board_frame_{"chessboard_frame"};
+        std::string local_odom_topic_{"/odometry/local"};
+        std::string global_odom_topic_{"/odometry/global"};
+        std::string joint_states_topic_{"/joint_states"};
         double check_frequency_hz_{10.0};
         double max_transform_age_sec_{0.30};
         double nav_odom_max_age_sec_{0.50};
-        bool autostart_nav2_{true};
-        std::string nav2_lifecycle_service_{"/lifecycle_manager_navigation/manage_nodes"};
-        double nav2_service_timeout_sec_{5.0};
-
-        // Nav2 Autostart State Tracking
-        std::atomic<bool> nav2_started_{false};
-        std::atomic<bool> nav2_dispatch_in_progress_{false};
-        rclcpp::Time nav2_dispatch_time_{0, 0, RCL_ROS_TIME};
 
         // Cached publication states
         bool last_published_nav_ready_{false};

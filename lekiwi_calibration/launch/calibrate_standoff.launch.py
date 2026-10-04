@@ -57,8 +57,12 @@ def generate_launch_description() -> LaunchDescription:
             "teleop_gamepad": "true",
             "cameras": "true",
             "enable_ekf": "true",
+            "enable_orchestrator": "true",
+            "enable_readiness_checks": "false",
+            "start_mission": "false",
             "navigation": "false",
-            "enable_readiness_checks": "true",
+            "chess_master": "false",
+            "manipulation": "false",
         }.items(),
         condition=IfCondition(bringup_robot),
     )

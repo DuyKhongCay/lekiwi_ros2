@@ -30,13 +30,18 @@ def generate_launch_description():
     )
     start_mission_arg = DeclareLaunchArgument(
         "start_mission",
-        default_value="false",
+        default_value="true",
         description="Whether to start the autonomous chess mission orchestrator",
     )
     start_readiness_arg = DeclareLaunchArgument(
         "start_readiness_manager",
         default_value="true",
         description="Whether to start system_readiness_node in orchestrator launch",
+    )
+    navigation_arg = DeclareLaunchArgument(
+        "navigation",
+        default_value="true",
+        description="Whether mobile base navigation (Nav2) is active",
     )
 
     params_file = LaunchConfiguration("params_file")
@@ -67,7 +72,13 @@ def generate_launch_description():
         executable="chess_mission_orchestrator",
         name="chess_mission_orchestrator",
         output="screen",
-        parameters=[params_file, {"use_sim_time": use_sim_time}],
+        parameters=[
+            params_file,
+            {
+                "use_sim_time": use_sim_time,
+                "navigation": LaunchConfiguration("navigation"),
+            },
+        ],
         condition=IfCondition(LaunchConfiguration("start_mission")),
     )
 
@@ -77,6 +88,7 @@ def generate_launch_description():
             use_sim_time_arg,
             start_mission_arg,
             start_readiness_arg,
+            navigation_arg,
             system_readiness_node,
             workspace_checker_node,
             chess_mission_node,

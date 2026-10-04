@@ -61,7 +61,6 @@ target_link_libraries(system_readiness_component
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
-  ${nav2_msgs_TARGETS}
   tf2_ros::tf2_ros
   ${tf2_geometry_msgs_TARGETS}
 )
@@ -137,6 +136,24 @@ rclcpp_components_register_node(torque_manager_component
   EXECUTABLE torque_manager_node
 )
 
+# ── C++ Component & Executable: nav2_startup_gate ────────────────────────────
+add_library(nav2_startup_gate_component SHARED src/nav2_startup_gate_node.cpp)
+target_compile_features(nav2_startup_gate_component PUBLIC cxx_std_17)
+target_include_directories(nav2_startup_gate_component PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
+target_link_libraries(nav2_startup_gate_component
+  rclcpp::rclcpp
+  rclcpp_components::component
+  tf2_ros::tf2_ros
+  ${nav2_msgs_TARGETS}
+)
+rclcpp_components_register_node(nav2_startup_gate_component
+  PLUGIN "lekiwi_motion::Nav2StartupGateNode"
+  EXECUTABLE nav2_startup_gate_node
+)
+
 install(TARGETS
   system_readiness_state
   system_readiness_component
@@ -145,6 +162,8 @@ install(TARGETS
   workspace_checker_node
   torque_manager_component
   torque_manager_node
+  nav2_startup_gate_component
+  nav2_startup_gate_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -229,6 +248,18 @@ if(BUILD_TESTING)
     workspace_model
     ${visualization_msgs_TARGETS}
     ${lekiwi_interfaces_TARGETS}
+    rclcpp::rclcpp
+  )
+
+  ament_add_gtest(test_nav2_startup_gate
+    test/test_nav2_startup_gate.cpp
+  )
+  target_compile_features(test_nav2_startup_gate PUBLIC cxx_std_17)
+  target_include_directories(test_nav2_startup_gate PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  target_link_libraries(test_nav2_startup_gate
+    nav2_startup_gate_component
     rclcpp::rclcpp
   )
 endif()

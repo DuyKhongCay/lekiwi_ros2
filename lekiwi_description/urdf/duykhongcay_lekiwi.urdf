@@ -11,7 +11,7 @@
     </inertial> -->
     <!-- Part base_plate_layer2_v3_1__body1 -->
     <visual>
-      <origin xyz="-0.0209673 1.32994e-05 0.1072" rpy="-0 0 -1.5708"/>
+      <origin xyz="0 0 0.1048" rpy="-0 0 -1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_plate_layer2_v3_1__body1.stl"/>
       </geometry>
@@ -20,14 +20,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.0209673 1.32994e-05 0.1072" rpy="-0 0 -1.5708"/>
+      <origin xyz="0 0 0.1048" rpy="-0 0 -1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_plate_layer2_v3_1__body1.stl"/>
       </geometry>
     </collision>
     <!-- Part stereo_camera_mount -->
     <visual>
-      <origin xyz="-0.0209673 1.32994e-05 0.1072" rpy="-0 0 -1.5708"/>
+      <origin xyz="0 -0 0.1048" rpy="-0 0 -1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/stereo_camera_mount.stl"/>
       </geometry>
@@ -36,14 +36,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.0209673 1.32994e-05 0.1072" rpy="-0 0 -1.5708"/>
+      <origin xyz="0 -0 0.1048" rpy="-0 0 -1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/stereo_camera_mount.stl"/>
       </geometry>
     </collision>
     <!-- Part imx219_stereo_cam -->
     <visual>
-      <origin xyz="-0.0513327 1.32988e-05 0.409926" rpy="-0.785398 -0 1.5708"/>
+      <origin xyz="-0.0303654 -6.04e-10 0.407526" rpy="-0.785398 -0 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/imx219_stereo_cam.stl"/>
       </geometry>
@@ -52,14 +52,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.0513327 1.32988e-05 0.409926" rpy="-0.785398 -0 1.5708"/>
+      <origin xyz="-0.0303654 -6.04e-10 0.407526" rpy="-0.785398 -0 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/imx219_stereo_cam.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_03a_v1_1__body1 -->
     <visual>
-      <origin xyz="0.0243327 -0.0784486 0.0775" rpy="1.0472 1.5708 0"/>
+      <origin xyz="0.0453 -0.0784619 0.0751" rpy="1.0472 1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_v1_1__body1.stl"/>
       </geometry>
@@ -68,14 +68,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0243327 -0.0784486 0.0775" rpy="1.0472 1.5708 0"/>
+      <origin xyz="0.0453 -0.0784619 0.0751" rpy="1.0472 1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_v1_1__body1.stl"/>
       </geometry>
     </collision>
     <!-- Part base_plate_layer1_v5_1__body1 -->
     <visual>
-      <origin xyz="-0.0209673 1.32994e-05 0.0548" rpy="0 -0 0.523599"/>
+      <origin xyz="-0 -0 0.0524" rpy="0 0 0.523599"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_plate_layer1_v5_1__body1.stl"/>
       </geometry>
@@ -84,14 +84,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.0209673 1.32994e-05 0.0548" rpy="0 -0 0.523599"/>
+      <origin xyz="-0 -0 0.0524" rpy="0 0 0.523599"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_plate_layer1_v5_1__body1.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_03a_v1 -->
     <visual>
-      <origin xyz="0.0336807 1.27994e-05 0.1509" rpy="-0 0 0"/>
+      <origin xyz="0.054648 -5e-07 0.1485" rpy="-0 0 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_v1.stl"/>
       </geometry>
@@ -100,14 +100,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0336807 1.27994e-05 0.1509" rpy="-0 0 0"/>
+      <origin xyz="0.054648 -5e-07 0.1485" rpy="-0 0 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_v1.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_03a_v1_1__body1_2 -->
     <visual>
-      <origin xyz="-0.111567 1.32994e-05 0.0775" rpy="3.14159 1.5708 0"/>
+      <origin xyz="-0.0906 -0 0.0751" rpy="3.14159 1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_v1_1__body1__2.stl"/>
       </geometry>
@@ -116,7 +116,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.111567 1.32994e-05 0.0775" rpy="3.14159 1.5708 0"/>
+      <origin xyz="-0.0906 -0 0.0751" rpy="3.14159 1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_v1_1__body1__2.stl"/>
       </geometry>
@@ -124,7 +124,7 @@
     <!-- Part base_footprint -->
     <!-- Part stereo_cam_mount -->
     <visual>
-      <origin xyz="-0.0497771 1.32988e-05 0.412967" rpy="-0.785398 -0 1.5708"/>
+      <origin xyz="-0.0288097 -6.04e-10 0.410567" rpy="-0.785398 -0 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/stereo_cam_mount.stl"/>
       </geometry>
@@ -133,14 +133,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.0497771 1.32988e-05 0.412967" rpy="-0.785398 -0 1.5708"/>
+      <origin xyz="-0.0288097 -6.04e-10 0.410567" rpy="-0.785398 -0 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/stereo_cam_mount.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_03a_v1_1__body1_3 -->
     <visual>
-      <origin xyz="0.0243327 0.0784752 0.0775" rpy="-1.0472 1.5708 0"/>
+      <origin xyz="0.0453 0.0784619 0.0751" rpy="-1.0472 1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_v1_1__body1__2.stl"/>
       </geometry>
@@ -149,14 +149,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0243327 0.0784752 0.0775" rpy="-1.0472 1.5708 0"/>
+      <origin xyz="0.0453 0.0784619 0.0751" rpy="-1.0472 1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_v1_1__body1__2.stl"/>
       </geometry>
     </collision>
     <!-- Part base_so101 -->
     <visual>
-      <origin xyz="0.000980687 1.27994e-05 0.1048" rpy="1.5708 -0 1.5708"/>
+      <origin xyz="0.021948 -5e-07 0.1024" rpy="1.5708 -0 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_so101.stl"/>
       </geometry>
@@ -165,14 +165,30 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.000980687 1.27994e-05 0.1048" rpy="1.5708 -0 1.5708"/>
+      <origin xyz="0.021948 -5e-07 0.1024" rpy="1.5708 -0 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_so101.stl"/>
       </geometry>
     </collision>
+    <!-- Part chess_box -->
+    <visual>
+      <origin xyz="-0 -0 0.0524" rpy="-0 0 -1.5708"/>
+      <geometry>
+        <mesh filename="package://lekiwi_description/assets/chess_box.stl"/>
+      </geometry>
+      <material name="chess_box_material">
+        <color rgba="0.5 0.1 0.1 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0 -0 0.0524" rpy="-0 0 -1.5708"/>
+      <geometry>
+        <mesh filename="package://lekiwi_description/assets/chess_box.stl"/>
+      </geometry>
+    </collision>
     <!-- Part base_motor_holder_so101_v1 -->
     <visual>
-      <origin xyz="0.000980687 -8.6633e-05 0.1048" rpy="1.5708 -0 1.5708"/>
+      <origin xyz="0.021948 -9.99325e-05 0.1024" rpy="1.5708 -0 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_motor_holder_so101_v1.stl"/>
       </geometry>
@@ -181,14 +197,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.000980687 -8.6633e-05 0.1048" rpy="1.5708 -0 1.5708"/>
+      <origin xyz="0.021948 -9.99325e-05 0.1024" rpy="1.5708 -0 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_motor_holder_so101_v1.stl"/>
       </geometry>
     </collision>
     <!-- Part base_side_cam -->
     <visual>
-      <origin xyz="-0.0829673 1.32988e-05 0.4182" rpy="-0 0 -1.5708"/>
+      <origin xyz="-0.062 -6.04e-10 0.4158" rpy="-0 0 -1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_side_cam.stl"/>
       </geometry>
@@ -197,7 +213,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.0829673 1.32988e-05 0.4182" rpy="-0 0 -1.5708"/>
+      <origin xyz="-0.062 -6.04e-10 0.4158" rpy="-0 0 -1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/base_side_cam.stl"/>
       </geometry>
@@ -213,12 +229,11 @@
     </inertial>
   </link>
   <joint name="baseframe_frame" type="fixed">
-    <origin xyz="0.000980687 1.27994e-05 0.1048" rpy="0 -0 0"/>
+    <origin xyz="0.021948 -5e-07 0.1024" rpy="0 0 0"/>
     <parent link="base_footprint"/>
     <child link="baseframe"/>
     <axis xyz="0 0 0"/>
   </joint>
-
   <!-- Frame icm20948_imu (dummy link + fixed joint) -->
   <link name="icm20948_imu">
     <origin xyz="0 0 0" rpy="0 -0 0"/>
@@ -229,7 +244,7 @@
     </inertial>
   </link>
   <joint name="icm20948_imu_frame" type="fixed">
-    <origin xyz="-0.0467018 1.32988e-05 0.412365" rpy="2.35619 -0 1.5708"/>
+    <origin xyz="-0.0257345 -6.04e-10 0.409965" rpy="2.35619 -0 1.5708"/>
     <parent link="base_footprint"/>
     <child link="icm20948_imu"/>
     <axis xyz="0 0 0"/>
@@ -348,7 +363,7 @@
     </inertial>
   </link>
   <joint name="side_camera_optical_frame" type="fixed">
-    <origin xyz="-0.0467438 -0.098278 -0.0699611" rpy="1.0472 -0 -2.44346"/>
+    <origin xyz="-0.0467438 -0.098278 -0.0699611" rpy="1.0472 0 -2.44346"/>
     <parent link="rotation_pitch"/>
     <child link="side_camera_optical"/>
     <axis xyz="0 0 0"/>
@@ -458,7 +473,7 @@
     </inertial>
     <!-- Part wrist_roll_pitch_so101_v2 -->
     <visual>
-      <origin xyz="0 -0.028 0.0181" rpy="-1.5708 -1.5708 0"/>
+      <origin xyz="-0 -0.028 0.0181" rpy="-1.5708 -1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/wrist_roll_pitch_so101_v2.stl"/>
       </geometry>
@@ -467,14 +482,14 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0 -0.028 0.0181" rpy="-1.5708 -1.5708 0"/>
+      <origin xyz="-0 -0.028 0.0181" rpy="-1.5708 -1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/wrist_roll_pitch_so101_v2.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_03a_no_horn_v1 -->
     <visual>
-      <origin xyz="0 -0.0424 0.0306" rpy="1.5708 1.5708 0"/>
+      <origin xyz="-0 -0.0424 0.0306" rpy="1.5708 1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_no_horn_v1.stl"/>
       </geometry>
@@ -483,7 +498,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0 -0.0424 0.0306" rpy="1.5708 1.5708 0"/>
+      <origin xyz="-0 -0.0424 0.0306" rpy="1.5708 1.5708 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sts3215_03a_no_horn_v1.stl"/>
       </geometry>
@@ -637,7 +652,7 @@
     <parent link="gripper"/>
     <child link="moving_jaw_so101_v1"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-0.15" upper="1.75"/>
+    <limit effort="10" velocity="10" lower="-0.0863006" upper="1.65903"/>
   </joint>
   <!-- Joint from wrist to gripper -->
   <joint name="arm_wrist_roll" type="revolute">
@@ -645,7 +660,7 @@
     <parent link="wrist"/>
     <child link="gripper"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-2.80" upper="2.85"/>
+    <limit effort="10" velocity="10" lower="-2.64577" upper="2.76475"/>
   </joint>
   <!-- Joint from lower_arm to wrist -->
   <joint name="arm_wrist_flex" type="revolute">
@@ -653,7 +668,7 @@
     <parent link="lower_arm"/>
     <child link="wrist"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.68" upper="1.68"/>
+    <limit effort="10" velocity="10" lower="-1.56161" upper="1.57999"/>
   </joint>
   <!-- Joint from upper_arm to lower_arm -->
   <joint name="arm_elbow_flex" type="revolute">
@@ -661,7 +676,7 @@
     <parent link="upper_arm"/>
     <child link="lower_arm"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.75" upper="1.68"/>
+    <limit effort="10" velocity="10" lower="-1.65765" upper="1.57121"/>
   </joint>
   <!-- Joint from rotation_pitch to upper_arm -->
   <joint name="arm_shoulder_lift" type="revolute">
@@ -669,15 +684,15 @@
     <parent link="rotation_pitch"/>
     <child link="upper_arm"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.85" upper="1.85"/>
+    <limit effort="10" velocity="10" lower="-1.74533" upper="1.74533"/>
   </joint>
   <!-- Joint from base_footprint to rotation_pitch -->
   <joint name="arm_shoulder_pan" type="revolute">
-    <origin xyz="0.0461807 1.27994e-05 0.1696" rpy="3.14159 0 3.13774"/>
+    <origin xyz="0.067148 -5e-07 0.1672" rpy="3.14159 0 3.13774"/>
     <parent link="base_footprint"/>
     <child link="rotation_pitch"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.85" upper="1.85"/>
+    <limit effort="10" velocity="10" lower="-1.74919" upper="1.74147"/>
   </joint>
   <!-- Link omniwheel_7 -->
   <link name="omniwheel_7">
@@ -704,7 +719,7 @@
     </collision>
     <!-- Part duy0cay_omniwheel_mount_for_st3215 -->
     <visual>
-      <origin xyz="0 0 0.0014" rpy="-3.14159 -0 -0"/>
+      <origin xyz="-0 0 0.0014" rpy="-3.14159 -0 -0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/duy0cay_omniwheel_mount_for_st3215.stl"/>
       </geometry>
@@ -713,7 +728,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0 0 0.0014" rpy="-3.14159 -0 -0"/>
+      <origin xyz="-0 0 0.0014" rpy="-3.14159 -0 -0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/duy0cay_omniwheel_mount_for_st3215.stl"/>
       </geometry>
@@ -721,7 +736,7 @@
   </link>
   <!-- Joint from base_footprint to omniwheel_7 -->
   <joint name="base_left_wheel" type="continuous">
-    <origin xyz="0.0336827 0.0946699 0.065" rpy="1.5708 0 -0.523599"/>
+    <origin xyz="0.05465 0.0946566 0.0626" rpy="1.5708 0 -0.523599"/>
     <parent link="base_footprint"/>
     <child link="omniwheel_7"/>
     <axis xyz="0 0 1"/>
@@ -736,7 +751,7 @@
     </inertial>
     <!-- Part duy0cay_omniwheel_mount_for_st3215_2 -->
     <visual>
-      <origin xyz="0 -0 0.0014" rpy="-3.14159 -0 0"/>
+      <origin xyz="0 0 0.0014" rpy="-3.14159 -0 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/duy0cay_omniwheel_mount_for_st3215.stl"/>
       </geometry>
@@ -745,7 +760,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0 -0 0.0014" rpy="-3.14159 -0 0"/>
+      <origin xyz="0 0 0.0014" rpy="-3.14159 -0 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/duy0cay_omniwheel_mount_for_st3215.stl"/>
       </geometry>
@@ -769,7 +784,7 @@
   </link>
   <!-- Joint from base_footprint to omniwheel_8 -->
   <joint name="base_back_wheel" type="continuous">
-    <origin xyz="-0.130267 1.32994e-05 0.065" rpy="-3.14159 -1.5708 0"/>
+    <origin xyz="-0.1093 -0 0.0626" rpy="-3.14159 -1.5708 0"/>
     <parent link="base_footprint"/>
     <child link="omniwheel_8"/>
     <axis xyz="0 0 1"/>
@@ -800,7 +815,7 @@
     </collision>
     <!-- Part sphere_drive_simplified_hq_3 -->
     <visual>
-      <origin xyz="0 0 -0.005" rpy="0 0 0"/>
+      <origin xyz="-0 0 -0.005" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sphere_drive_simplified_hq.stl"/>
       </geometry>
@@ -809,7 +824,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0 0 -0.005" rpy="0 0 0"/>
+      <origin xyz="-0 0 -0.005" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/sphere_drive_simplified_hq.stl"/>
       </geometry>
@@ -817,7 +832,7 @@
   </link>
   <!-- Joint from base_footprint to omniwheel_9 -->
   <joint name="base_right_wheel" type="continuous">
-    <origin xyz="0.0336827 -0.0946433 0.065" rpy="-1.5708 0.00357617 0.523599"/>
+    <origin xyz="0.05465 -0.0946566 0.0626" rpy="-1.5708 0.00357617 0.523599"/>
     <parent link="base_footprint"/>
     <child link="omniwheel_9"/>
     <axis xyz="0 0 1"/>

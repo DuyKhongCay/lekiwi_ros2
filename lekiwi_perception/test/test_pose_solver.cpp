@@ -203,6 +203,33 @@ TEST_F(MultiTagPnPFixture, TwoTagsSucceedWithHighAccuracy)
   }
 }
 
+TEST_F(MultiTagPnPFixture, TwoTagsWithExtrinsicGuessMaintainsContinuity)
+{
+  // Test collinear pair {0, 3} with initial guess close to ground truth
+  std::vector<std::vector<cv::Point2f>> pair_corners = {
+      all_marker_corners_[0], all_marker_corners_[3]};
+  std::vector<int> pair_ids = {
+      all_marker_ids_[0], all_marker_ids_[3]};
+
+  // Provide initial guess offset slightly from ground truth
+  cv::Mat rvec_est = rvec_gt_.clone();
+  cv::Mat tvec_est = tvec_gt_.clone();
+  tvec_est.at<double>(0) += 0.002;
+
+  int used_tags = 2;
+  const bool ok = PoseSolver::estimate_board_pose(
+      pair_corners, pair_ids, tag_configs_, camera_matrix_, dist_coeffs_,
+      rvec_est, tvec_est, used_tags, true);
+
+  ASSERT_TRUE(ok);
+  EXPECT_EQ(used_tags, 2);
+
+  // Verifies LM converged back from guess to sub-millimeter accuracy
+  EXPECT_NEAR(tvec_est.at<double>(0), tvec_gt_.at<double>(0), 1e-3);
+  EXPECT_NEAR(tvec_est.at<double>(1), tvec_gt_.at<double>(1), 1e-3);
+  EXPECT_NEAR(tvec_est.at<double>(2), tvec_gt_.at<double>(2), 1e-3);
+}
+
 TEST_F(MultiTagPnPFixture, FourTagsSucceedWithHighAccuracy)
 {
   cv::Mat rvec_est, tvec_est;

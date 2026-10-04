@@ -26,6 +26,7 @@ namespace lekiwi_motion
   void SystemReadinessEvaluator::reset_global_ekf_seed() noexcept
   {
     global_ekf_seeded_ = false;
+    stationary_latched_ = false;
   }
 
   SystemReadinessReport SystemReadinessEvaluator::evaluate(
@@ -50,11 +51,18 @@ namespace lekiwi_motion
                                                 config_.max_stop_angular_vel);
     }
 
+    // Nếu xe di chuyển hoặc local odom không tươi -> hủy chốt hội tụ khi đứng yên
+    if (!report.is_stationary)
+    {
+      stationary_latched_ = false;
+    }
+
     // 2. Global EKF Evaluation
     bool global_ekf_converged = false;
+    bool global_ekf_fresh = false;
     if (global_odom.valid)
     {
-      const bool global_ekf_fresh = policy::fresh(
+      global_ekf_fresh = policy::fresh(
           now_sec, global_odom.stamp_sec, config_.max_transform_age_sec);
       report.current_pos_variance = global_odom.pos_variance;
       global_ekf_converged =
@@ -65,8 +73,35 @@ namespace lekiwi_motion
       if (global_ekf_converged)
       {
         global_ekf_seeded_ = true;
+        if (report.is_stationary)
+        {
+          stationary_latched_ = true;
+        }
       }
     }
+
+    // Phân loại nguyên nhân trôi EKF:
+    if (global_ekf_converged)
+    {
+      report.drift_type = DriftType::NONE;
+    }
+    else if (!report.is_stationary)
+    {
+      // Robot đang chuyển động: trôi do kinematic / trượt bánh
+      report.drift_type = DriftType::MOVING;
+    }
+    else if (!global_ekf_seeded_)
+    {
+      // Đứng yên nhưng EKF chưa từng seed/hội tụ
+      report.drift_type = DriftType::NOT_SEEDED;
+    }
+    else
+    {
+      // Đứng yên nhưng mất dấu AprilTag hoặc variance tăng
+      report.drift_type = DriftType::STATIONARY_NO_TAG;
+    }
+
+    report.stationary_latched = stationary_latched_;
 
     // 3. Joints Completeness & Freshness
     bool joints_complete = false;
@@ -93,10 +128,13 @@ namespace lekiwi_motion
                        seeded_ok;
 
     // ================= TẦNG 2: GRASP READINESS =================
-    // Đòi hỏi: Xe đứng yên hoàn toàn, đầy đủ khớp tay, Global EKF đang hội tụ và chuỗi TF bàn cờ + tay kẹp hoàn hảo.
+    // Cho phép chốt EKF nếu robot đứng yên liên tục kể từ lần EKF hội tụ gần nhất tại vị trí dừng
+    const bool ekf_precision_ready = global_ekf_converged ||
+                                     (report.is_stationary && stationary_latched_);
+
     report.grasp_ready = report.is_stationary &&
                          joints_complete &&
-                         global_ekf_converged &&
+                         ekf_precision_ready &&
                          tf_chains.base_to_gripper_fresh &&
                          tf_chains.map_to_board_fresh;
 
@@ -112,9 +150,29 @@ namespace lekiwi_motion
       {
         ss << "Arm joints incomplete or stale";
       }
-      else if (!global_ekf_converged)
+      else if (!ekf_precision_ready)
       {
-        ss << "Global EKF unconverged or stale (var=" << report.current_pos_variance << ")";
+        if (report.drift_type == DriftType::NOT_SEEDED)
+        {
+          ss << "Global EKF unconverged: Not seeded";
+        }
+        else if (report.drift_type == DriftType::STATIONARY_NO_TAG)
+        {
+          if (!global_ekf_fresh)
+          {
+            ss << "Global EKF unconverged: Stationary without AprilTag (tag stale/missing, var="
+               << report.current_pos_variance << ")";
+          }
+          else
+          {
+            ss << "Global EKF unconverged: Stationary without AprilTag (high variance var="
+               << report.current_pos_variance << ")";
+          }
+        }
+        else
+        {
+          ss << "Global EKF unconverged or stale (var=" << report.current_pos_variance << ")";
+        }
       }
       else if (!tf_chains.map_to_board_fresh)
       {

@@ -9,9 +9,10 @@ chess_mission_orchestrator:
     board_frame: "chessboard_frame"
     map_frame: "map"
     feasibility_timeout_sec: 5.0
-    action_timeout_sec: 60.0
+    action_timeout_sec: 60.0    # Hardware execution timeout for Nav2 base motion & arm manipulation (seconds)
     readiness_timeout_sec: 1.0
-    skip_navigation: false
+    pre_grasp_settle_sec: 2.0   # Settle window waiting for EKF/TF convergence before grasping/observing (seconds)
+    navigation: true
 
     # --- Self-Healing & Recovery Settings ---
     recovery:
@@ -40,8 +41,12 @@ chess_mission_orchestrator:
 
     # --- Active Observation & Vantage Point Settings ---
     observation:
-      standoff_distance: 0.65
-      scan_timeout_sec: 6.0
+      standoff_distance: 0.56     # Target observation circle radius R in chessboard_frame (meters)
+      radius_tolerance: 0.04      # Radial tolerance band delta_R for standoff circle guard (meters)
+      scan_timeout_sec: 6.0       # Passive vision watchdog timeout at each vantage point waiting for game status (seconds)
+      angle_offsets:
+        relocalize: [-0.314, 0.0, 0.314]
+        post_move_verify: [-0.558, -0.314, 0.0, 0.314, 0.558]
 
     # --- 3D Status Visualization (RViz2) ---
     visualization:
@@ -52,15 +57,13 @@ chess_mission_orchestrator:
 
 system_readiness_node:
   ros__parameters:
-    max_pos_variance: 0.0012
+    max_pos_variance: 0.0025
     max_yaw_variance: 0.0030
     max_transform_age_sec: 0.30
     nav_odom_max_age_sec: 0.50
     max_stop_velocity: 0.03
     max_stop_angular_vel: 0.08
     check_frequency_hz: 10.0
-    autostart_nav2: true
-    nav2_lifecycle_service: "/lifecycle_manager_navigation/manage_nodes"
     local_odom_topic: "/odometry/local"
     global_odom_topic: "/odometry/global"
     joint_states_topic: "/joint_states"
@@ -84,7 +87,7 @@ workspace_checker:
     base_frame: base_footprint
     tip_frame: gripperframe
     board_size: [0.380, 0.380]
-    planning.edge_clearance: 0.147
+    planning.edge_clearance: 0.16
     planning.sample_step: 0.025
     planning.max_samples: 257
     planning.default_pitch: -1.57079632679

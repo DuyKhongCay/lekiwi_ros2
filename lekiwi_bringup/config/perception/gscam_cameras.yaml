@@ -6,6 +6,7 @@
     use_gst_timestamps: false
     image_encoding: "rgb8"
     add_border: false
+    calib_mode: false
 
 /cameras/stereo_left/gscam:
   ros__parameters:
@@ -15,6 +16,7 @@
     output_size: 640
     add_border: true
     active_contexts: [1, 2, 4, 5]
+    calib_mode: true
     gscam_config: >
       libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" 
       sensor-config="sensor/config,width=3280,height=2464,depth=10" sharpness=1.5 ! 
@@ -24,7 +26,7 @@
       videoflip method="rotate-180" !
       videoconvert  n-threads=2 ! 
       videobox top=-80 bottom=-80 !
-      video/x-raw,format=RGB,width=640,height=640
+      video/x-raw,format=RGB,width=640,height=640 
     # libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@80000/imx219@10" ! 
     # valve name=gate drop=true ! 
     # queue leaky=downstream max-size-buffers=1 ! 
@@ -41,7 +43,8 @@
     frame_id: "stereo_right_optical"
     camera_name: "stereo_right"
     output_size: 384
-    active_contexts: [3, 5]
+    active_contexts: [3]
+    # calib_mode: true
     gscam_config: >
       libcamerasrc camera-name="/base/axi/pcie@1000120000/rp1/i2c@88000/imx219@10" !
       valve name=gate drop=true !
@@ -61,7 +64,7 @@
     frame_id: "wrist_camera_optical"
     camera_name: "usb_wrist"
     output_size: 384
-    active_contexts: [3, 5]
+    active_contexts: [3]
     gscam_config: >
       v4l2src device=/dev/usb_wrist io-mode=mmap extra-controls="c,power_line_frequency=1" !
       valve name=gate drop=true !
@@ -83,7 +86,7 @@
     frame_id: "side_camera_optical"
     camera_name: "usb_side"
     output_size: 384
-    active_contexts: [3, 5]
+    active_contexts: [3]
     gscam_config: >
       v4l2src device=/dev/usb_side io-mode=mmap extra-controls="c,auto_exposure=1,exposure_time_absolute=200,gain=30,brightness=20,contrast=20,sharpness=10000" !
       valve name=gate drop=true !

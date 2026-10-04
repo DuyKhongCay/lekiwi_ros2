@@ -39,16 +39,14 @@ namespace lekiwi_motion
     declare("check_frequency_hz", 10.0, "Frequency of readiness evaluation loop (Hz)");
     declare("require_global_ekf_seed", true, "Require global EKF to converge at least once before nav ready");
 
-    declare("autostart_nav2", true, "Automatically send STARTUP to Nav2 lifecycle manager when nav_ready is true");
-    declare("nav2_lifecycle_service", std::string("/lifecycle_manager_navigation/manage_nodes"),
-            "Service name for Nav2 Lifecycle Manager");
-    declare("nav2_service_timeout_sec", 5.0, "Timeout for Nav2 lifecycle service calls (sec)");
-
     declare("map_frame", std::string("map"), "Global map frame");
     declare("odom_frame", std::string("odom"), "Odometry frame");
     declare("base_frame", std::string("base_footprint"), "Base footprint frame");
     declare("ee_frame", std::string("gripperframe"), "End-effector / gripper frame");
     declare("board_frame", std::string("chessboard_frame"), "Chessboard target frame");
+    declare("local_odom_topic", std::string("/odometry/local"), "Topic name for local filtered odometry");
+    declare("global_odom_topic", std::string("/odometry/global"), "Topic name for global fused odometry");
+    declare("joint_states_topic", std::string("/joint_states"), "Topic name for robot joint states");
     declare("required_arm_joints", std::vector<std::string>{"arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"},
             "List of required joints for arm grasp readiness");
 
@@ -65,23 +63,24 @@ namespace lekiwi_motion
     check_frequency_hz_ = get_parameter("check_frequency_hz").as_double();
     max_transform_age_sec_ = config.max_transform_age_sec;
     nav_odom_max_age_sec_ = config.nav_odom_max_age_sec;
-    autostart_nav2_ = get_parameter("autostart_nav2").as_bool();
-    nav2_lifecycle_service_ = get_parameter("nav2_lifecycle_service").as_string();
-    nav2_service_timeout_sec_ = get_parameter("nav2_service_timeout_sec").as_double();
 
     map_frame_ = get_parameter("map_frame").as_string();
     odom_frame_ = get_parameter("odom_frame").as_string();
     base_frame_ = get_parameter("base_frame").as_string();
     ee_frame_ = get_parameter("ee_frame").as_string();
     board_frame_ = get_parameter("board_frame").as_string();
+    local_odom_topic_ = get_parameter("local_odom_topic").as_string();
+    global_odom_topic_ = get_parameter("global_odom_topic").as_string();
+    joint_states_topic_ = get_parameter("joint_states_topic").as_string();
 
     evaluator_ = SystemReadinessEvaluator(config);
 
     // Validate numeric parameters
     if (check_frequency_hz_ <= 0.0 || check_frequency_hz_ > 1000.0 ||
         max_transform_age_sec_ <= 0.0 || nav_odom_max_age_sec_ <= 0.0 ||
-        nav2_service_timeout_sec_ <= 0.0 || map_frame_.empty() || odom_frame_.empty() ||
-        base_frame_.empty())
+        map_frame_.empty() || odom_frame_.empty() ||
+        base_frame_.empty() || local_odom_topic_.empty() || global_odom_topic_.empty() ||
+        joint_states_topic_.empty())
     {
       throw std::invalid_argument("Invalid parameter values configured in SystemReadinessNode");
     }
@@ -93,17 +92,17 @@ namespace lekiwi_motion
     // Subscriptions (Sensor QoS: depth 10, best effort)
     auto sensor_qos = rclcpp::QoS(10).best_effort();
     local_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-        "/odometry/filtered", sensor_qos,
+        local_odom_topic_, sensor_qos,
         [this](nav_msgs::msg::Odometry::ConstSharedPtr msg)
         { on_local_odom(msg); });
 
     global_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-        "/odometry/global", sensor_qos,
+        global_odom_topic_, sensor_qos,
         [this](nav_msgs::msg::Odometry::ConstSharedPtr msg)
         { on_global_odom(msg); });
 
     joint_sub_ = create_subscription<sensor_msgs::msg::JointState>(
-        "/joint_states", sensor_qos,
+        joint_states_topic_, sensor_qos,
         [this](sensor_msgs::msg::JointState::ConstSharedPtr msg)
         { on_joint_states(msg); });
 
@@ -131,12 +130,6 @@ namespace lekiwi_motion
                std::shared_ptr<std_srvs::srv::Trigger::Response> res)
         { handle_grasp_query(req, res); });
 
-    // Nav2 Autostart Client
-    if (autostart_nav2_)
-    {
-      nav2_client_ = create_client<nav2_msgs::srv::ManageLifecycleNodes>(nav2_lifecycle_service_);
-    }
-
     // Diagnostics
     diagnostic_updater_.setHardwareID("lekiwi_system_readiness");
     diagnostic_updater_.add("Readiness Status", this, &SystemReadinessNode::produce_diagnostics);
@@ -148,9 +141,8 @@ namespace lekiwi_motion
         std::bind(&SystemReadinessNode::evaluate_readiness, this));
 
     RCLCPP_INFO(get_logger(),
-                "[System Readiness] Node started (%.1f Hz) — Nav Autostart=%s (service: %s)",
-                check_frequency_hz_, autostart_nav2_ ? "true" : "false",
-                nav2_lifecycle_service_.c_str());
+                "[System Readiness] Node started (%.1f Hz) — Sensor & Hardware Inspector ready",
+                check_frequency_hz_);
   }
 
   void SystemReadinessNode::on_local_odom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
@@ -204,62 +196,6 @@ namespace lekiwi_motion
     }
   }
 
-  void SystemReadinessNode::dispatch_nav2_startup()
-  {
-    if (!autostart_nav2_ || nav2_started_ || nav2_dispatch_in_progress_)
-    {
-      return;
-    }
-    if (!nav2_client_)
-    {
-      return;
-    }
-    if (!nav2_client_->service_is_ready())
-    {
-      RCLCPP_INFO_THROTTLE(
-          get_logger(), *get_clock(), 3000,
-          "[System Readiness] Waiting for Nav2 lifecycle service '%s' to become available...",
-          nav2_lifecycle_service_.c_str());
-      return;
-    }
-
-    auto req = std::make_shared<nav2_msgs::srv::ManageLifecycleNodes::Request>();
-    req->command = nav2_msgs::srv::ManageLifecycleNodes::Request::STARTUP;
-
-    nav2_dispatch_in_progress_ = true;
-    nav2_dispatch_time_ = get_clock()->now();
-
-    RCLCPP_INFO(get_logger(),
-                "[System Readiness] Gated conditions met! Calling Nav2 STARTUP (command=0)...");
-
-    nav2_client_->async_send_request(
-        req,
-        [this](rclcpp::Client<nav2_msgs::srv::ManageLifecycleNodes>::SharedFuture future)
-        {
-          nav2_dispatch_in_progress_ = false;
-          try
-          {
-            auto resp = future.get();
-            if (resp->success)
-            {
-              nav2_started_ = true;
-              RCLCPP_INFO(get_logger(),
-                          "*** [System Readiness] Nav2 Lifecycle Stack successfully activated (ACTIVE)! ***");
-            }
-            else
-            {
-              RCLCPP_WARN(get_logger(),
-                          "[System Readiness] Nav2 Lifecycle STARTUP returned false; will retry on next tick.");
-            }
-          }
-          catch (const std::exception &e)
-          {
-            RCLCPP_ERROR(get_logger(),
-                         "[System Readiness] Nav2 Lifecycle service call exception: %s", e.what());
-          }
-        });
-  }
-
   void SystemReadinessNode::evaluate_readiness()
   {
     const double now_sec = get_clock()->now().seconds();
@@ -283,14 +219,10 @@ namespace lekiwi_motion
     last_report_ = evaluator_.evaluate(
         now_sec, local_odom_snapshot_, global_odom_snapshot_, joints_snapshot_, tf_chains);
 
-    // 3. Publish Latch Updates
+    // 3. Publish Heartbeat & Log Transitions
     if (last_report_.nav_ready != last_published_nav_ready_)
     {
       last_published_nav_ready_ = last_report_.nav_ready;
-      std_msgs::msg::Bool msg;
-      msg.data = last_published_nav_ready_;
-      nav_ready_pub_->publish(msg);
-
       RCLCPP_INFO(get_logger(),
                   "[System Readiness] /system/nav_ready transition: %s",
                   last_published_nav_ready_ ? "TRUE" : "FALSE");
@@ -299,36 +231,22 @@ namespace lekiwi_motion
     if (last_report_.grasp_ready != last_published_grasp_ready_)
     {
       last_published_grasp_ready_ = last_report_.grasp_ready;
-      std_msgs::msg::Bool msg;
-      msg.data = last_published_grasp_ready_;
-      grasp_ready_pub_->publish(msg);
-
       RCLCPP_INFO(get_logger(),
                   "[System Readiness] /system/grasp_ready transition: %s (Status: %s)",
                   last_published_grasp_ready_ ? "TRUE" : "FALSE",
                   last_report_.grasp_blocker_reason.c_str());
     }
 
-    // 4. Handle Service Timeout if dispatched
-    if (nav2_dispatch_in_progress_)
-    {
-      const double elapsed = (get_clock()->now() - nav2_dispatch_time_).seconds();
-      if (elapsed > nav2_service_timeout_sec_)
-      {
-        RCLCPP_WARN(get_logger(),
-                    "[System Readiness] Nav2 STARTUP call timed out after %.1f s; resetting to retry.",
-                    elapsed);
-        nav2_dispatch_in_progress_ = false;
-      }
-    }
+    // Continuous Heartbeat at check_frequency_hz (10Hz) to satisfy watchdog leases
+    std_msgs::msg::Bool nav_msg;
+    nav_msg.data = last_report_.nav_ready;
+    nav_ready_pub_->publish(nav_msg);
 
-    // 5. Autostart Nav2 when nav_ready is reached
-    if (last_report_.nav_ready && !nav2_started_)
-    {
-      dispatch_nav2_startup();
-    }
+    std_msgs::msg::Bool grasp_msg;
+    grasp_msg.data = last_report_.grasp_ready;
+    grasp_ready_pub_->publish(grasp_msg);
 
-    // 6. Diagnostics
+    // 4. Diagnostics
     diagnostic_updater_.force_update();
   }
 
@@ -353,7 +271,22 @@ namespace lekiwi_motion
     stat.add("Robot Stationary", last_report_.is_stationary ? "true" : "false");
     stat.add("Speed (m/s)", last_report_.current_speed);
     stat.add("Pos Variance (m^2)", last_report_.current_pos_variance);
-    stat.add("Nav2 Autostart Active", nav2_started_.load() ? "true" : "false");
+
+    const char *drift_str = "None";
+    if (last_report_.drift_type == DriftType::MOVING)
+    {
+      drift_str = "Moving";
+    }
+    else if (last_report_.drift_type == DriftType::STATIONARY_NO_TAG)
+    {
+      drift_str = "Stationary without AprilTag";
+    }
+    else if (last_report_.drift_type == DriftType::NOT_SEEDED)
+    {
+      drift_str = "Not Seeded";
+    }
+    stat.add("Drift Type", drift_str);
+    stat.add("Stationary Latched", last_report_.stationary_latched ? "true" : "false");
   }
 
   void SystemReadinessNode::handle_nav_query(

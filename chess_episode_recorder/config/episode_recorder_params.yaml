@@ -1,0 +1,42 @@
+/**:
+  ros__parameters:
+    # Storage settings
+    root_dir: "/media/usb_storage/lekiwi_episodes"
+    experiment_name: "chess_teleop_v1"
+    task: "chess_pick_and_place"
+    storage_id: "mcap"
+
+    # Gamepad controls (Flydigi / Xbox controller on /joy)
+    gamepad:
+      enable: true
+      joy_topic: "/joy"
+      debounce_duration_sec: 0.35
+      # Mapping mode: "axes" (Linux xpad default) or "buttons"
+      mode: "axes"
+      axis_dpad_x: 6      # Left: +1.0, Right: -1.0
+      axis_dpad_y: 7      # Up: +1.0, Down: -1.0
+      # Fallback button mappings:
+      button_up: 13
+      button_down: 14
+      button_left: 11
+      button_right: 12
+
+    # Topics to record into each episode MCAP (LeRobot Dataset 3.0 compatible)
+    topics:
+      # 1. Visual observations (Compressed JPEG from gscam)
+      - "/cameras/usb_wrist/image_raw/compressed"
+      - "/cameras/usb_side/image_raw/compressed"
+      - "/cameras/stereo_right/image_raw/compressed"
+
+      # 2. Joint states & commands (Robot State & Actions)
+      - "/joint_states"
+      - "/arm_trajectory_controller/joint_trajectory"
+
+      # 3. Spatial TF transforms (for offline Cartesian/board reference)
+      - "/tf"
+      - "/tf_static"
+
+      # 4. Perception & Chessboard context
+      - "/chess/detections_2d"
+      - "/chess/raw_fen"
+      - "/chess/grid_points"

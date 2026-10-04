@@ -61,6 +61,8 @@ namespace lekiwi_perception
     declare_parameter<double>("covariance.max_pos_var", 0.01);
     declare_parameter<double>("covariance.max_rot_var", 0.04);
     declare_parameter<bool>("covariance.scale_by_tag_count", true);
+    declare_parameter<double>("max_extrinsic_guess_age_sec", 2.0);
+    declare_parameter<double>("two_tag_max_jump_m", 0.015);
 
     autostart_ = get_parameter("autostart").as_bool();
     if (autostart_)
@@ -122,6 +124,7 @@ namespace lekiwi_perception
       }
 
       const std::vector<uint8_t> allowed_contexts = {
+          lekiwi_interfaces::msg::PerceptionContext::IDLE_STANDBY,
           lekiwi_interfaces::msg::PerceptionContext::TF_TRACKING_AND_NAV,
           lekiwi_interfaces::msg::PerceptionContext::BOARD_STATE_SCAN,
           lekiwi_interfaces::msg::PerceptionContext::POST_MOVE_VERIFY,
@@ -254,6 +257,10 @@ namespace lekiwi_perception
     has_camera_info_ = false;
     last_used_tags_.store(0);
     odom_received_.store(false);
+    has_valid_pose_ = false;
+    last_valid_rvec_.release();
+    last_valid_tvec_.release();
+    last_valid_pose_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   }
 
   void ChessboardPoseEstimator::load_parameters()
@@ -283,6 +290,8 @@ namespace lekiwi_perception
     max_pos_var_ = get_parameter("covariance.max_pos_var").as_double();
     max_rot_var_ = get_parameter("covariance.max_rot_var").as_double();
     scale_by_tag_count_ = get_parameter("covariance.scale_by_tag_count").as_bool();
+    max_extrinsic_guess_age_sec_ = get_parameter("max_extrinsic_guess_age_sec").as_double();
+    two_tag_max_jump_m_ = get_parameter("two_tag_max_jump_m").as_double();
 
     const auto tag_ids = get_parameter("tags.ids").as_integer_array();
     const auto tag_names = get_parameter("tags.names").as_string_array();
@@ -803,15 +812,58 @@ namespace lekiwi_perception
 
     cv::Mat rvec, tvec;
     int used_tags = min_tags_cnt_;
+    bool use_guess = false;
+
+    if (has_valid_pose_)
+    {
+      const rclcpp::Time current_stamp(header.stamp);
+      const double pose_age = std::abs((current_stamp - last_valid_pose_stamp_).seconds());
+      if (pose_age <= max_extrinsic_guess_age_sec_)
+      {
+        rvec = last_valid_rvec_.clone();
+        tvec = last_valid_tvec_.clone();
+        use_guess = true;
+      }
+      else
+      {
+        has_valid_pose_ = false;
+      }
+    }
+
     const bool ok = PoseSolver::estimate_board_pose(
         marker_corners, marker_ids, tag_configs_, camera_matrix_, dist_coeffs_,
-        rvec, tvec, used_tags);
+        rvec, tvec, used_tags, use_guess);
 
     last_used_tags_.store(used_tags);
 
     if (!ok)
     {
       return;
+    }
+
+    // Pose tracking and 2-tag jump gating
+    if (used_tags >= 3)
+    {
+      last_valid_rvec_ = rvec.clone();
+      last_valid_tvec_ = tvec.clone();
+      has_valid_pose_ = true;
+      last_valid_pose_stamp_ = header.stamp;
+    }
+    else if (used_tags == 2)
+    {
+      if (has_valid_pose_)
+      {
+        const double jump_dist = cv::norm(tvec - last_valid_tvec_);
+        if (jump_dist > two_tag_max_jump_m_)
+        {
+          // Clamping step to prevent 2-tag collinear baseline collapse jump
+          tvec = last_valid_tvec_ + (tvec - last_valid_tvec_) * (two_tag_max_jump_m_ / jump_dist);
+        }
+      }
+      last_valid_rvec_ = rvec.clone();
+      last_valid_tvec_ = tvec.clone();
+      has_valid_pose_ = true;
+      last_valid_pose_stamp_ = header.stamp;
     }
 
     cv::Mat R_cam_board;
