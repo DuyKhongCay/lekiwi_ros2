@@ -124,6 +124,7 @@ namespace lekiwi_perception
       }
 
       const std::vector<uint8_t> allowed_contexts = {
+          lekiwi_interfaces::msg::PerceptionContext::IDLE_STANDBY,
           lekiwi_interfaces::msg::PerceptionContext::TF_TRACKING_AND_NAV,
           lekiwi_interfaces::msg::PerceptionContext::BOARD_STATE_SCAN,
           lekiwi_interfaces::msg::PerceptionContext::POST_MOVE_VERIFY,
