@@ -271,6 +271,22 @@ namespace lekiwi_motion
     stat.add("Robot Stationary", last_report_.is_stationary ? "true" : "false");
     stat.add("Speed (m/s)", last_report_.current_speed);
     stat.add("Pos Variance (m^2)", last_report_.current_pos_variance);
+
+    const char *drift_str = "None";
+    if (last_report_.drift_type == DriftType::MOVING)
+    {
+      drift_str = "Moving";
+    }
+    else if (last_report_.drift_type == DriftType::STATIONARY_NO_TAG)
+    {
+      drift_str = "Stationary without AprilTag";
+    }
+    else if (last_report_.drift_type == DriftType::NOT_SEEDED)
+    {
+      drift_str = "Not Seeded";
+    }
+    stat.add("Drift Type", drift_str);
+    stat.add("Stationary Latched", last_report_.stationary_latched ? "true" : "false");
   }
 
   void SystemReadinessNode::handle_nav_query(
