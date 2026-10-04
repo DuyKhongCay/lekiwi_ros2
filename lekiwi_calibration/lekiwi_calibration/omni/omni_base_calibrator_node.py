@@ -12,7 +12,9 @@ from rcl_interfaces.srv import GetParameters
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.time import Time
 from sensor_msgs.msg import Imu
+import tf2_ros
 
 from lekiwi_calibration.omni.kinematics_calib import (
     compute_robot_radius_calib,
@@ -40,6 +42,10 @@ class OmniBaseCalibratorNode(Node):
         self.declare_parameter("tag_pose_topic", "/chessboard/robot_pose")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel_calib")
         self.declare_parameter("actual_measured_dist", 0.0)
+        self.declare_parameter("map_frame", "map")
+        self.declare_parameter("odom_frame", "odom")
+        self.declare_parameter("base_frame", "base_footprint")
+        self.declare_parameter("require_tf_tree", True)
 
         self._calib_mode = str(self.get_parameter("calib_mode").value)
         self._test_dist = float(self.get_parameter("test_dist").value)
@@ -50,8 +56,17 @@ class OmniBaseCalibratorNode(Node):
         self._actual_measured_dist = float(
             self.get_parameter("actual_measured_dist").value
         )
+        self._map_frame = str(self.get_parameter("map_frame").value)
+        self._odom_frame = str(self.get_parameter("odom_frame").value)
+        self._base_frame = str(self.get_parameter("base_frame").value)
+        self._require_tf_tree = bool(self.get_parameter("require_tf_tree").value)
+
         self._curr_wheel_radius = 0.0
         self._curr_robot_radius = 0.0
+
+        # Initialize TF2 buffer and listener
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         imu_topic = str(self.get_parameter("imu_topic").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
@@ -98,12 +113,47 @@ class OmniBaseCalibratorNode(Node):
         with self._lock:
             return self._imu_total_yaw
 
+    def check_tf_tree(self) -> Tuple[bool, str]:
+        """Validates if required TF transforms are available in buffer."""
+        # 1. Base odometry transform check: odom -> base_frame
+        try:
+            if not self.tf_buffer.can_transform(
+                self._odom_frame, self._base_frame, Time()
+            ):
+                return (
+                    False,
+                    f"Missing transform: {self._odom_frame} -> {self._base_frame}",
+                )
+        except Exception as e:
+            return (
+                False,
+                f"TF error checking {self._odom_frame} -> {self._base_frame}: {e}",
+            )
+
+        # 2. Global localization transform check: map -> odom (when required)
+        if self._require_tf_tree:
+            try:
+                if not self.tf_buffer.can_transform(
+                    self._map_frame, self._odom_frame, Time()
+                ):
+                    return (
+                        False,
+                        f"Missing transform: {self._map_frame} -> {self._odom_frame} (Ensure Global EKF is enabled)",
+                    )
+            except Exception as e:
+                return (
+                    False,
+                    f"TF error checking {self._map_frame} -> {self._odom_frame}: {e}",
+                )
+
+        return True, "TF tree complete"
+
     def is_ready(self) -> bool:
         """Checks if initial odometry and IMU readings have been received."""
         with self._lock:
             return self._odom_init and self._imu_init
 
-    def fetch_controller_parameters(self, timeout_sec: float = 5.0) -> bool:
+    def fetch_controller_parameters(self, timeout_sec: float = 45.0) -> bool:
         """Fetch wheel_radius and robot_radius live from running omni_base_controller node."""
         service_name = f"/{self._controller_name}/get_parameters"
         self.get_logger().info(f"Connecting to parameter service: {service_name}...")
@@ -120,7 +170,14 @@ class OmniBaseCalibratorNode(Node):
         req.names = ["wheel_radius", "robot_radius"]
 
         future = client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_sec)
+        event = threading.Event()
+        future.add_done_callback(lambda _: event.set())
+
+        if not event.wait(timeout=timeout_sec):
+            self.get_logger().error(
+                f"[FAIL-SAFE] Service call to '{service_name}' timed out after {timeout_sec}s! Aborting!"
+            )
+            return False
 
         if future.result() is None:
             self.get_logger().error(
@@ -459,25 +516,49 @@ def main(args: Optional[List[str]] = None):
     rclpy.init(args=args)
     node = OmniBaseCalibratorNode()
 
-    # Fail-safe parameter retrieval directly from running omni_base_controller
-    if not node.fetch_controller_parameters(timeout_sec=5.0):
-        node.get_logger().error(
-            "Calibration routine aborted immediately due to parameter retrieval failure."
-        )
-        node.destroy_node()
-        rclpy.shutdown()
-        return
-
-    # Start multi-threaded executor in background daemon thread for realtime callback processing
+    # Start multi-threaded executor in background daemon thread for realtime callback and service processing
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     executor_thread = threading.Thread(target=executor.spin, daemon=True)
     executor_thread.start()
 
+    # Fail-safe parameter retrieval directly from running omni_base_controller
+    if not node.fetch_controller_parameters():
+        node.get_logger().error(
+            "Calibration routine aborted immediately due to parameter retrieval failure."
+        )
+        executor.shutdown()
+        node.destroy_node()
+        rclpy.shutdown()
+        executor_thread.join(timeout=1.0)
+        return
+
     # Wait for sensor readiness
     node.get_logger().info("Waiting for odometry and IMU messages...")
     while rclpy.ok() and not node.is_ready():
         time.sleep(0.05)
+
+    # Wait for TF tree readiness
+    node.get_logger().info(
+        "Waiting for complete TF Tree (map -> odom -> base_footprint)..."
+    )
+    if node._require_tf_tree:
+        node.get_logger().info(
+            "Tip: Press Gamepad Button Y to enable Global EKF (/ekf_filter_node_map/enable) if map->odom is pending."
+        )
+
+    last_tf_log_time = time.time()
+    while rclpy.ok():
+        tf_ok, tf_reason = node.check_tf_tree()
+        if tf_ok:
+            node.get_logger().info(
+                "TF Tree is fully resolved and validated. Proceeding to calibration."
+            )
+            break
+        if time.time() - last_tf_log_time >= 3.0:
+            node.get_logger().warn(f"Waiting for TF Tree: {tf_reason}")
+            last_tf_log_time = time.time()
+        time.sleep(0.1)
 
     try:
         if node._calib_mode == "spin":

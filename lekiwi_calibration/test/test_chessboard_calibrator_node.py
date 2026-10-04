@@ -49,6 +49,12 @@ if "rclpy" not in sys.modules:
             def create_subscription(self, *args, **kwargs):
                 return MagicMock()
 
+            def create_publisher(self, *args, **kwargs):
+                return MagicMock()
+
+            def create_client(self, *args, **kwargs):
+                return MagicMock()
+
             def create_timer(self, *args, **kwargs):
                 return MagicMock()
 
