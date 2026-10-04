@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 
 """
-Unit Tests for NodeHealthMonitor and HealthMonitorConfig.
+Unit Tests for HealthSupervisor and HealthSupervisorConfig.
 Verifies lease TTL expiration, Open Call thread safety, auto-recovery policies, and diagnostics.
 """
 
@@ -14,10 +14,10 @@ from unittest.mock import MagicMock
 
 import pytest
 from diagnostic_msgs.msg import DiagnosticStatus
-from lekiwi_orchestrator.fsm import MissionState
-from lekiwi_orchestrator.health_monitor import (
-    HealthMonitorConfig,
-    NodeHealthMonitor,
+from lekiwi_orchestrator.fsm import MacroMissionState
+from lekiwi_orchestrator.health_supervisor import (
+    HealthSupervisor,
+    HealthSupervisorConfig,
     OrchestratorStateSnapshot,
 )
 from rclpy.time import Time
@@ -28,7 +28,7 @@ from std_srvs.srv import Trigger
 @pytest.fixture
 def dummy_snapshot() -> OrchestratorStateSnapshot:
     return OrchestratorStateSnapshot(
-        mission_state=MissionState.WAITING_FOR_PLAYER_MOVE,
+        mission_state=MacroMissionState.WAITING_FOR_PLAYER_MOVE,
         perception_context=0,
         last_goal_move="e2e4",
         execution_stage=None,
@@ -46,21 +46,10 @@ def mock_node():
     return node
 
 
-def test_health_monitor_config_defaults():
-    cfg = HealthMonitorConfig()
-    assert cfg.nav_ready_topic == "/system/nav_ready"
-    assert cfg.grasp_ready_topic == "/system/grasp_ready"
-    assert cfg.diagnostics_topic == "/diagnostics"
-    assert cfg.readiness_timeout_sec == 1.0
-    assert cfg.auto_recovery_enabled is True
-    assert cfg.max_recovery_attempts == 3
-    assert cfg.robot_color == "w"
-
-
 def test_initial_state_not_ready(mock_node, dummy_snapshot):
-    monitor = NodeHealthMonitor(
+    monitor = HealthSupervisor(
         node=mock_node,
-        config=HealthMonitorConfig(),
+        config=HealthSupervisorConfig(),
         state_provider=lambda: dummy_snapshot,
     )
     try:
@@ -75,9 +64,9 @@ def test_initial_state_not_ready(mock_node, dummy_snapshot):
 def test_nav_ready_lease_and_expiration(mock_node, dummy_snapshot):
     transition_cb = MagicMock()
     critical_loss_cb = MagicMock()
-    monitor = NodeHealthMonitor(
+    monitor = HealthSupervisor(
         node=mock_node,
-        config=HealthMonitorConfig(readiness_timeout_sec=0.1),
+        config=HealthSupervisorConfig(readiness_timeout_sec=0.1),
         state_provider=lambda: dummy_snapshot,
         on_nav_ready_transition_cb=transition_cb,
         on_critical_tf_loss_cb=critical_loss_cb,
@@ -95,7 +84,7 @@ def test_nav_ready_lease_and_expiration(mock_node, dummy_snapshot):
 
         # 3. Expire lease
         critical_snap = OrchestratorStateSnapshot(
-            mission_state=MissionState.CHECKING_REACHABILITY,
+            mission_state=MacroMissionState.CHECKING_REACHABILITY,
             perception_context=0,
         )
         monitor.expire_readiness(current_state=critical_snap.mission_state)
@@ -106,9 +95,9 @@ def test_nav_ready_lease_and_expiration(mock_node, dummy_snapshot):
 
 
 def test_grasp_ready_lease_and_expiration(mock_node, dummy_snapshot):
-    monitor = NodeHealthMonitor(
+    monitor = HealthSupervisor(
         node=mock_node,
-        config=HealthMonitorConfig(readiness_timeout_sec=0.1),
+        config=HealthSupervisorConfig(readiness_timeout_sec=0.1),
         state_provider=lambda: dummy_snapshot,
     )
     try:
@@ -124,43 +113,43 @@ def test_grasp_ready_lease_and_expiration(mock_node, dummy_snapshot):
 
 
 def test_open_call_thread_safety(mock_node):
-    """Verify external callbacks are executed outside the monitor's state lock."""
+    """Verify external callbacks are executed outside the supervisor's state lock."""
     lock = threading.RLock()
     was_locked_during_callback = None
 
     def sample_transition_cb(is_ready: bool):
         nonlocal was_locked_during_callback
-        # Try to acquire lock non-blockingly on another thread, or check lock state
-        # In Python RLock, _is_owned() tells if current thread owns it!
         was_locked_during_callback = lock._is_owned()
 
     snapshot = OrchestratorStateSnapshot(
-        mission_state=MissionState.WAITING_FOR_TF_READY,
+        mission_state=MacroMissionState.WAITING_FOR_TF_READY,
         perception_context=0,
     )
 
-    monitor = NodeHealthMonitor(
+    monitor = HealthSupervisor(
         node=mock_node,
-        config=HealthMonitorConfig(),
+        config=HealthSupervisorConfig(),
         state_lock=lock,
         state_provider=lambda: snapshot,
         on_nav_ready_transition_cb=sample_transition_cb,
     )
     try:
         monitor.on_nav_ready_msg(Bool(data=True))
-        assert was_locked_during_callback is False, "Callback was called while holding lock!"
+        assert (
+            was_locked_during_callback is False
+        ), "Callback was called while holding lock!"
     finally:
         monitor.destroy()
 
 
 def test_auto_recovery_lifecycle_and_max_attempts(mock_node, dummy_snapshot):
     recovery_cb = MagicMock()
-    cfg = HealthMonitorConfig(
+    cfg = HealthSupervisorConfig(
         auto_recovery_enabled=True,
         auto_recovery_timeout_sec=0.01,
         max_recovery_attempts=2,
     )
-    monitor = NodeHealthMonitor(
+    monitor = HealthSupervisor(
         node=mock_node,
         config=cfg,
         state_provider=lambda: dummy_snapshot,
@@ -192,9 +181,9 @@ def test_auto_recovery_lifecycle_and_max_attempts(mock_node, dummy_snapshot):
 
 def test_manual_recover_service_handler(mock_node, dummy_snapshot):
     reset_cb = MagicMock(return_value=True)
-    monitor = NodeHealthMonitor(
+    monitor = HealthSupervisor(
         node=mock_node,
-        config=HealthMonitorConfig(),
+        config=HealthSupervisorConfig(),
         state_provider=lambda: dummy_snapshot,
         on_reset_recovery_system_cb=reset_cb,
     )
@@ -215,8 +204,8 @@ def test_diagnostics_and_visualizer_emission(mock_node, dummy_snapshot):
     marker_pub = MagicMock()
     mock_node.create_publisher.side_effect = [diag_pub, marker_pub]
 
-    cfg = HealthMonitorConfig(robot_color="b", enable_visualizer=True)
-    monitor = NodeHealthMonitor(
+    cfg = HealthSupervisorConfig(robot_color="b", enable_visualizer=True)
+    monitor = HealthSupervisor(
         node=mock_node,
         config=cfg,
         state_provider=lambda: dummy_snapshot,
@@ -239,5 +228,28 @@ def test_diagnostics_and_visualizer_emission(mock_node, dummy_snapshot):
         assert "tf_ready" not in keys
         assert keys["robot_color"] == "b"
         assert keys["last_goal_move"] == "e2e4"
+
+        # Diagnostic ERROR state
+        err_snapshot = OrchestratorStateSnapshot(
+            mission_state=MacroMissionState.ERROR_FALLBACK,
+            perception_context=0,
+            last_goal_move="e2e4",
+            execution_stage="MOVE",
+            motion_state=0,
+        )
+        monitor.publish_diagnostics(err_snapshot)
+        assert diag_pub.publish.call_args[0][0].status[0].level == DiagnosticStatus.ERROR
+
+        # Diagnostic WARN state (unready navigation)
+        monitor.nav_ready = False
+        warn_snapshot = OrchestratorStateSnapshot(
+            mission_state=MacroMissionState.WAITING_FOR_TF_READY,
+            perception_context=0,
+            last_goal_move="e2e4",
+            execution_stage="MOVE",
+            motion_state=0,
+        )
+        monitor.publish_diagnostics(warn_snapshot)
+        assert diag_pub.publish.call_args[0][0].status[0].level == DiagnosticStatus.WARN
     finally:
         monitor.destroy()

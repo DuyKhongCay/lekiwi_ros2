@@ -2,26 +2,19 @@
 # Licensed under the Apache License, Version 2.0.
 
 """
-Motion & Action Dispatcher Gateway and Active Observation Navigation Domain.
+Motion execution clients and feasibility dispatchers.
 
-Follows Dependency Inversion Principle (DIP):
-1. ActionDispatcherInterface abstracts low-level ROS 2 actions (Nav2, Manipulation)
-   and feasibility service checks.
-2. RosActionDispatcher provides production hardware ROS 2 communication with watchdogs.
-3. SimulatedActionDispatcher enables fast in-memory CI/CD testing.
-4. ActiveObservationNavigator manages base repositioning to candidate vantage points
-2. RosActionDispatcher provides production ROS 2 communication with watchdogs,
-   with optional mock_nav2 bypass for tabletop setups where base navigation is mocked
-   and manipulation is handled directly by lekiwi_manipulation.
-3. ActiveObservationNavigator manages base repositioning to candidate vantage points
-   when perception is occluded or legal FEN detection times out.
+Provides:
+- Abstract gateway interfaces (IFeasibilityChecker, INavigationDispatcher, IManipulationDispatcher, ActionDispatcherInterface)
+- Production ROS 2 ActionDispatcher (RosActionDispatcher) with integrated action watchdogs
+- Simulated in-memory dispatcher for headless tests (SimulatedActionDispatcher)
 """
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from action_msgs.msg import GoalStatus
@@ -32,32 +25,25 @@ from rclpy.callback_groups import CallbackGroup
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 
-from lekiwi_orchestrator.perception_manager import generate_candidate_observation_poses
-
-if TYPE_CHECKING:
-    from lekiwi_orchestrator.move_pipeline import ChessMoveGoal
+from lekiwi_orchestrator.mission_types import ActionResult, ChessMoveGoal
 
 try:
     from nav2_msgs.action import NavigateToPose
 except ImportError:
-    NavigateToPose = None
+    NavigateToPose = None  # type: ignore[assignment, misc]
 
 try:
     from lekiwi_interfaces.action import ExecuteChessMove
 except ImportError:
-    ExecuteChessMove = None
+    ExecuteChessMove = None  # type: ignore[assignment, misc]
 
 
-@dataclass(frozen=True)
-class ActionResult:
-    """Normalized outcome of an action execution step."""
-
-    success: bool
-    message: str = ""
-    execution_time_sec: float = 0.0
+# ==============================================================================
+# Abstract Motion Interfaces (ISP / DIP)
+# ==============================================================================
 
 
-class IFeasibilityChecker(ABC):
+class FeasibilityClient(ABC):
     """Interface for querying workspace reachability and motion feasibility."""
 
     @abstractmethod
@@ -71,7 +57,7 @@ class IFeasibilityChecker(ABC):
         """Query workspace feasibility checker service with integrated watchdog."""
 
 
-class INavigationDispatcher(ABC):
+class NavigationClient(ABC):
     """Interface for dispatching mobile base navigation goals."""
 
     @abstractmethod
@@ -88,7 +74,7 @@ class INavigationDispatcher(ABC):
         """Cancel active navigation goal."""
 
 
-class IManipulationDispatcher(ABC):
+class ManipulationClient(ABC):
     """Interface for dispatching robot arm manipulation goals."""
 
     @abstractmethod
@@ -106,8 +92,8 @@ class IManipulationDispatcher(ABC):
         """Cancel active manipulation goal."""
 
 
-class ActionDispatcherInterface(
-    IFeasibilityChecker, INavigationDispatcher, IManipulationDispatcher, ABC
+class MotionClient(
+    FeasibilityClient, NavigationClient, ManipulationClient, ABC
 ):
     """Composite interface defining full motion execution and feasibility capabilities."""
 
@@ -116,10 +102,16 @@ class ActionDispatcherInterface(
         """Clean up action clients, service clients, and timers."""
 
 
-class RosActionDispatcher(ActionDispatcherInterface):
-    """Concrete production action dispatcher communicating over ROS 2 Action and Service servers."""
 
-    """Concrete action dispatcher communicating over ROS 2 Action and Service servers.
+
+# ==============================================================================
+# Production RosMotionClient
+# ==============================================================================
+
+
+class RosMotionClient(MotionClient):
+    """
+    Concrete production action dispatcher communicating over ROS 2 Action and Service servers.
 
     Supports mock_nav2 for tabletop setups where base navigation is bypassed
     while manipulation is delegated directly to ROS 2 (lekiwi_manipulation).
@@ -137,9 +129,9 @@ class RosActionDispatcher(ActionDispatcherInterface):
         self._node = node
         self._callback_group = callback_group
         self._mock_nav2 = mock_nav2
-        self._active_goal_handle = None
-        self._action_timer = None
-        self._feasibility_timer = None
+        self._active_goal_handle: Any = None
+        self._action_timer: Any = None
+        self._feasibility_timer: Any = None
         self._action_watchdog_desc: str = ""
 
         self._feasibility_client = node.create_client(
@@ -147,6 +139,7 @@ class RosActionDispatcher(ActionDispatcherInterface):
             check_feasibility_service_name,
             callback_group=callback_group,
         )
+
         self._nav2_client = (
             ActionClient(
                 node,
@@ -157,6 +150,7 @@ class RosActionDispatcher(ActionDispatcherInterface):
             if (NavigateToPose is not None and not mock_nav2)
             else None
         )
+
         self._manipulation_client = (
             ActionClient(
                 node,
@@ -170,15 +164,14 @@ class RosActionDispatcher(ActionDispatcherInterface):
 
     def _start_action_watchdog(
         self,
-        action_name: str,
+        desc: str,
         timeout_sec: float,
         on_timeout: Callable[[], None] | None = None,
     ) -> None:
         self._cancel_action_watchdog()
-        self._action_watchdog_desc = action_name
+        self._action_watchdog_desc = desc
 
-        def _on_watchdog_timeout():
-            desc = self._action_watchdog_desc or "Action"
+        def _on_watchdog_timeout() -> None:
             self._node.get_logger().error(
                 f"{desc} timed out after {timeout_sec:.1f}s! Cancelling active goal."
             )
@@ -191,7 +184,6 @@ class RosActionDispatcher(ActionDispatcherInterface):
             timeout_sec,
             _on_watchdog_timeout,
             callback_group=self._callback_group,
-            clock=Clock(clock_type=ClockType.STEADY_TIME),
         )
 
     def _cancel_action_watchdog(self) -> None:
@@ -241,10 +233,19 @@ class RosActionDispatcher(ActionDispatcherInterface):
             req.move.is_castling = True
 
         self._cancel_feasibility_timer()
+        future = self._feasibility_client.call_async(req)
 
-        def _on_timeout():
+        handled = False
+        lock = threading.Lock()
+
+        def _on_timeout() -> None:
+            nonlocal handled
+            with lock:
+                if handled:
+                    return
+                handled = True
             self._cancel_feasibility_timer()
-            msg = f"Feasibility query timed out after {timeout_sec:.1f}s!"
+            msg = f"Feasibility query for move {goal.uci} timed out after {timeout_sec:.1f}s"
             self._node.get_logger().error(msg)
             if on_error:
                 on_error(msg)
@@ -253,12 +254,14 @@ class RosActionDispatcher(ActionDispatcherInterface):
             timeout_sec,
             _on_timeout,
             callback_group=self._callback_group,
-            clock=Clock(clock_type=ClockType.STEADY_TIME),
         )
 
-        future = self._feasibility_client.call_async(req)
-
-        def _on_response(fut):
+        def _on_response(fut: Any) -> None:
+            nonlocal handled
+            with lock:
+                if handled:
+                    return
+                handled = True
             self._cancel_feasibility_timer()
             try:
                 resp = fut.result()
@@ -286,6 +289,7 @@ class RosActionDispatcher(ActionDispatcherInterface):
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
+        """Dispatch target_pose to Nav2 with integrated watchdog."""
         if self._mock_nav2:
             self._node.get_logger().info(
                 f"[MOCK NAV2] Base repositioning bypassed to "
@@ -329,7 +333,7 @@ class RosActionDispatcher(ActionDispatcherInterface):
 
         send_future = self._nav2_client.send_goal_async(goal_msg)
 
-        def _on_goal_response(fut):
+        def _on_goal_response(fut: Any) -> None:
             try:
                 handle = fut.result()
                 if not handle.accepted:
@@ -364,6 +368,7 @@ class RosActionDispatcher(ActionDispatcherInterface):
         on_feedback: Callable[[Any], None] | None = None,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
+        """Dispatch manipulation goal to Arm Manipulation action server with integrated watchdog."""
         if (
             self._manipulation_client is None
             or not self._manipulation_client.server_is_ready()
@@ -397,7 +402,7 @@ class RosActionDispatcher(ActionDispatcherInterface):
             goal, feedback_callback=on_feedback
         )
 
-        def _on_goal_response(fut):
+        def _on_goal_response(fut: Any) -> None:
             try:
                 handle = fut.result()
                 if not handle.accepted:
@@ -427,8 +432,29 @@ class RosActionDispatcher(ActionDispatcherInterface):
         send_future.add_done_callback(_on_goal_response)
         return True
 
+    @staticmethod
+    def _parse_action_success(result: Any, status: int | None) -> bool:
+        """Evaluate action success combining ActionServer GoalStatus and result.success."""
+        has_status = isinstance(status, int)
+        is_goal_succeeded = (
+            status == GoalStatus.STATUS_SUCCEEDED if has_status else False
+        )
+
+        if hasattr(result, "success"):
+            return bool(result.success) and (not has_status or is_goal_succeeded)
+        return is_goal_succeeded
+
+    @staticmethod
+    def _parse_action_message(result: Any, status: int | None, success: bool) -> str:
+        """Resolve user-facing outcome message from action result."""
+        if hasattr(result, "message") and result.message:
+            return str(result.message)
+        if hasattr(result, "error_msg") and result.error_msg:
+            return str(result.error_msg)
+        return "Action succeeded" if success else f"Action failed with status {status}"
+
     def _wrap_completed(
-        self, future, on_completed: Callable[[ActionResult], None] | None
+        self, future: Any, on_completed: Callable[[ActionResult], None] | None
     ) -> None:
         self._cancel_action_watchdog()
         self._active_goal_handle = None
@@ -439,32 +465,8 @@ class RosActionDispatcher(ActionDispatcherInterface):
             result = getattr(res_obj, "result", res_obj)
             status = getattr(res_obj, "status", None)
 
-            # 1. Đánh giá trạng thái thành công chuẩn ROS 2 Action:
-            # Nếu có GoalStatus từ Action Server: STATUS_SUCCEEDED (4) là thành công
-            has_status = isinstance(status, int)
-            is_goal_succeeded = (
-                (status == GoalStatus.STATUS_SUCCEEDED) if has_status else False
-            )
-
-            # Nếu result có thuộc tính 'success' riêng (như ExecuteChessMove.Result), ưu tiên kết hợp:
-            if hasattr(result, "success"):
-                success = bool(result.success) and (not has_status or is_goal_succeeded)
-            else:
-                # Action chuẩn như Nav2 NavigateToPose:
-                success = is_goal_succeeded
-
-            # 2. Xử lý message thông báo sạch sẽ:
-            if hasattr(result, "message") and result.message:
-                message = str(result.message)
-            elif hasattr(result, "error_msg") and result.error_msg:
-                message = str(result.error_msg)
-            else:
-                message = (
-                    "Action succeeded"
-                    if success
-                    else f"Action failed with status {status}"
-                )
-
+            success = self._parse_action_success(result, status)
+            message = self._parse_action_message(result, status, success)
             exec_time = float(getattr(result, "execution_time_sec", 0.0))
             on_completed(
                 ActionResult(
@@ -474,52 +476,73 @@ class RosActionDispatcher(ActionDispatcherInterface):
                 )
             )
         except Exception as exc:  # noqa: BLE001
-            self._node.get_logger().error(f"Error reading action result: {exc}")
             on_completed(ActionResult(success=False, message=str(exc)))
 
     def cancel_active_goal(self) -> None:
+        """Cancel active Nav2 or Manipulation goal asynchronously."""
+        self._cancel_action_watchdog()
+        self._cancel_feasibility_timer()
         if self._active_goal_handle is not None:
             try:
+                self._node.get_logger().warn(
+                    "Cancelling active ROS 2 action goal handle..."
+                )
                 self._active_goal_handle.cancel_goal_async()
-            except Exception as exc:  # noqa: BLE001
-                self._node.get_logger().warn(f"Failed to cancel active goal: {exc}")
-            self._active_goal_handle = None
+            except Exception as e:
+                self._node.get_logger().warn(
+                    f"Exception cancelling active goal handle: {e}"
+                )
+            finally:
+                self._active_goal_handle = None
 
     def destroy(self) -> None:
-        self._cancel_feasibility_timer()
-        self._cancel_action_watchdog()
+        """Clean up action clients, timers, and active goal handles."""
         self.cancel_active_goal()
-        if self._feasibility_client is not None:
+        if (
+            hasattr(self, "_feasibility_client")
+            and self._feasibility_client is not None
+        ):
             self._node.destroy_client(self._feasibility_client)
             self._feasibility_client = None
-        if self._nav2_client is not None:
+        if hasattr(self, "_nav2_client") and self._nav2_client is not None:
             self._nav2_client.destroy()
             self._nav2_client = None
-        if self._manipulation_client is not None:
+        if (
+            hasattr(self, "_manipulation_client")
+            and self._manipulation_client is not None
+        ):
             self._manipulation_client.destroy()
             self._manipulation_client = None
+
+
+
+
+
+# ==============================================================================
+# In-Memory Fake Motion Client (for tests & tabletop mock)
+# ==============================================================================
 
 
 class _MockGoalHandle:
     """Mock handle returned during simulated execution."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.accepted = True
         self.cancelled = False
 
-    def cancel_goal_async(self):
+    def cancel_goal_async(self) -> None:
         self.cancelled = True
 
 
-class SimulatedActionDispatcher(ActionDispatcherInterface):
+class FakeMotionClient(MotionClient):
     """
-    In-memory simulated dispatcher for tabletop simulation and unit tests.
+    In-memory simulated motion client for tabletop simulation and unit tests.
     Does not require live ROS 2 action servers, preventing production code pollution.
     """
 
-    def __init__(self, node: Node) -> None:
+    def __init__(self, node: Node | None = None) -> None:
         self._node = node
-        self._active_handle = None
+        self._active_handle: _MockGoalHandle | None = None
 
     def check_feasibility(
         self,
@@ -542,10 +565,11 @@ class SimulatedActionDispatcher(ActionDispatcherInterface):
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
-        self._node.get_logger().info(
-            f"[SIMULATED NAV2] Navigating to ({target_pose.pose.position.x:.2f}, "
-            f"{target_pose.pose.position.y:.2f})"
-        )
+        if self._node is not None:
+            self._node.get_logger().info(
+                f"[SIMULATED NAV2] Navigating to ({target_pose.pose.position.x:.2f}, "
+                f"{target_pose.pose.position.y:.2f})"
+            )
         if on_completed:
             on_completed(
                 ActionResult(
@@ -564,9 +588,10 @@ class SimulatedActionDispatcher(ActionDispatcherInterface):
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
         instruction = getattr(goal, "instruction", "move piece")
-        self._node.get_logger().info(
-            f"[SIMULATED MANIPULATION] Executing: {instruction}"
-        )
+        if self._node is not None:
+            self._node.get_logger().info(
+                f"[SIMULATED MANIPULATION] Executing: {instruction}"
+            )
         if on_completed:
             on_completed(
                 ActionResult(
@@ -586,71 +611,11 @@ class SimulatedActionDispatcher(ActionDispatcherInterface):
         self.cancel_active_goal()
 
 
-class ActiveObservationNavigator:
-    """
-    Coordinates robot base relocation to alternative observation viewpoints
-    when chessboard perception is occluded or legal FEN scan times out.
-    """
-
-    def __init__(
-        self,
-        node: Node,
-        dispatcher: INavigationDispatcher,
-        map_frame: str = "map",
-        standoff_distance: float = 0.65,
-        robot_color: str = "b",
-    ) -> None:
-        self._node = node
-        self._dispatcher = dispatcher
-        self._map_frame = map_frame
-        self._standoff_distance = standoff_distance
-        self._robot_color = robot_color
-        self._viewpoint_index = 0
-
-    @property
-    def viewpoint_index(self) -> int:
-        return self._viewpoint_index
-
-    @property
-    def robot_color(self) -> str:
-        return self._robot_color
-
-    @robot_color.setter
-    def robot_color(self, color: str) -> None:
-        self._robot_color = color
-
-    def reset_viewpoint_index(self) -> None:
-        self._viewpoint_index = 0
-
-    def reposition_to_next_viewpoint(
-        self,
-        board_x: float = 0.0,
-        board_y: float = 0.0,
-        board_yaw: float = 0.0,
-        timeout_sec: float = 60.0,
-        on_completed: Callable[[ActionResult], None] | None = None,
-    ) -> bool:
-        candidates = generate_candidate_observation_poses(
-            board_x=board_x,
-            board_y=board_y,
-            board_yaw=board_yaw,
-            standoff_distance=self._standoff_distance,
-            frame_id=self._map_frame,
-            robot_color=self._robot_color,
-        )
-        if not candidates:
-            return False
-
-        target_pose = candidates[self._viewpoint_index % len(candidates)]
-        self._viewpoint_index += 1
-
-        self._node.get_logger().info(
-            f"[ACTIVE PERCEPTION] Repositioning base to observation viewpoint #{self._viewpoint_index} "
-            f"({target_pose.pose.position.x:.3f}, {target_pose.pose.position.y:.3f}) to clear occlusion..."
-        )
-
-        return self._dispatcher.send_navigation_goal(
-            target_pose=target_pose,
-            timeout_sec=timeout_sec,
-            on_completed=on_completed,
-        )
+__all__ = [
+    "FeasibilityClient",
+    "NavigationClient",
+    "ManipulationClient",
+    "MotionClient",
+    "RosMotionClient",
+    "FakeMotionClient",
+]

@@ -29,13 +29,12 @@ class MacroMissionState(IntEnum):
     EVALUATING_BEST_MOVE = 3
     CHECKING_REACHABILITY = 4
     EXECUTING_MOVE_PIPELINE = 5
-    TURN_COMPLETED = 6
-    GAME_OVER = 7
-    ERROR_FALLBACK = 8
+    POST_MOVE_VERIFYING = 6
+    TURN_COMPLETED = 7
+    GAME_OVER = 8
+    ERROR_FALLBACK = 9
 
 
-# Primary alias for mission state
-MissionState = MacroMissionState
 
 MISSION_STATE_NAMES: dict[MacroMissionState, str] = {
     MacroMissionState.BOOT_INITIALIZING: "BOOT_INITIALIZING",
@@ -44,6 +43,7 @@ MISSION_STATE_NAMES: dict[MacroMissionState, str] = {
     MacroMissionState.EVALUATING_BEST_MOVE: "EVALUATING_BEST_MOVE",
     MacroMissionState.CHECKING_REACHABILITY: "CHECKING_REACHABILITY",
     MacroMissionState.EXECUTING_MOVE_PIPELINE: "EXECUTING_MOVE_PIPELINE",
+    MacroMissionState.POST_MOVE_VERIFYING: "POST_MOVE_VERIFYING",
     MacroMissionState.TURN_COMPLETED: "TURN_COMPLETED",
     MacroMissionState.GAME_OVER: "GAME_OVER",
     MacroMissionState.ERROR_FALLBACK: "ERROR_FALLBACK",
@@ -82,8 +82,14 @@ ALLOWED_MISSION_TRANSITIONS: dict[MacroMissionState, set[MacroMissionState]] = {
     },
     MacroMissionState.EXECUTING_MOVE_PIPELINE: {
         MacroMissionState.EXECUTING_MOVE_PIPELINE,
+        MacroMissionState.POST_MOVE_VERIFYING,
         MacroMissionState.TURN_COMPLETED,
         MacroMissionState.WAITING_FOR_TF_READY,
+        MacroMissionState.ERROR_FALLBACK,
+    },
+    MacroMissionState.POST_MOVE_VERIFYING: {
+        MacroMissionState.POST_MOVE_VERIFYING,
+        MacroMissionState.TURN_COMPLETED,
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.TURN_COMPLETED: {
@@ -114,7 +120,7 @@ class MotionExecutionState(IntEnum):
     PICKING_PIECE = 4
     NAV_TO_PLACE = 5
     PLACING_PIECE = 6
-    POST_MOVE_VERIFYING = 7
+    NAV_TO_OBS = 7
 
 
 MOTION_STATE_NAMES: dict[MotionExecutionState, str] = {
@@ -125,7 +131,7 @@ MOTION_STATE_NAMES: dict[MotionExecutionState, str] = {
     MotionExecutionState.PICKING_PIECE: "PICKING_PIECE",
     MotionExecutionState.NAV_TO_PLACE: "NAV_TO_PLACE",
     MotionExecutionState.PLACING_PIECE: "PLACING_PIECE",
-    MotionExecutionState.POST_MOVE_VERIFYING: "POST_MOVE_VERIFYING",
+    MotionExecutionState.NAV_TO_OBS: "NAV_TO_OBS",
 }
 
 # Permitted state transitions for Level 2 MotionExecutionState
@@ -136,42 +142,53 @@ ALLOWED_MOTION_TRANSITIONS: dict[MotionExecutionState, set[MotionExecutionState]
         MotionExecutionState.CLEARING_PIECE,
         MotionExecutionState.NAV_TO_PICK,
         MotionExecutionState.PICKING_PIECE,
+        MotionExecutionState.NAV_TO_OBS,
     },
     MotionExecutionState.NAV_TO_CLEAR: {
         MotionExecutionState.NAV_TO_CLEAR,
         MotionExecutionState.CLEARING_PIECE,
+        MotionExecutionState.NAV_TO_OBS,
         MotionExecutionState.IDLE,
     },
     MotionExecutionState.CLEARING_PIECE: {
         MotionExecutionState.CLEARING_PIECE,
         MotionExecutionState.NAV_TO_PICK,
         MotionExecutionState.PICKING_PIECE,
+        MotionExecutionState.NAV_TO_OBS,
         MotionExecutionState.IDLE,
     },
     MotionExecutionState.NAV_TO_PICK: {
         MotionExecutionState.NAV_TO_PICK,
         MotionExecutionState.PICKING_PIECE,
+        MotionExecutionState.NAV_TO_OBS,
         MotionExecutionState.IDLE,
     },
     MotionExecutionState.PICKING_PIECE: {
         MotionExecutionState.PICKING_PIECE,
         MotionExecutionState.NAV_TO_PLACE,
         MotionExecutionState.PLACING_PIECE,
-        MotionExecutionState.POST_MOVE_VERIFYING,
+        MotionExecutionState.NAV_TO_OBS,
         MotionExecutionState.IDLE,
     },
     MotionExecutionState.NAV_TO_PLACE: {
         MotionExecutionState.NAV_TO_PLACE,
         MotionExecutionState.PLACING_PIECE,
+        MotionExecutionState.NAV_TO_OBS,
         MotionExecutionState.IDLE,
     },
     MotionExecutionState.PLACING_PIECE: {
         MotionExecutionState.PLACING_PIECE,
-        MotionExecutionState.POST_MOVE_VERIFYING,
+        MotionExecutionState.NAV_TO_OBS,
         MotionExecutionState.IDLE,
     },
-    MotionExecutionState.POST_MOVE_VERIFYING: {
-        MotionExecutionState.POST_MOVE_VERIFYING,
+    MotionExecutionState.NAV_TO_OBS: {
+        MotionExecutionState.NAV_TO_OBS,
+        MotionExecutionState.NAV_TO_CLEAR,
+        MotionExecutionState.CLEARING_PIECE,
+        MotionExecutionState.NAV_TO_PICK,
+        MotionExecutionState.PICKING_PIECE,
+        MotionExecutionState.NAV_TO_PLACE,
+        MotionExecutionState.PLACING_PIECE,
         MotionExecutionState.IDLE,
     },
 }

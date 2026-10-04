@@ -1,20 +1,19 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-"""Unit tests for MissionStatusMarkerBuilder and 3D Robot HUD Visualization."""
+"""Unit tests for StatusMarkerBuilder and 3D Robot HUD Visualization."""
 
 import threading
 from unittest.mock import MagicMock
 
 import pytest
 from builtin_interfaces.msg import Time
-from lekiwi_orchestrator.fsm import MissionState
-from lekiwi_orchestrator.health_monitor import (
-    NodeHealthMonitor,
+from lekiwi_orchestrator.fsm import MacroMissionState
+from lekiwi_orchestrator.health_supervisor import (
+    HealthSupervisor,
+    HealthSupervisorConfig,
     OrchestratorStateSnapshot,
-)
-from lekiwi_orchestrator.mission_status_visualizer import (
-    MissionStatusMarkerBuilder,
+    StatusMarkerBuilder,
     VisualizerConfig,
 )
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -29,18 +28,10 @@ def dummy_stamp() -> Time:
     return t
 
 
-def test_visualizer_config_defaults():
-    config = VisualizerConfig()
-    assert config.robot_frame == "base_footprint"
-    assert config.hud_z_offset == 0.35
-    assert config.font_scale == 0.025
-    assert config.ns == "mission/robot_hud"
-
-
 def test_builder_deleteall_hygiene(dummy_stamp):
-    builder = MissionStatusMarkerBuilder(VisualizerConfig(robot_frame="test_base"))
+    builder = StatusMarkerBuilder(VisualizerConfig(robot_frame="test_base"))
     snapshot = OrchestratorStateSnapshot(
-        mission_state=MissionState.WAITING_FOR_PLAYER_MOVE,
+        mission_state=MacroMissionState.WAITING_FOR_PLAYER_MOVE,
         perception_context=0,
     )
     markers = builder.build(
@@ -59,9 +50,9 @@ def test_builder_deleteall_hygiene(dummy_stamp):
 
 def test_builder_hud_marker_attributes(dummy_stamp):
     cfg = VisualizerConfig(robot_frame="base_link", hud_z_offset=0.5, font_scale=0.03)
-    builder = MissionStatusMarkerBuilder(cfg)
+    builder = StatusMarkerBuilder(cfg)
     snapshot = OrchestratorStateSnapshot(
-        mission_state=MissionState.WAITING_FOR_PLAYER_MOVE,
+        mission_state=MacroMissionState.WAITING_FOR_PLAYER_MOVE,
         perception_context=0,
     )
     markers = builder.build(
@@ -85,9 +76,9 @@ def test_builder_hud_marker_attributes(dummy_stamp):
 
 
 def test_builder_boot_initializing_state(dummy_stamp):
-    builder = MissionStatusMarkerBuilder()
+    builder = StatusMarkerBuilder()
     snapshot = OrchestratorStateSnapshot(
-        mission_state=MissionState.WAITING_FOR_TF_READY,
+        mission_state=MacroMissionState.WAITING_FOR_TF_READY,
         perception_context=0,
     )
     markers = builder.build(
@@ -103,9 +94,9 @@ def test_builder_boot_initializing_state(dummy_stamp):
 
 
 def test_builder_idle_waiting_for_opponent(dummy_stamp):
-    builder = MissionStatusMarkerBuilder()
+    builder = StatusMarkerBuilder()
     snapshot = OrchestratorStateSnapshot(
-        mission_state=MissionState.WAITING_FOR_PLAYER_MOVE,
+        mission_state=MacroMissionState.WAITING_FOR_PLAYER_MOVE,
         perception_context=0,
     )
     markers = builder.build(
@@ -122,9 +113,9 @@ def test_builder_idle_waiting_for_opponent(dummy_stamp):
 
 
 def test_builder_executing_move_pipeline(dummy_stamp):
-    builder = MissionStatusMarkerBuilder()
+    builder = StatusMarkerBuilder()
     snapshot = OrchestratorStateSnapshot(
-        mission_state=MissionState.EXECUTING_MOVE_PIPELINE,
+        mission_state=MacroMissionState.EXECUTING_MOVE_PIPELINE,
         perception_context=0,
         last_goal_move="e2e4",
         execution_stage="NAVIGATING_TO_PICK",
@@ -142,9 +133,9 @@ def test_builder_executing_move_pipeline(dummy_stamp):
 
 
 def test_builder_error_fallback(dummy_stamp):
-    builder = MissionStatusMarkerBuilder()
+    builder = StatusMarkerBuilder()
     snapshot = OrchestratorStateSnapshot(
-        mission_state=MissionState.ERROR_FALLBACK,
+        mission_state=MacroMissionState.ERROR_FALLBACK,
         perception_context=0,
     )
     markers = builder.build(
@@ -159,7 +150,39 @@ def test_builder_error_fallback(dummy_stamp):
     assert "Nav: Lost" in hud.text
 
 
-def test_health_monitor_visualizer_integration():
+def test_builder_additional_states(dummy_stamp):
+    builder = StatusMarkerBuilder(VisualizerConfig(robot_frame="base_link"))
+    snap_eval = OrchestratorStateSnapshot(
+        mission_state=MacroMissionState.EVALUATING_BEST_MOVE,
+        perception_context=1,
+        last_goal_move="e2e4",
+    )
+    hud_eval = builder.build(
+        snap_eval, nav_ready=True, robot_color="w", stamp=dummy_stamp
+    ).markers[1]
+    assert "e2e4" in hud_eval.text
+
+    snap_done = OrchestratorStateSnapshot(
+        mission_state=MacroMissionState.TURN_COMPLETED,
+        perception_context=0,
+    )
+    hud_done = builder.build(
+        snap_done, nav_ready=True, robot_color="w", stamp=dummy_stamp
+    ).markers[1]
+    assert "[COMPLETED]" in hud_done.text
+
+    snap_fallback = OrchestratorStateSnapshot(
+        mission_state=MacroMissionState.BOOT_INITIALIZING,
+        perception_context=0,
+    )
+    hud_fallback = builder.build(
+        snap_fallback, nav_ready=True, robot_color="w", stamp=dummy_stamp
+    ).markers[1]
+    assert hud_fallback.text
+
+
+
+def test_health_supervisor_visualizer_integration():
     mock_node = MagicMock()
     mock_clock = MagicMock()
     now_msg = Time()
@@ -172,20 +195,18 @@ def test_health_monitor_visualizer_integration():
     mock_node.create_publisher.side_effect = [mock_diag_pub, mock_marker_pub]
 
     snapshot = OrchestratorStateSnapshot(
-        mission_state=MissionState.EXECUTING_MOVE_PIPELINE,
+        mission_state=MacroMissionState.EXECUTING_MOVE_PIPELINE,
         perception_context=1,
         last_goal_move="d2d4",
         execution_stage="PICKING_PIECE",
     )
 
-    from lekiwi_orchestrator.health_monitor import HealthMonitorConfig
-
-    config = HealthMonitorConfig(
+    config = HealthSupervisorConfig(
         robot_color="w",
         auto_recovery_enabled=False,
         enable_visualizer=True,
     )
-    monitor = NodeHealthMonitor(
+    monitor = HealthSupervisor(
         node=mock_node,
         config=config,
         state_lock=threading.RLock(),

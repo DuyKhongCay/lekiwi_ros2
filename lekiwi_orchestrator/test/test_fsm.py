@@ -8,7 +8,6 @@ import itertools
 from lekiwi_interfaces.msg import PerceptionContext
 from lekiwi_orchestrator.fsm import (
     MacroMissionState,
-    MissionState,
     MotionExecutionState,
     is_mission_transition_allowed,
     is_motion_transition_allowed,
@@ -24,6 +23,7 @@ def test_level1_macro_mission_canonical_workflow():
         MacroMissionState.EVALUATING_BEST_MOVE,
         MacroMissionState.CHECKING_REACHABILITY,
         MacroMissionState.EXECUTING_MOVE_PIPELINE,
+        MacroMissionState.POST_MOVE_VERIFYING,
         MacroMissionState.TURN_COMPLETED,
         MacroMissionState.WAITING_FOR_PLAYER_MOVE,
     ]
@@ -53,7 +53,7 @@ def test_level1_macro_mission_illegal_transitions():
 
 
 def test_level2_motion_sub_fsm_canonical_workflow():
-    # Dual-base capture sequence
+    # Dual-base capture sequence with final return to observation pose
     sequence = [
         MotionExecutionState.IDLE,
         MotionExecutionState.NAV_TO_CLEAR,
@@ -62,7 +62,7 @@ def test_level2_motion_sub_fsm_canonical_workflow():
         MotionExecutionState.PICKING_PIECE,
         MotionExecutionState.NAV_TO_PLACE,
         MotionExecutionState.PLACING_PIECE,
-        MotionExecutionState.POST_MOVE_VERIFYING,
+        MotionExecutionState.NAV_TO_OBS,
         MotionExecutionState.IDLE,
     ]
     assert all(
@@ -76,7 +76,7 @@ def test_level2_motion_sub_fsm_zero_nav_workflow():
         MotionExecutionState.IDLE,
         MotionExecutionState.PICKING_PIECE,
         MotionExecutionState.PLACING_PIECE,
-        MotionExecutionState.POST_MOVE_VERIFYING,
+        MotionExecutionState.NAV_TO_OBS,
         MotionExecutionState.IDLE,
     ]
     assert all(
@@ -121,8 +121,3 @@ def test_perception_context_illegal_transition():
     assert not is_perception_transition_allowed(
         PerceptionContext.POST_MOVE_VERIFY, PerceptionContext.CALIBRATION_STREAM
     )
-
-
-def test_backward_compatibility_aliases():
-    # MissionState is canonical alias of MacroMissionState
-    assert MissionState == MacroMissionState
