@@ -117,8 +117,8 @@ controller_server:
       GoalCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 12.0
-        threshold_to_consider: 0.40    # Active within 40cm to smoothly hand over from PathFollowCritic
+        cost_weight: 6.0
+        threshold_to_consider: 0.28    # Active within 40cm to smoothly hand over from PathFollowCritic
 
       # 4. Goal Orientation Alignment
       GoalAngleCritic:
@@ -131,20 +131,20 @@ controller_server:
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 8.0
+        cost_weight: 5.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 3
         threshold_to_consider: 0.30    # Active distance threshold allowing holonomic strafing
         offset_from_furthest: 15
-        use_path_orientations: true   # Translates along path without turning base heading
+        use_path_orientations: false   # Translates along path without turning base heading
 
       # 6. Path Progress Driving Force
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 6.0
+        cost_weight: 8.0
         offset_from_furthest: 5
-        threshold_to_consider: 0.25    # Maintains forward momentum until 25cm to goal
+        threshold_to_consider: 0.20    # Maintains forward momentum until 25cm to goal
 
       # 7. Twirling Penalty (Suppresses unnecessary base rotations for camera stability)
       TwirlingCritic:
@@ -230,8 +230,8 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.50
+        cost_scaling_factor: 8.0
+        inflation_radius: 0.30
 
       always_send_full_costmap: true
 
@@ -257,8 +257,8 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.50
+        cost_scaling_factor: 8.0
+        inflation_radius: 0.30
 
       always_send_full_costmap: true
 

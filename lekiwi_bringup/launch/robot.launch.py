@@ -106,7 +106,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "use_mock_manipulation",
-            default_value="true",
+            default_value="false",
             description="Use mock_policy_server instead of real hardware manipulation action server",
         ),
     ]
