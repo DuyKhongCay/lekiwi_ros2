@@ -2,5 +2,5 @@
 # Licensed under the Apache License, Version 2.0.
 
 ---
-bool success
-string message
+bool success                   # True if serial port reset & ping succeeded
+string message                 # Diagnostic status or error details

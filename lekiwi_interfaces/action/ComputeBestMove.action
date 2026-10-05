@@ -1,21 +1,23 @@
-# ====== GOAL ======
-string fen                  # Standard 6-field FEN or piece placement
-uint32 think_time_ms        # Thinking time in milliseconds (0 = engine default)
-uint32 depth                # Max search depth (0 = unlimited by depth)
----
-# ====== RESULT ======
-bool success                # True if a valid move was found
-string best_move            # Best move in UCI format (e.g. "e2e4")
-string ponder_move          # Expected response move (if available)
-int32 eval_centipawns       # Evaluation score in centipawns (positive = white advantage)
-bool is_mate                # True if mate is detected
-int32 mate_in_moves         # Moves until mate (+ = robot wins, - = robot loses)
-string message              # Error or status description
----
-# ====== FEEDBACK ======
-uint32 current_depth        # Current search depth
-int32 current_eval          # Intermediate score in centipawns
-uint64 nodes_per_second     # Engine speed (NPS)
-uint32 elapsed_time_ms      # Elapsed thinking time
-string current_pv           # Current principal variation line
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
 
+# Goal
+string fen                     # Standard 6-field FEN board string
+uint32 think_time_ms           # Engine search time limit [ms] (0 = default)
+uint32 depth                   # Max engine search depth [plies] (0 = unlimited)
+---
+# Result
+bool success                   # True if valid move found
+string best_move               # Best move in UCI format (e.g., "e2e4")
+string ponder_move             # Predicted human response in UCI format
+int32 eval_centipawns          # Position score (+ = White, - = Black) [cp]
+bool is_mate                   # True if mate sequence detected
+int32 mate_in_moves            # Moves to mate (+ = robot wins, - = robot loses)
+string message                 # Engine status or error description
+---
+# Feedback
+uint32 current_depth           # Current search depth [plies]
+int32 current_eval             # Intermediate score [cp]
+uint64 nodes_per_second        # Calculation rate [nodes/s]
+uint32 elapsed_time_ms         # Elapsed search time [ms]
+string current_pv              # Current principal variation line
