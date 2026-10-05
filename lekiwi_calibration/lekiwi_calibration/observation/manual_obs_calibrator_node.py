@@ -53,20 +53,22 @@ def compute_orbit_velocity(
     max_vx: float = 0.05,
     max_wz: float = 0.35,
 ) -> Tuple[float, float, float]:
-    """
-    Calculate closed-loop omni base velocities for circular orbit around board center.
+    """Calculate closed-loop omni base velocities for circular orbit around board center.
 
-    :param r_curr: Current distance to board center (m).
-    :param theta_curr: Current polar azimuth in board frame (rad).
-    :param psi_curr: Current robot heading in board frame (rad).
-    :param orbit_dir: Direction (+1 for CCW, -1 for CW, 0 for stop).
-    :param r_target: Target standoff distance (m).
-    :param v_orbit: Nominal tangential velocity (m/s).
-    :param k_radial: Proportional gain for radial distance error.
-    :param k_yaw: Proportional gain for heading error toward center.
-    :param max_vx: Maximum linear radial velocity clamp (m/s).
-    :param max_wz: Maximum angular velocity clamp (rad/s).
-    :return: (v_x, v_y, w_z) in robot base_footprint frame.
+    Args:
+        r_curr: Current distance to board center in meters.
+        theta_curr: Current polar azimuth in board frame in radians.
+        psi_curr: Current robot heading in board frame in radians.
+        orbit_dir: Direction (+1 for CCW, -1 for CW, 0 for stop).
+        r_target: Target standoff distance in meters.
+        v_orbit: Nominal tangential velocity in m/s.
+        k_radial: Proportional gain for radial distance error.
+        k_yaw: Proportional gain for heading error toward center.
+        max_vx: Maximum linear radial velocity clamp in m/s.
+        max_wz: Maximum angular velocity clamp in rad/s.
+
+    Returns:
+        Tuple of (v_x, v_y, w_z) in robot base_footprint frame.
     """
     if orbit_dir == 0:
         return 0.0, 0.0, 0.0
@@ -75,8 +77,7 @@ def compute_orbit_velocity(
     psi_target = normalize_angle(theta_curr + math.pi)
     e_psi = normalize_angle(psi_target - psi_curr)
 
-    # Robot base: +x is forward (toward center when oriented inward).
-    # If r_curr > r_target, robot is too far, needs positive +vx to move inward.
+    # Robot base +x is forward inward; positive vx moves robot closer to center
     v_x_raw = k_radial * (r_curr - r_target)
     v_x = max(-max_vx, min(max_vx, v_x_raw))
 
@@ -98,7 +99,18 @@ def format_observation_yaml(
     avg_r: float,
     sorted_offsets: List[float],
 ) -> str:
-    """Format observation YAML preserving existing modes and custom comments."""
+    """Format observation YAML preserving existing modes and custom comments.
+
+    Args:
+        existing_data: Dictionary of parsed existing YAML structure.
+        calib_mode: Active calibration mode ('relocalize' or 'post_move_verify').
+        samples_count: Number of collected viewpoint samples.
+        avg_r: Computed mean standoff distance across samples in meters.
+        sorted_offsets: Sorted list of angular offsets in radians.
+
+    Returns:
+        Formatted YAML string ready for disk persistence.
+    """
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     obs_dict = existing_data.setdefault("observation", {})
@@ -148,6 +160,7 @@ class ManualObsCalibratorNode(Node):
     """Interactive Gamepad Calibration Node for Standoff Distance and Observation Offsets."""
 
     def __init__(self) -> None:
+        """Initialize parameters, publishers, TF listener, Joy subscriber, and control timer."""
         super().__init__("manual_obs_calibrator")
 
         # Declare parameters
@@ -236,10 +249,13 @@ class ManualObsCalibratorNode(Node):
         self.context_pub.publish(msg)
 
     def handle_joy(self, msg: Joy) -> None:
-        """
-        Process gamepad inputs:
-        - D-Pad Left/Right (axis 6): Continuous hold for CCW/CW circular orbit.
-        - D-Pad Up/Down (axis 7): Edge-triggered Save/Discard.
+        """Process gamepad inputs for circular orbit teleoperation and sample recording.
+
+        Interprets D-Pad Left/Right (axis 6) for continuous circular orbit around chessboard,
+        and D-Pad Up/Down (axis 7) edge triggers to record or discard viewpoint samples.
+
+        Args:
+            msg: Gamepad sensor_msgs/Joy input message.
         """
         dpad_x = msg.axes[6] if len(msg.axes) > 6 else 0.0
         dpad_y = msg.axes[7] if len(msg.axes) > 7 else 0.0
@@ -350,7 +366,15 @@ class ManualObsCalibratorNode(Node):
     def handle_save_service(
         self, request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
-        """Compute final metrics and safely export to independent YAML file."""
+        """Compute final metrics and export observation config to YAML file.
+
+        Args:
+            request: Empty ROS Trigger service request.
+            response: Trigger service response containing success status and report message.
+
+        Returns:
+            Populated Trigger.Response with status and human-readable feedback.
+        """
         if not self.recorded_samples:
             response.success = False
             response.message = f"No samples collected for mode '{self.calib_mode}'."
@@ -400,6 +424,7 @@ class ManualObsCalibratorNode(Node):
 
 
 def main(args: Optional[List[str]] = None) -> None:
+    """Initialize ROS context and spin manual observation calibrator node."""
     rclpy.init(args=args)
     node = ManualObsCalibratorNode()
     try:

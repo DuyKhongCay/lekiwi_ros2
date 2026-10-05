@@ -15,9 +15,10 @@ from std_srvs.srv import Trigger
 
 
 class StandoffCalibratorNode(Node):
-    """Calibrates and evaluates edge clearance distance between LeKiwi base and chessboard."""
+    """Calibrate and evaluate edge clearance distance between LeKiwi base and chessboard."""
 
     def __init__(self) -> None:
+        """Initialize parameters, TF buffer, service servers, and diagnostics timer."""
         super().__init__("standoff_calibrator")
 
         self.declare_parameter("board_frame", "chessboard_frame")
@@ -62,7 +63,12 @@ class StandoffCalibratorNode(Node):
         )
 
     def update_callback(self) -> None:
-        """Looks up TF and prints formatted diagnostic assessment."""
+        """Query TF transforms, calculate closest edge clearances, and print diagnostic reports.
+
+        Computes Euclidean and orthogonal distances between robot base_footprint and all four
+        edges of the target chessboard pattern (NORTH, SOUTH, EAST, WEST). Also tracks gripper
+        reach depth relative to board boundaries and warns if wheel clearance approaches collision limits.
+        """
         try:
             t: TransformStamped = self.tf_buffer.lookup_transform(
                 self.board_frame, self.base_frame, rclpy.time.Time()
@@ -186,7 +192,15 @@ class StandoffCalibratorNode(Node):
     def handle_save_standoff(
         self, request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
-        """Saves calibrated edge clearance to YAML file."""
+        """Handle service request to persist measured standoff clearance to YAML.
+
+        Args:
+            request: Empty ROS Trigger service request.
+            response: Trigger service response containing success status and report message.
+
+        Returns:
+            Populated Trigger.Response with status and human-readable feedback.
+        """
         if self.last_measured_clearance is None:
             response.success = False
             response.message = "Chưa nhận được dữ liệu TF giữa robot và bàn cờ."
@@ -234,6 +248,7 @@ class StandoffCalibratorNode(Node):
 
 
 def main(args=None) -> None:
+    """Initialize ROS context and run standoff calibrator node until interrupted."""
     rclpy.init(args=args)
     node = StandoffCalibratorNode()
     try:

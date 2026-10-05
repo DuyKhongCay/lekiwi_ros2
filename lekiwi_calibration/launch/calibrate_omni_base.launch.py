@@ -16,7 +16,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description() -> LaunchDescription:
-    """Configures robot bringup via robot.launch.py, maintains perception context, and runs calibrator."""
+    """Configure robot bringup via robot.launch.py, maintain perception context, and run calibrator."""
     calib_share = FindPackageShare("lekiwi_calibration")
     bringup_share = FindPackageShare("lekiwi_bringup")
 

@@ -19,22 +19,26 @@ class HandEyeSolver:
         "Daniilidis": cv2.CALIB_HAND_EYE_DANIILIDIS,
     }
 
-    def __init__(self, is_eye_in_hand=False):
-        """
-        is_eye_in_hand:
-            False: Eye-to-Hand (Camera fixed on base/world, target on gripper).
-            True: Eye-in-Hand (Camera on gripper, target fixed on base/world).
+    def __init__(self, is_eye_in_hand: bool = False):
+        """Initialize HandEyeSolver with designated configuration mode.
+
+        Args:
+            is_eye_in_hand: False for Eye-to-Hand (camera on base/world, target on gripper);
+                True for Eye-in-Hand (camera on gripper, target on base/world).
         """
         self.is_eye_in_hand = is_eye_in_hand
-        self.samples = []  # list of dict: {"robot": 4x4, "tracking": 4x4}
+        self.samples = []  # List of sample dictionaries containing "robot" and "tracking" SE(3) matrices
 
     def add_sample(self, robot_T: np.ndarray, tracking_T: np.ndarray) -> int:
-        """
-        robot_T:
-            For Eye-to-Hand (eye-on-base): transform from gripper to base (T_gripper2base).
-            For Eye-in-Hand: transform from base to gripper (T_base2gripper).
-        tracking_T:
-            Transform from camera to marker target (T_target2cam).
+        """Add a synchronized robot arm and visual tracking pose pair.
+
+        Args:
+            robot_T: 4x4 transform matrix from gripper to base (Eye-to-Hand) or
+                base to gripper (Eye-in-Hand).
+            tracking_T: 4x4 transform matrix from camera to target board (T_target2cam).
+
+        Returns:
+            Total count of accumulated samples.
         """
         self.samples.append({
             "robot": robot_T.copy(),
@@ -43,18 +47,27 @@ class HandEyeSolver:
         return len(self.samples)
 
     def remove_last_sample(self) -> int:
+        """Remove the most recently recorded sample pair from buffer."""
         if self.samples:
             self.samples.pop()
         return len(self.samples)
 
-    def clear_samples(self):
+    def clear_samples(self) -> None:
+        """Reset and discard all accumulated sample pairs."""
         self.samples.clear()
 
     def compute(self) -> tuple[dict, str, dict]:
-        """
-        Solves hand-eye for all available algorithms.
+        """Solve Hand-Eye calibration across all supported OpenCV algorithms and select best result.
+
+        Evaluates relative motion consistency ||A*X - X*B|| for each method:
+        Tsai-Lenz, Park, Horaud, Andreff, and Daniilidis.
+
         Returns:
-            (results_dict, best_method_name, best_metrics)
+            Tuple of (results_dict, best_method_name, best_metrics_dict).
+
+        Raises:
+            ValueError: If fewer than 3 samples have been collected.
+            RuntimeError: If all candidate algorithms fail to converge.
         """
         n = len(self.samples)
         if n < 3:
@@ -121,9 +134,23 @@ class HandEyeSolver:
 
         return results, best_name, metrics
 
-    def save_yaml(self, filepath: str, parent_frame: str, child_frame: str,
-                  best_T: np.ndarray, metrics: dict):
-        """Saves calibration result to YAML file."""
+    def save_yaml(
+        self,
+        filepath: str,
+        parent_frame: str,
+        child_frame: str,
+        best_T: np.ndarray,
+        metrics: dict,
+    ) -> None:
+        """Serialize optimal Hand-Eye calibration transform and metrics to YAML file.
+
+        Args:
+            filepath: Destination file path for YAML configuration.
+            parent_frame: Parent coordinate frame ID.
+            child_frame: Child coordinate frame ID.
+            best_T: Optimal 4x4 SE(3) transformation matrix.
+            metrics: Calibration metrics dictionary (residual error, Euler angles, samples count).
+        """
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         rot = Rotation.from_matrix(best_T[:3, :3])
         quat = rot.as_quat()  # x, y, z, w

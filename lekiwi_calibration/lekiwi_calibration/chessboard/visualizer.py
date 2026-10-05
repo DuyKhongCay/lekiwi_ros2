@@ -60,7 +60,20 @@ class CalibratorVisualizer:
         rms_err: Optional[float],
         notification: Notification,
     ) -> np.ndarray:
-        """Renders detections, perimeter lines, HUD elements, and popups onto canvas."""
+        """Render AprilTag detections, board perimeter, HUD telemetry, and notification popups.
+
+        Args:
+            base_img: Raw BGR camera image frame, or None to render on fallback canvas.
+            detections: Dictionary mapping tag IDs to (4, 2) corner pixel coordinates.
+            captured_cnt: Current number of accepted calibration frame captures.
+            is_auto: True if automatic timer-based capture mode is active.
+            calib_state: Current CalibState enum representing optimization progress.
+            rms_err: Current calibration root-mean-square reprojection error in pixels, if solved.
+            notification: Active transient notification message badge to overlay.
+
+        Returns:
+            Annotated BGR canvas with rendered telemetry, borders, and UI guides.
+        """
         if base_img is not None:
             canvas = base_img.copy()
         else:

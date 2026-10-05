@@ -13,7 +13,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description() -> LaunchDescription:
-    """Configures full robot bringup (base, IMU, gamepad, camera, TF) and runs Standoff Calibrator."""
+    """Configure full robot bringup (base, IMU, gamepad, camera, TF) and run Standoff Calibrator."""
     bringup_share = FindPackageShare("lekiwi_bringup")
     calib_share = FindPackageShare("lekiwi_calibration")
 

@@ -27,7 +27,10 @@ from lekiwi_interfaces.srv import SetTorqueEnabled
 
 
 class HandEyeCalibrationNode(Node):
-    def __init__(self):
+    """Interactive OpenCV GUI calibration node for Hand-Eye coordinate registration."""
+
+    def __init__(self) -> None:
+        """Initialize HandEye calibration parameters, subscriptions, and TF listeners."""
         super().__init__("handeye_calibration_node")
 
         # ── Parameter Declarations ──
@@ -142,8 +145,13 @@ class HandEyeCalibrationNode(Node):
         if self.get_parameter("auto_disable_arm_torque").value:
             threading.Timer(2.5, lambda: self.set_arm_torque(False)).start()
 
-    def set_arm_torque(self, enabled: bool, timeout_sec: float = 3.0):
-        """Send torque request directly to TorqueManagerNode (controllers.launch.py)."""
+    def set_arm_torque(self, enabled: bool, timeout_sec: float = 3.0) -> None:
+        """Send asynchronous torque enable/disable request to TorqueManagerNode.
+
+        Args:
+            enabled: True to lock servos, False to permit manual lead-through manipulation.
+            timeout_sec: Maximum wait duration in seconds for service discovery.
+        """
         if not self._torque_client.wait_for_service(timeout_sec=timeout_sec):
             msg = (
                 f"Service '{self.set_torque_service_name}' not available. "
@@ -180,11 +188,12 @@ class HandEyeCalibrationNode(Node):
 
         future.add_done_callback(_on_done)
 
-    def toggle_arm_torque(self):
-        """Toggle arm torque between enabled and disabled."""
+    def toggle_arm_torque(self) -> None:
+        """Toggle robotic arm torque between locked and free lead-through modes."""
         self.set_arm_torque(not self.arm_torque_enabled)
 
-    def _on_camera_info(self, msg: CameraInfo):
+    def _on_camera_info(self, msg: CameraInfo) -> None:
+        """Cache intrinsic camera matrix K and distortion coefficients D from topic."""
         if self.K is None:
             self.K = np.array(msg.k, dtype=np.float64).reshape((3, 3))
             self.D = np.array(msg.d, dtype=np.float64)
@@ -194,7 +203,8 @@ class HandEyeCalibrationNode(Node):
                 f"Received CameraInfo: frame='{self._camera_frame}', K shape={self.K.shape}"
             )
 
-    def _on_image(self, msg: Image):
+    def _on_image(self, msg: Image) -> None:
+        """Convert incoming ROS Image message to OpenCV BGR representation."""
         try:
             self.latest_bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
             self.latest_stamp = msg.header.stamp
@@ -203,7 +213,14 @@ class HandEyeCalibrationNode(Node):
         except Exception as e:
             self.get_logger().error(f"Image conversion failed: {e}")
 
-    def _publish_target_tf(self, rvec, tvec, stamp):
+    def _publish_target_tf(self, rvec: np.ndarray, tvec: np.ndarray, stamp) -> None:
+        """Broadcast live ChArUco target pose transform via TF2.
+
+        Args:
+            rvec: Rodrigues rotation vector from PnP solve.
+            tvec: Translation vector from PnP solve.
+            stamp: Timestamp applied to transform header.
+        """
         if not self._camera_frame or rvec is None or tvec is None:
             return
 
@@ -231,8 +248,12 @@ class HandEyeCalibrationNode(Node):
 
         self.tf_broadcaster.sendTransform(tfs)
 
-    def _take_sample(self):
-        """Captures pair of robot pose and tracking pose from TF."""
+    def _take_sample(self) -> None:
+        """Capture synchronized pair of robot arm pose and visual tracking pose from TF2.
+
+        Queries TF between base_frame and robot_effector_frame, as well as camera_frame
+        and target_frame, adding the resulting 4x4 matrix pair to HandEyeSolver.
+        """
         if not self._camera_frame:
             self.status_msg = "⚠️ No camera frame received yet!"
             return
@@ -284,7 +305,8 @@ class HandEyeCalibrationNode(Node):
         self.status_msg = f"✅ Sample #{count} taken! (Total: {count})"
         self.get_logger().info(f"[HandEye] Sample #{count} added successfully.")
 
-    def _compute_and_report(self):
+    def _compute_and_report(self) -> None:
+        """Execute Hand-Eye solver algorithms on collected samples and report best metrics."""
         try:
             results, best_name, metrics = self.solver.compute()
             self.last_computed_result = (results, best_name, metrics)
@@ -307,7 +329,8 @@ class HandEyeCalibrationNode(Node):
             self.status_msg = f"❌ Compute failed: {e}"
             self.get_logger().error(self.status_msg)
 
-    def _save_result(self):
+    def _save_result(self) -> None:
+        """Serialize optimal Hand-Eye transformation matrix and metadata to YAML."""
         if not self.last_computed_result:
             self.status_msg = "⚠️ Please press [C] to compute calibration first!"
             return
@@ -328,7 +351,12 @@ class HandEyeCalibrationNode(Node):
         self.status_msg = f"💾 Saved to {self.output_yaml}"
         self.get_logger().info(f"Saved calibration YAML to: {self.output_yaml}")
 
-    def _gui_tick(self):
+    def _gui_tick(self) -> None:
+        """Process OpenCV window redraw, banner telemetry, and handle keyboard controls.
+
+        Renders target ChArUco detection, reprojection errors, and interactive status.
+        Dispatches hotkey actions for sampling, solving, torque toggling, and file export.
+        """
         if self.latest_bgr is None:
             # Render waiting screen
             frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -469,7 +497,8 @@ class HandEyeCalibrationNode(Node):
             self.running = False
 
 
-def main(args=None):
+def main(args=None) -> None:
+    """Initialize ROS 2 multithreaded executor and run Hand-Eye GUI loop."""
     rclpy.init(args=args)
     node = HandEyeCalibrationNode()
 

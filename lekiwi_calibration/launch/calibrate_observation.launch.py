@@ -18,6 +18,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description() -> LaunchDescription:
+    """Generate launch description for manual observation viewpoint calibrator."""
     bringup_share = FindPackageShare("lekiwi_bringup")
     calib_share = FindPackageShare("lekiwi_calibration")
 

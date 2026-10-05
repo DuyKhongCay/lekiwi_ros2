@@ -14,6 +14,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    """Generate launch description for hand-eye calibration with camera and arm bringup."""
     pkg_share = FindPackageShare("lekiwi_calibration")
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")

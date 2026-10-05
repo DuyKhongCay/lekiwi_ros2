@@ -1,6 +1,8 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""OpenCV ChArUco target board detection and 6-DoF camera pose estimation."""
+
 from packaging.version import Version
 import cv2
 import cv2.aruco as aruco
@@ -20,15 +22,18 @@ DICT_MAP = {
 
 
 class CharucoDetectorHelper:
+    """Helper wrapper for ChArUco board creation, corner interpolation, and PnP pose estimation."""
+
     def __init__(
         self,
-        squares_x=3,
-        squares_y=4,
-        square_len_m=0.006,
-        marker_len_m=0.0045,
-        dict_name="DICT_4X4_50",
-        min_markers=1,
+        squares_x: int = 3,
+        squares_y: int = 4,
+        square_len_m: float = 0.006,
+        marker_len_m: float = 0.0045,
+        dict_name: str = "DICT_4X4_50",
+        min_markers: int = 1,
     ):
+        """Initialize ChArUco board geometry, dictionary, and detector parameters across OpenCV versions."""
         self.squares_x = squares_x
         self.squares_y = squares_y
         self.square_len_m = square_len_m
@@ -61,11 +66,27 @@ class CharucoDetectorHelper:
             self.det_params = aruco.DetectorParameters_create()
             self.detector = None
 
-    def detect_and_estimate_pose(self, bgr_img, K, D, max_reproj_px=3.0):
-        """
-        Detects ChArUco board and calculates camera-to-board pose.
+    def detect_and_estimate_pose(
+        self,
+        bgr_img: np.ndarray,
+        K: np.ndarray,
+        D: np.ndarray,
+        max_reproj_px: float = 3.0,
+    ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, float | None, int]:
+        """Detect ChArUco corners and estimate 6-DoF camera-to-board pose using PnP.
+
+        Supports dual-path OpenCV execution (OpenCV >= 4.8 CharucoDetector vs legacy API).
+        Filters accepted poses by average reprojection pixel error threshold.
+
+        Args:
+            bgr_img: Input color BGR image frame.
+            K: Intrinsic camera calibration matrix (3x3).
+            D: Lens distortion coefficients.
+            max_reproj_px: Maximum permissible mean reprojection error in pixels.
+
         Returns:
-            (annotated_img, rvec, tvec, reproj_err, num_corners)
+            Tuple of (annotated_img, rvec, tvec, reproj_err, num_corners).
+            rvec and tvec will be None if detection fails or reprojection error exceeds threshold.
         """
         if bgr_img is None or K is None or D is None:
             return bgr_img, None, None, None, 0
