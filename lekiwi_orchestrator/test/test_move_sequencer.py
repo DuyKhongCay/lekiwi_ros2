@@ -27,8 +27,8 @@ from lekiwi_orchestrator.move_planner import (
 from lekiwi_orchestrator.move_sequencer import MoveSequencer
 from lekiwi_orchestrator.obs_navigator import ObsNavigator
 from lekiwi_orchestrator.perception_context import PerceptionContextManager
+from lekiwi_orchestrator.turn_workflow import MoveWorkflow
 from rclpy.node import Node
-
 
 
 class DummyPipelineDispatcher(MotionClient):
@@ -102,7 +102,7 @@ def test_build_zero_nav_stage(base_goal):
     resp.pick_point = Point(x=0.1, y=0.2, z=0.03)
     resp.place_point = Point(x=0.3, y=0.4, z=0.03)
 
-    stages = MovePlanBuilder.build_stages(resp, base_goal)
+    stages = MovePlanBuilder.build_steps(resp, base_goal)
     assert len(stages) == 1
     assert stages[0].name == "MOVE"
     assert stages[0].target_pose is None
@@ -118,7 +118,7 @@ def test_build_single_base_stage(base_goal):
     resp.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
     resp.pick_base_pose.pose.position.x = 1.0
 
-    stages = MovePlanBuilder.build_stages(resp, base_goal)
+    stages = MovePlanBuilder.build_steps(resp, base_goal)
     assert len(stages) == 1
     assert stages[0].name == "MOVE"
     assert stages[0].target_pose is not None
@@ -133,7 +133,7 @@ def test_build_dual_base_stages(base_goal):
     resp.pick_base_pose.pose.position.x = 1.0
     resp.place_base_pose.pose.position.x = 2.0
 
-    stages = MovePlanBuilder.build_stages(resp, base_goal)
+    stages = MovePlanBuilder.build_steps(resp, base_goal)
     assert len(stages) == 2
     assert stages[0].name == "PICK"
     assert stages[0].target_pose.pose.position.x == 1.0
@@ -151,7 +151,7 @@ def test_build_capture_zero_nav_stages(capture_goal):
     resp.plan_type = CheckMoveFeasibility.Response.PLAN_CAPTURE_ZERO_NAV
     resp.clear_point = Point(x=0.5, y=0.5, z=0.03)
 
-    stages = MovePlanBuilder.build_stages(resp, capture_goal)
+    stages = MovePlanBuilder.build_steps(resp, capture_goal)
     assert len(stages) == 2
     assert stages[0].name == "CLEAR"
     assert stages[0].is_capture is True
@@ -167,7 +167,7 @@ def test_build_capture_triple_base_stages(capture_goal):
     resp.pick_base_pose.pose.position.x = 2.0
     resp.place_base_pose.pose.position.x = 3.0
 
-    stages = MovePlanBuilder.build_stages(resp, capture_goal)
+    stages = MovePlanBuilder.build_steps(resp, capture_goal)
     assert len(stages) == 3
     assert stages[0].name == "CLEAR"
     assert stages[0].motion_state == MotionExecutionState.CLEARING_PIECE
@@ -185,9 +185,7 @@ def test_build_stages_with_observation_pose(base_goal):
     obs_pose = PoseStamped()
     obs_pose.pose.position.x = -0.65
 
-    stages = MovePlanBuilder.build_stages(
-        resp, base_goal, observation_pose=obs_pose
-    )
+    stages = MovePlanBuilder.build_steps(resp, base_goal, observation_pose=obs_pose)
     assert len(stages) == 2
     assert stages[0].name == "MOVE"
     assert stages[1].name == "OBSERVATION"
@@ -247,9 +245,7 @@ def test_move_pipeline_executor_lifecycle(ros_context):
         obs_pose.pose.position.x = -0.65
 
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(
-            resp, goal, observation_pose=obs_pose
-        )
+        stages = MovePlanBuilder.build_steps(resp, goal, observation_pose=obs_pose)
 
         # Run pipeline
         executor.start_pipeline(stages, resp)
@@ -296,7 +292,7 @@ def test_move_pipeline_executor_cancellation(ros_context):
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
         resp.pick_base_pose.pose.position.x = 1.0
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages, resp)
         executor.cancel()
@@ -334,7 +330,7 @@ def test_stage_pipeline_builder_custom_registry(base_goal):
     resp = CheckMoveFeasibility.Response()
     resp.plan_type = custom_plan_type
 
-    stages = MovePlanBuilder.build_stages(resp, base_goal)
+    stages = MovePlanBuilder.build_steps(resp, base_goal)
     assert len(stages) == 1
     assert stages[0].name == "CUSTOM_PROMOTION_STAGE"
     assert stages[0].instruction == "Custom promotion handler executed"
@@ -366,7 +362,7 @@ def test_move_pipeline_grasp_readiness_timeout_fails_safely(ros_context):
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages, resp)
 
@@ -413,7 +409,7 @@ def test_move_pipeline_grasp_readiness_settle_success(ros_context):
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages, resp)
 
@@ -470,7 +466,7 @@ def test_pipeline_cancellation_during_grasp_settle(ros_context):
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages, resp)
 
@@ -535,7 +531,7 @@ def test_active_relocalization_on_grasp_unready_success(ros_context):
         resp.pick_base_pose.pose.position.x = 1.0
         resp.pick_base_pose.header.frame_id = "map"
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages, resp)
 
@@ -583,7 +579,7 @@ def test_active_relocalization_on_grasp_unready_exhaustion(ros_context):
         resp.pick_base_pose.pose.position.x = 1.0
         resp.pick_base_pose.header.frame_id = "map"
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages, resp)
 
@@ -652,7 +648,7 @@ def test_active_relocalization_nav_action_failure_retries(ros_context):
         resp.pick_base_pose.pose.position.x = 1.0
         resp.pick_base_pose.header.frame_id = "map"
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages, resp)
 
@@ -707,7 +703,7 @@ def test_active_relocalization_nav_dispatch_failure(ros_context):
         resp.pick_base_pose.pose.position.x = 1.0
         resp.pick_base_pose.header.frame_id = "map"
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages, resp)
 
@@ -726,7 +722,7 @@ def test_build_capture_dual_base(capture_goal):
     resp.clear_base_pose.pose.position.x = 0.2
     resp.pick_base_pose.pose.position.x = 0.5
     resp.place_base_pose.pose.position.x = 0.5
-    stages = MovePlanBuilder.build_stages(resp, capture_goal)
+    stages = MovePlanBuilder.build_steps(resp, capture_goal)
     assert len(stages) == 3
     assert stages[0].name == "CLEAR"
     assert stages[1].name == "PICK"
@@ -735,7 +731,7 @@ def test_build_capture_dual_base(capture_goal):
 
     # Test clear_same_as_pick = True branch
     resp.pick_base_pose.pose.position.x = 0.2
-    stages_same = MovePlanBuilder.build_stages(resp, capture_goal)
+    stages_same = MovePlanBuilder.build_steps(resp, capture_goal)
     assert stages_same[1].target_pose is None
 
 
@@ -743,7 +739,7 @@ def test_build_fallback_stage(base_goal):
     resp = CheckMoveFeasibility.Response()
     resp.plan_type = 99999
     resp.pick_base_pose.pose.position.x = 0.8
-    stages = MovePlanBuilder.build_stages(resp, base_goal)
+    stages = MovePlanBuilder.build_steps(resp, base_goal)
     assert len(stages) == 1
     assert stages[0].name == "MOVE"
     assert stages[0].target_pose is not None
@@ -784,7 +780,9 @@ def test_manipulation_feedback_and_failure(ros_context):
                 fb.feedback = Mock(current_phase="PICK", progress_percent=50.0)
                 on_feedback(fb)
             if on_completed:
-                on_completed(ActionResult(success=False, message="Arm trajectory abort"))
+                on_completed(
+                    ActionResult(success=False, message="Arm trajectory abort")
+                )
             return True
 
     dispatcher = FailManipDispatcher()
@@ -805,7 +803,7 @@ def test_manipulation_feedback_and_failure(ros_context):
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
         executor.start_pipeline(stages, resp)
 
         assert len(failed_events) == 1
@@ -844,7 +842,7 @@ def test_manipulation_dispatch_failure(ros_context):
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
         executor.start_pipeline(stages, resp)
 
         assert len(failed_events) == 1
@@ -860,7 +858,7 @@ def test_stage_pipeline_builder_capture_single_base(capture_goal):
     resp = CheckMoveFeasibility.Response()
     resp.plan_type = CheckMoveFeasibility.Response.PLAN_CAPTURE_SINGLE_BASE
     resp.clear_base_pose.pose.position.x = 0.5
-    stages = MovePlanBuilder.build_stages(resp, capture_goal)
+    stages = MovePlanBuilder.build_steps(resp, capture_goal)
     assert len(stages) == 2
     assert stages[0].name == "CLEAR"
     assert stages[1].name == "MOVE"
@@ -894,7 +892,7 @@ def test_nav_stage_dispatch_failure(ros_context):
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
         resp.pick_base_pose.pose.position.x = 1.0
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
         executor.start_pipeline(stages, resp)
 
         assert len(failed_events) == 1
@@ -937,7 +935,7 @@ def test_nav_stage_action_failure(ros_context):
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
         resp.pick_base_pose.pose.position.x = 1.0
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
-        stages = MovePlanBuilder.build_stages(resp, goal)
+        stages = MovePlanBuilder.build_steps(resp, goal)
         executor.start_pipeline(stages, resp)
 
         assert len(failed_events) == 1
@@ -948,3 +946,71 @@ def test_nav_stage_action_failure(ros_context):
         dispatcher.destroy()
         node.destroy_node()
 
+
+def test_capture_triple_base_observation_pose_anchored_to_place_base(ros_context):
+    """
+    Verify regression: in CAPTURE_TRIPLE_BASE with place_base_pose at South (y < 0),
+    the computed observation pose is anchored radially to South (y < 0), NOT North (y > 0).
+    """
+    node = Node("test_capture_obs_anchor_node")
+    dispatcher = DummyPipelineDispatcher()
+    try:
+        obs_nav = ObsNavigator(
+            node=node,
+            dispatcher=dispatcher,
+            map_frame="map",
+            board_frame="chessboard_frame",
+            standoff_distance=0.569,
+            radius_tolerance=0.08,
+            angle_offsets_map={ObservationIntent.POST_MOVE_VERIFY: [0.0]},
+            tf_buffer=None,
+        )
+
+        resp = CheckMoveFeasibility.Response()
+        resp.feasible = True
+        resp.plan_type = CheckMoveFeasibility.Response.PLAN_CAPTURE_TRIPLE_BASE
+
+        # Clear base at North-West
+        resp.clear_base_pose.header.frame_id = "chessboard_frame"
+        resp.clear_base_pose.pose.position.x = -0.3
+        resp.clear_base_pose.pose.position.y = 0.3
+
+        # Pick base at Center
+        resp.pick_base_pose.header.frame_id = "chessboard_frame"
+        resp.pick_base_pose.pose.position.x = -0.1
+        resp.pick_base_pose.pose.position.y = 0.2
+
+        # Place base at South (e.g. e4 capture completed on South side)
+        resp.place_base_pose.header.frame_id = "chessboard_frame"
+        resp.place_base_pose.pose.position.x = 0.0
+        resp.place_base_pose.pose.position.y = -0.4
+
+        # Extract last base pose using MoveWorkflow static method
+        last_base_pose = MoveWorkflow.extract_valid_base_pose(resp)
+        assert last_base_pose is resp.place_base_pose
+
+        # Compute observation pose
+        obs_pose = obs_nav.compute_observation_pose_for_base(last_base_pose)
+        assert obs_pose is not None
+
+        # Must be on standoff circle anchored to South (y < 0)
+        assert obs_pose.pose.position.y < -0.5  # Should be approx -0.569
+        assert abs(obs_pose.pose.position.x) < 0.05  # approx 0.0
+
+        details = ChessMoveGoal(
+            uci="d5e4",
+            from_square="d5",
+            to_square="e4",
+            is_capture=True,
+            captured_square="e4",
+        )
+        steps = MovePlanBuilder.build_steps(resp, details, observation_pose=obs_pose)
+
+        # Last step is the observation retreat step
+        obs_step = steps[-1]
+        assert obs_step.name in (StepKind.OBSERVATION, "OBSERVATION")
+        assert obs_step.nav_motion_state == MotionExecutionState.NAV_TO_OBS
+        assert obs_step.target_pose is not None
+        assert obs_step.target_pose.pose.position.y < -0.5
+    finally:
+        node.destroy_node()

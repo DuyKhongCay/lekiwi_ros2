@@ -126,7 +126,6 @@ def test_move_sequencer_has_no_node_or_turn_workflow_imports():
         ), f"move_sequencer.py violates architecture: imports {imp}"
 
 
-
 def test_file_line_counts_under_budget():
     """Verify all Python source files in lekiwi_orchestrator are within 1000 lines."""
     for py_file in PACKAGE_ROOT.rglob("*.py"):
@@ -165,12 +164,12 @@ def test_zero_legacy_aliases_in_package():
         "PostMoveWatchdog",
     ]
     for symbol in legacy_symbols:
-        assert symbol not in lekiwi_orchestrator.__all__, (
-            f"Legacy alias '{symbol}' still exported in lekiwi_orchestrator.__all__"
-        )
-        assert not hasattr(lekiwi_orchestrator, symbol), (
-            f"Legacy alias '{symbol}' still exists on lekiwi_orchestrator module"
-        )
+        assert (
+            symbol not in lekiwi_orchestrator.__all__
+        ), f"Legacy alias '{symbol}' still exported in lekiwi_orchestrator.__all__"
+        assert not hasattr(
+            lekiwi_orchestrator, symbol
+        ), f"Legacy alias '{symbol}' still exists on lekiwi_orchestrator module"
 
 
 def test_parameters_invalid_readiness_timeout():
@@ -213,5 +212,3 @@ def test_move_step_to_ros_goal_missing_interface(monkeypatch):
         RuntimeError, match="ExecuteChessMove action interface is unavailable"
     ):
         step.to_ros_goal("board")
-
-

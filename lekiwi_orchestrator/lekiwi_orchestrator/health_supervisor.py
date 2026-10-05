@@ -186,10 +186,6 @@ class StatusMarkerBuilder:
         return markers
 
 
-# Backward compatibility alias
-MissionStatusMarkerBuilder = StatusMarkerBuilder
-
-
 # ==============================================================================
 # Node Health Supervisor
 # ==============================================================================

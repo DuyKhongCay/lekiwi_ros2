@@ -10,10 +10,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
 
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
-
 
 # ==============================================================================
 # SE(2) Primitives
@@ -36,12 +34,6 @@ def normalize_angle(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
-def get_default_approach_yaw(robot_color: str) -> float:
-    """Return default observation approach yaw based on robot color (-pi/2 for White, pi/2 for Black)."""
-    return -math.pi / 2.0 if str(robot_color).lower().startswith("w") else math.pi / 2.0
-
-
-default_approach_yaw = get_default_approach_yaw
 
 
 def _create_standoff_pose(
@@ -60,60 +52,7 @@ def _create_standoff_pose(
     return pose
 
 
-# ==============================================================================
-# Coordinate Frame Transforms
-# ==============================================================================
 
-
-def transform_board_pose_to_map(
-    pose_board: PoseStamped,
-    map_frame: str = "map",
-    board_x: float = 0.0,
-    board_y: float = 0.0,
-    board_yaw: float = 0.0,
-    tf_buffer: Any | None = None,
-    logger: Any | None = None,
-) -> PoseStamped:
-    """
-    Transform a PoseStamped from chessboard_frame to map frame.
-
-    Uses tf2_ros.Buffer if available and functional. If TF transform fails,
-    logs an explicit warning and falls back to SE(2) planar transform with yaw facing the chessboard center.
-    """
-    if tf_buffer is not None:
-        try:
-            return tf_buffer.transform(pose_board, map_frame)
-        except Exception as ex:
-            if logger is not None:
-                src_frame = getattr(pose_board.header, "frame_id", "chessboard_frame")
-                logger.warn(
-                    f"[TF TRANSFORM FALLBACK] tf_buffer.transform from '{src_frame}' to '{map_frame}' "
-                    f"failed: {ex}. Falling back to planar SE(2) transform with board pose "
-                    f"({board_x:.3f}, {board_y:.3f}, yaw={board_yaw:.3f})."
-                )
-                if abs(board_x) < 1e-4 and abs(board_y) < 1e-4 and abs(board_yaw) < 1e-4:
-                    logger.warn(
-                        "[TF TRANSFORM FALLBACK] Board pose reference is at origin (0, 0, 0). "
-                        "Planar map coordinates may deviate from real workspace."
-                    )
-
-    cos_b = math.cos(board_yaw)
-    sin_b = math.sin(board_yaw)
-    bx = float(pose_board.pose.position.x)
-    by = float(pose_board.pose.position.y)
-
-    map_x = board_x + (bx * cos_b - by * sin_b)
-    map_y = board_y + (bx * sin_b + by * cos_b)
-
-    facing_board_yaw = math.atan2(-by, -bx)
-    facing_map_yaw = facing_board_yaw + board_yaw
-
-    return _create_standoff_pose(
-        target_x=map_x,
-        target_y=map_y,
-        facing_yaw=facing_map_yaw,
-        frame_id=map_frame,
-    )
 
 
 # ==============================================================================

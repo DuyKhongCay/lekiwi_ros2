@@ -214,9 +214,6 @@ class MovePlanBuilder:
             steps.append(_observation_step(observation_pose))
         return steps
 
-    # Backward compatibility alias
-    build_stages = build_steps
-
     @staticmethod
     def _build_zero_nav(
         resp: CheckMoveFeasibility.Response,

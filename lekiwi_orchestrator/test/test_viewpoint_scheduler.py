@@ -16,7 +16,6 @@ from lekiwi_orchestrator.board_geometry import (
     is_on_standoff_circle,
     normalize_angle,
     rank_by_azimuth,
-    transform_board_pose_to_map,
     yaw_to_quaternion,
 )
 
@@ -69,7 +68,12 @@ def test_compute_radial_entry_pose_diagonal():
 
 
 def test_compute_radial_entry_pose_at_origin():
-    # Robot is at (0.0, 0.0), should use fallback_yaw (e.g. pi/2 for Black)
+    # Robot is at (0.0, 0.0), default fallback_yaw=0.0 rad along +X axis of chessboard_frame
+    pose_default = compute_radial_entry_pose(0.0, 0.0, standoff_radius=0.56)
+    assert math.isclose(pose_default.pose.position.x, 0.56, abs_tol=1e-3)
+    assert math.isclose(pose_default.pose.position.y, 0.0, abs_tol=1e-3)
+
+    # With explicit fallback_yaw
     pose = compute_radial_entry_pose(
         0.0, 0.0, standoff_radius=0.56, fallback_yaw=math.pi / 2
     )
@@ -146,68 +150,5 @@ def test_yaw_to_quaternion():
     assert math.isclose(q_half_pi.w, math.cos(math.pi / 4.0), abs_tol=1e-5)
 
 
-def test_transform_board_pose_to_map_planar():
-    # Pose in board frame at (0.56, 0.0)
-    pose_board = PoseStamped()
-    pose_board.header.frame_id = "chessboard_frame"
-    pose_board.pose.position.x = 0.56
-    pose_board.pose.position.y = 0.0
 
-    # 1. Identity board pose (board origin at map (0, 0), yaw = 0)
-    pose_map = transform_board_pose_to_map(
-        pose_board=pose_board,
-        map_frame="map",
-        board_x=0.0,
-        board_y=0.0,
-        board_yaw=0.0,
-    )
-    assert pose_map.header.frame_id == "map"
-    assert math.isclose(pose_map.pose.position.x, 0.56, abs_tol=1e-3)
-    assert math.isclose(pose_map.pose.position.y, 0.0, abs_tol=1e-3)
-
-    # 2. Translated and rotated board (board at (1.0, 2.0), rotated 90 deg)
-    pose_map_rot = transform_board_pose_to_map(
-        pose_board=pose_board,
-        map_frame="map",
-        board_x=1.0,
-        board_y=2.0,
-        board_yaw=math.pi / 2.0,
-    )
-    # in map: (1.0 + 0.56*cos(pi/2), 2.0 + 0.56*sin(pi/2)) = (1.0, 2.56)
-    assert math.isclose(pose_map_rot.pose.position.x, 1.0, abs_tol=1e-3)
-    assert math.isclose(pose_map_rot.pose.position.y, 2.56, abs_tol=1e-3)
-
-
-def test_transform_board_pose_to_map_with_tf_buffer():
-    pose_board = PoseStamped()
-    pose_board.header.frame_id = "chessboard_frame"
-    pose_board.pose.position.x = 0.56
-
-    mock_tf = Mock()
-    mock_transformed = PoseStamped()
-    mock_transformed.header.frame_id = "map"
-    mock_transformed.pose.position.x = 3.5
-    mock_transformed.pose.position.y = 4.5
-    mock_tf.transform.return_value = mock_transformed
-
-    # When TF transform succeeds
-    res = transform_board_pose_to_map(
-        pose_board=pose_board,
-        map_frame="map",
-        tf_buffer=mock_tf,
-    )
-    assert res is mock_transformed
-
-    # When TF transform raises exception -> falls back to planar
-    mock_tf.transform.side_effect = RuntimeError("TF lookup failed")
-    mock_logger = Mock()
-    fallback_res = transform_board_pose_to_map(
-        pose_board=pose_board,
-        map_frame="map",
-        tf_buffer=mock_tf,
-        logger=mock_logger,
-    )
-    assert math.isclose(fallback_res.pose.position.x, 0.56, abs_tol=1e-3)
-    assert mock_logger.warn.called
-    assert "TF TRANSFORM FALLBACK" in mock_logger.warn.call_args_list[0][0][0]
 

@@ -155,8 +155,6 @@ def test_active_observation_navigator(ros_context):
         # Reposition 1: first viewpoint
         completed_results = []
         dispatched = navigator.reposition_to_next_viewpoint(
-            board_x=1.0,
-            board_y=1.0,
             on_completed=lambda res: completed_results.append(res),
         )
         assert dispatched
@@ -166,8 +164,6 @@ def test_active_observation_navigator(ros_context):
 
         # Reposition 2: second viewpoint
         dispatched_2 = navigator.reposition_to_next_viewpoint(
-            board_x=1.0,
-            board_y=1.0,
             on_completed=lambda res: completed_results.append(res),
         )
         assert dispatched_2
@@ -566,7 +562,7 @@ def test_tf_buffer_lookup_and_fallback(ros_context):
         mock_tf_buffer.transform.assert_called_once()
         assert mock_dispatcher.send_navigation_goal.called
 
-        # TF lookup raises exception -> fallback to geometric planar transform
+        # TF lookup/transform raises exception -> fails safe and returns False
         mock_tf_buffer.lookup_transform.side_effect = RuntimeError("TF timeout")
         mock_tf_buffer.transform.side_effect = RuntimeError("TF transform error")
 
@@ -578,15 +574,13 @@ def test_tf_buffer_lookup_and_fallback(ros_context):
         success = navigator.reposition_to_next_viewpoint(
             intent=ObservationIntent.POST_MOVE_VERIFY,
             reference_pose=ref_pose,
-            board_x=0.35,
-            board_y=0.0,
         )
-        assert success is True
+        assert success is False
 
-        # Check properties and setters
-        assert navigator.robot_color == "b"
-        navigator.robot_color = "w"
-        assert navigator.robot_color == "w"
+        # Check canonical fallback position on +X axis when reference pose is None
+        fallback_x, fallback_y = navigator.get_current_board_position(reference_pose=None)
+        assert math.isclose(fallback_x, navigator.standoff_distance, abs_tol=1e-3)
+        assert math.isclose(fallback_y, 0.0, abs_tol=1e-3)
 
         # Check empty offsets
         navigator._angle_offsets_map[ObservationIntent.RELOCALIZE] = []
@@ -657,9 +651,6 @@ def test_obs_navigator_cancellation_and_empty_cases(ros_context):
             intent=ObservationIntent.RELOCALIZE,
             curr_bx=0.65,
             curr_by=0.0,
-            board_x=0.0,
-            board_y=0.0,
-            board_yaw=0.0,
             timeout_sec=10.0,
             on_completed=None,
         )

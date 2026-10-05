@@ -88,6 +88,7 @@ class ChessMissionOrchestrator(Node):
         self,
         node_name: str = "chess_mission_orchestrator",
         motion_client: MotionClient | None = None,
+        tf_buffer: tf2_ros.Buffer | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(node_name, **kwargs)
@@ -103,8 +104,17 @@ class ChessMissionOrchestrator(Node):
         self._last_interaction_pose: PoseStamped | None = None
 
         # TF2 Buffer and TransformListener
-        self._tf_buffer = tf2_ros.Buffer()
-        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
+        if tf_buffer is not None:
+            self._tf_buffer = tf_buffer
+            self._tf_listener = None
+        elif motion_client is not None and not isinstance(
+            motion_client, RosMotionClient
+        ):
+            self._tf_buffer = None
+            self._tf_listener = None
+        else:
+            self._tf_buffer = tf2_ros.Buffer()
+            self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
         # Callback Groups
         self._cb_group_sub = MutuallyExclusiveCallbackGroup()
@@ -199,7 +209,6 @@ class ChessMissionOrchestrator(Node):
             board_frame=config.board_frame,
             standoff_distance=config.observation_standoff_distance,
             radius_tolerance=config.observation_radius_tolerance,
-            robot_color=config.robot_color,
             angle_offsets_map=angle_offsets_map,
             tf_buffer=getattr(self, "_tf_buffer", None),
         )
@@ -582,11 +591,6 @@ class ChessMissionOrchestrator(Node):
 
     def start_post_move_watchdog(self) -> None:
         self._post_move_verifier.start()
-
-    _set_current_move = set_current_move
-    _clear_move_goals = clear_move_goals
-    _set_last_interaction_pose = set_last_interaction_pose
-    _start_post_move_watchdog = start_post_move_watchdog
 
     def _dispatch_move_workflow(
         self,
