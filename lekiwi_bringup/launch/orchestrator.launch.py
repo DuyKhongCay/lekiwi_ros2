@@ -1,7 +1,11 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-"""Launch LeKiwi orchestration and readiness subsystem from lekiwi_bringup."""
+"""Launch file for LeKiwi mission orchestration and readiness management.
+
+Starts system readiness monitoring, workspace kinematics feasibility
+checks, and the central autonomous chess mission conductor node.
+"""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -12,12 +16,18 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Launch LeKiwi orchestration nodes (readiness supervisor, workspace checker, mission conductor)."""
+    """Configure and launch orchestration, readiness supervisor, and mission conductor.
+
+    Returns:
+        LaunchDescription containing orchestrator subsystem nodes.
+    """
+    # 1. Resolve configuration parameter paths
     bringup_share = FindPackageShare("lekiwi_bringup")
     default_params_file = PathJoinSubstitution(
         [bringup_share, "config", "control", "orchestrator.yaml"]
     )
 
+    # 2. Declare launch arguments
     params_file_arg = DeclareLaunchArgument(
         "params_file",
         default_value=default_params_file,
@@ -47,7 +57,7 @@ def generate_launch_description():
     params_file = LaunchConfiguration("params_file")
     use_sim_time = LaunchConfiguration("use_sim_time")
 
-    # 1. System Readiness Manager (Nav & Grasp readiness, EKF convergence, arm joints)
+    # 3. Define system readiness, workspace, and mission conductor nodes
     system_readiness_node = Node(
         package="lekiwi_motion",
         executable="system_readiness_node",
@@ -57,7 +67,6 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("start_readiness_manager")),
     )
 
-    # 2. Workspace Kinematics Feasibility & Base Standoff Planner
     workspace_checker_node = Node(
         package="lekiwi_motion",
         executable="workspace_checker_node",
@@ -66,7 +75,6 @@ def generate_launch_description():
         parameters=[params_file, {"use_sim_time": use_sim_time}],
     )
 
-    # 3. Autonomous Chess Mission Conductor
     chess_mission_node = Node(
         package="lekiwi_orchestrator",
         executable="chess_mission_orchestrator",
@@ -82,6 +90,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("start_mission")),
     )
 
+    # 4. Assemble LaunchDescription
     return LaunchDescription(
         [
             params_file_arg,

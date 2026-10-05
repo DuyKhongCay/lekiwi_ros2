@@ -1,6 +1,12 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""Dual-stage robot_localization EKF state estimation bringup launch file.
+
+Runs Local EKF (wheel odom + IMU yaw -> odom frame) and Global EKF
+(wheel odom + chessboard AprilTag visual pose -> map frame).
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -10,7 +16,12 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Launch LeKiwi localization subsystem (Local and Global robot_localization EKF)."""
+    """Configure Local EKF and Global EKF robot_localization estimation nodes.
+
+    Returns:
+        LaunchDescription containing both EKF filtering nodes.
+    """
+    # 1. Resolve EKF parameter configuration file paths
     bringup_share = FindPackageShare("lekiwi_bringup")
 
     ekf_local_params = PathJoinSubstitution(
@@ -20,6 +31,7 @@ def generate_launch_description():
         [bringup_share, "config", "localization", "ekf_global.yaml"]
     )
 
+    # 2. Declare launch arguments
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
         default_value="false",
@@ -28,7 +40,7 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration("use_sim_time")
 
-    # 1. Local EKF: Fuses Wheel Odometry and IMU angular velocity -> odom to base_footprint
+    # 3. Local EKF: fuses wheel odom and IMU angular velocity (odom -> base_footprint)
     ekf_local_node = Node(
         package="robot_localization",
         executable="ekf_node",
@@ -47,7 +59,7 @@ def generate_launch_description():
         ],
     )
 
-    # 2. Global EKF: Fuses Wheel Odom, IMU, and Chessboard Visual Pose -> map to odom
+    # 4. Global EKF: fuses wheel odom and visual chessboard pose (map -> odom)
     ekf_global_node = Node(
         package="robot_localization",
         executable="ekf_node",
@@ -66,6 +78,7 @@ def generate_launch_description():
         ],
     )
 
+    # 5. Assemble LaunchDescription
     return LaunchDescription(
         [
             use_sim_time_arg,

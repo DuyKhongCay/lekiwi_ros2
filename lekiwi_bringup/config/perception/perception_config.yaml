@@ -85,10 +85,10 @@ chessboard_pose_estimator:
     odom_topic: "/omni_base_controller/odom"
     odom_timeout_sec: 0.5
     covariance:
-      base_pos_var: 0.0001    # 1 cm std khi đứng yên
-      base_rot_var: 0.0004    # 1.15° std khi đứng yên
-      vel_scale_pos: 0.01     # m²/(m/s)² - tăng variance theo speed²
-      vel_scale_rot: 0.05     # rad²/(rad/s)² - tăng variance theo wz²
-      max_pos_var: 0.01       # 10 cm std clamp tối đa
-      max_rot_var: 0.04       # ~11.5° std clamp tối đa
+      base_pos_var: 0.0001    # 1 cm std when stationary
+      base_rot_var: 0.0004    # 1.15 deg std when stationary
+      vel_scale_pos: 0.01     # m^2/(m/s)^2 position variance scaling with speed^2
+      vel_scale_rot: 0.05     # rad^2/(rad/s)^2 rotation variance scaling with wz^2
+      max_pos_var: 0.01       # 10 cm max std clamp
+      max_rot_var: 0.04       # ~11.5 deg max std clamp
       scale_by_tag_count: true

@@ -1,6 +1,12 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""Top-level system bringup launch file for the LeKiwi robot.
+
+Composes all hardware, control, perception, navigation, manipulation,
+and orchestration subsystems into a unified runtime tree.
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
@@ -11,12 +17,17 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Top-level Bringup: Compose LeKiwi robot subsystems with streamlined configuration."""
+    """Compose and launch all LeKiwi robot subsystems with configurable arguments.
+
+    Returns:
+        LaunchDescription containing all declared arguments and subsystem includes.
+    """
+    # 1. Locate dependent package shares
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")
     manipulation_share = FindPackageShare("lekiwi_manipulation")
 
-    # Global and Subsystem Arguments
+    # 2. Declare global and subsystem launch arguments
     declared_arguments = [
         DeclareLaunchArgument(
             "enable_orchestrator",
@@ -100,7 +111,7 @@ def generate_launch_description():
         ),
     ]
 
-    # Subsystem Includes
+    # 3. Define subsystem launch includes
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([description_share, "launch", "description.launch.py"])
@@ -231,6 +242,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("manipulation")),
     )
 
+    # 4. Assemble LaunchDescription
     return LaunchDescription(
         [
             *declared_arguments,

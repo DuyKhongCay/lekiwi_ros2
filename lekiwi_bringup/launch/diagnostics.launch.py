@@ -1,6 +1,12 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""System diagnostics aggregation and resource monitoring bringup launch file.
+
+Launches diagnostic_aggregator with LeKiwi analyzers, and optional CPU,
+RAM, and hard disk resource monitors from diagnostic_common_diagnostics.
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -10,19 +16,26 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Launch diagnostic aggregator and system resource monitors (CPU, RAM, Disk)."""
+    """Configure diagnostic aggregator and hardware resource monitor nodes.
+
+    Returns:
+        LaunchDescription containing diagnostic aggregator and system monitors.
+    """
+    # 1. Resolve analyzer configuration file path
     bringup_share = FindPackageShare("lekiwi_bringup")
 
     analyzers_config = PathJoinSubstitution(
         [bringup_share, "config", "diagnostics", "lekiwi_analyzers.yaml"]
     )
 
+    # 2. Declare launch arguments
     enable_system_monitors_arg = DeclareLaunchArgument(
         "enable_system_monitors",
         default_value="true",
         description="Whether to run system monitors (CPU, RAM, Disk).",
     )
 
+    # 3. Define diagnostic aggregator node
     aggregator_node = Node(
         package="diagnostic_aggregator",
         executable="aggregator_node",
@@ -31,6 +44,7 @@ def generate_launch_description():
         parameters=[analyzers_config],
     )
 
+    # 4. Define conditional system resource monitor nodes (CPU, RAM, Disk)
     system_condition = IfCondition(LaunchConfiguration("enable_system_monitors"))
 
     cpu_monitor_node = Node(
@@ -60,6 +74,7 @@ def generate_launch_description():
         condition=system_condition,
     )
 
+    # 5. Assemble LaunchDescription
     return LaunchDescription(
         [
             enable_system_monitors_arg,

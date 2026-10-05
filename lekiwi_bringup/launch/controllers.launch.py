@@ -1,6 +1,12 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""Hardware control and ros2_control spawner bringup launch file.
+
+Starts controller_manager, twist_mux, and sequentially spawns broad-
+casters and trajectory controllers using process-exit event handlers.
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.conditions import IfCondition
@@ -16,7 +22,12 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Launch ros2_control controller_manager and hardware controllers."""
+    """Configure ros2_control controller_manager, twist_mux, and controller spawners.
+
+    Returns:
+        LaunchDescription configuring sequential controller activation.
+    """
+    # 1. Resolve package paths and configuration files
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")
 
@@ -30,6 +41,7 @@ def generate_launch_description():
         [bringup_share, "config", "control", "twist_mux.yaml"]
     )
 
+    # 2. Declare launch arguments
     declared_arguments = [
         DeclareLaunchArgument(
             "hardware_type",
@@ -63,6 +75,7 @@ def generate_launch_description():
         ),
     ]
 
+    # 3. Load robot URDF via xacro command
     robot_description = {
         "robot_description": ParameterValue(
             Command(
@@ -79,6 +92,7 @@ def generate_launch_description():
 
     use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
 
+    # 4. Define ros2_control controller_manager and controller spawners
     controller_manager = Node(
         package="controller_manager",
         executable="ros2_control_node",
@@ -188,6 +202,7 @@ def generate_launch_description():
         ],
     )
 
+    # 5. Assemble LaunchDescription with event-driven sequential activation
     return LaunchDescription(
         [
             *declared_arguments,

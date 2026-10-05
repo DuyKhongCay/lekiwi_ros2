@@ -2,12 +2,10 @@
 # Distro: ROS 2 Jazzy
 # Architecture: odom0 (vx, vy, vyaw wheel) + pose0 (x, y, yaw chessboard)
 #
-# Root-cause analysis (2026-09-20):
-#   - Jump khi CB reconnect là do EKF global KHÔNG có nguồn vyaw khi CB mất.
-#   - Robot quay thật → EKF giữ yaw cũ → khi CB quay lại phải jump bù.
-#   - Giải pháp: thêm vyaw từ wheel odom (wz của /omni_base_controller/odom).
-#   - Wheel wz: cov_std=0.37°/s, tốt hơn IMU wz (0.41°/s + rung động cơ).
-#   - IMU KHÔNG dùng ở global EKF (conflict absolute yaw + nhiễu).
+# Architecture rationale:
+#   - Fuses wheel odom (vx, vy, vyaw) and chessboard absolute pose (x, y, yaw).
+#   - Wheel vyaw (wz) provides continuous angular rate during chessboard occlusion.
+#   - Prevents orientation jump upon tag reconnection; IMU excluded to avoid absolute yaw conflicts.
 #
 # Author: DuyKhongCay
 # License: Apache-2.0
@@ -37,11 +35,8 @@ ekf_filter_node_map:
     # When robot is stationary at standoff (v=0, w=0), Q -> 0, freezing covariance growth.
     dynamic_process_noise_covariance: true
 
-    # 1. Wheel Odometry — fuses vx, vy AND vyaw (wz)
-    # vyaw từ wheel encoder omni là nguồn tốt nhất khi chessboard mất:
-    #   - drift ~0.013°/s khi đứng yên
-    #   - không bị nhiễu từ trường hay rung động cơ như IMU
-    #   - correlation với IMU r=0.86, integrated yaw error < 3° trong 60s
+    # 1. Wheel Odometry: fuses vx, vy, and vyaw (wz)
+    # Wheel encoder vyaw provides low-drift angular rate (~0.013 deg/s) without magnetic distortion
     # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
     odom0: /omni_base_controller/odom
     odom0_config: [false, false, false,
@@ -54,11 +49,8 @@ ekf_filter_node_map:
     odom0_differential: false
     odom0_relative: false
 
-    # 2. Chessboard Visual Absolute Pose — fuses x, y, yaw (absolute, map frame)
-    # Là anchor tuyệt đối. Khi có CB: corrects position + yaw drift từ wheel.
-    # Khi mất CB: wheel odom (vx,vy,vyaw) giữ ước lượng tiếp — giảm jump khi reconnect.
-    # rejection_threshold: loại bỏ CB reading có Mahalanobis² > ngưỡng này.
-    # CB cov_std_yaw = 1.15° → Mahal²=4 tương đương |delta_yaw| > 2*1.15=2.3°
+    # 2. Chessboard Visual Absolute Pose: fuses x, y, yaw in map frame
+    # Serves as absolute anchor correcting odometry drift; odometry sustains tracking during occlusion
     # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
     pose0: /chessboard/robot_pose
     pose0_config: [true,  true,  false,
@@ -70,15 +62,13 @@ ekf_filter_node_map:
     pose0_nodelay: false
     pose0_differential: false
     pose0_relative: false
-    # NOTE: pose0_rejection_threshold bị loại bỏ vì ngưỡng 4.0 là Mahalanobis 3-DOF
-    # khiến EKF reject hoàn toàn pose camera tại startup/reset khi robot đứng ở standoff (D^2 > 400).
+    # NOTE: pose0_rejection_threshold disabled because Mahalanobis threshold rejects initial standoff pose
     # pose0_rejection_threshold: 4.0
 
     use_control: false
 
     # Initial estimate error covariance P0 (15x15)
-    # Khởi tạo phương sai lớn cho x, y, yaw để EKF tin tưởng và snap ngay theo
-    # đo đạc đầu tiên từ /chessboard/robot_pose khi vừa khởi động hoặc reset.
+    # High initial variance on x, y, yaw allows fast convergence to first visual pose measurement
     initial_estimate_covariance: [
       1.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
       0.0,    1.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
@@ -97,13 +87,9 @@ ekf_filter_node_map:
       0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    1.0e-9
     ]
 
-    # Process noise covariance Q (15x15)
-    # Strategy for Flat Arena:
-    #   Q(x,y)   = 2e-5  — Giảm 50 lần so với 1e-3, ngăn ngừa nổ phương sai khi mất tầm nhìn camera ngắn hạn
-    #   Q(yaw)   = 1e-4  — Wheel vyaw tracking rất chính xác, giảm drift góc
-    #   Q(vx,vy) = 2e-3  — Omni wheel vx/vy mượt mà ở 50Hz
-    #   Q(vyaw)  = 2e-3  — Wheel wz đo trực tiếp
-    #   Others   = 1e-2  — Unused states (suppressed by two_d_mode)
+    # Process noise covariance Q (15x15) for flat arena surface
+    # Q(x,y)=2e-5 suppresses position variance inflation during brief camera occlusion
+    # Q(yaw)=1e-4, Q(vx,vy)=2e-3, Q(vyaw)=2e-3 matched to 50 Hz wheel telemetry
     process_noise_covariance: [
       2.0e-5, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
       0.0,    2.0e-5, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,

@@ -1,3 +1,6 @@
+# Static 2D Occupancy Grid Map Metadata for LeKiwi Chessboard Arena
+# Coordinate Origin: [-1.0, -1.0, 0.0] | Resolution: 0.02 m/cell
+
 image: chessboard_arena.pgm
 resolution: 0.02
 origin: [-1.0, -1.0, 0.0]

@@ -1,5 +1,6 @@
-# twist_mux configuration for LeKiwi Mobile Base
-# Priority arbitration ensures safety and e-stop outrank autonomous navigation
+# twist_mux Velocity Multiplexer Configuration for LeKiwi Mobile Base
+# Distro: ROS 2 Jazzy
+# Scope: Priority-based command arbitration among navigation, teleoperation, and calibration
 
 twist_mux:
   ros__parameters:
@@ -8,17 +9,12 @@ twist_mux:
       navigation:
         topic: /cmd_vel_nav
         timeout: 0.5
-        priority: 10
+        priority: 10     # Autonomous navigation has lowest active priority
       teleop:
         topic: /cmd_vel_teleop
         timeout: 0.5
-        priority: 100
+        priority: 100    # Manual joystick teleoperation overrides navigation
       calib:
         topic: /cmd_vel_calib
         timeout: 0.5
-        priority: 200
-    # locks:
-    #   estop:
-    #     topic: /safety/estop_active
-    #     timeout: 0.5
-    #     priority: 255
+        priority: 200    # Interactive calibration overrides teleop and navigation

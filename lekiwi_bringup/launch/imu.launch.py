@@ -1,6 +1,12 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""IMU pre-processing and orientation filtering pipeline bringup launch file.
+
+Sets up magnetometer bias observer, Madgwick fusion filter, and coordinate
+frame transformation components inside a multi-threaded composable container.
+"""
+
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -17,7 +23,12 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Launch LeKiwi IMU pre-processing & filtering pipeline (Layer 2)."""
+    """Configure IMU Madgwick filter, magnetometer bias removal, and transformer.
+
+    Returns:
+        LaunchDescription configuring composable container and delayed observer.
+    """
+    # 1. Resolve configuration parameter paths
     bringup_share = FindPackageShare("lekiwi_bringup")
 
     default_imu_params = PathJoinSubstitution(
@@ -27,6 +38,7 @@ def generate_launch_description():
         [bringup_share, "config", "imu", "icm20948_magnetometer_calib.yaml"]
     )
 
+    # 2. Declare launch arguments
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time", default_value="false", description="Use simulation clock"
     )
@@ -41,7 +53,7 @@ def generate_launch_description():
     )
     use_mag_param = ParameterValue(LaunchConfiguration("use_mag"), value_type=bool)
 
-    # 1. Magnetometer Bias Observer (Python node: calibrate via /calibrate_magnetometer service & load/save YAML)
+    # 3. Define magnetometer bias observer Python node
     mag_bias_observer_node = Node(
         package="magnetometer_pipeline",
         executable="magnetometer_bias_observer.py",
@@ -65,7 +77,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("use_mag")),
     )
 
-    # 2. Composable Components for C++ High-frequency IMU pipeline
+    # 4. Define composable filter and transformer components
     mag_bias_remover_component = ComposableNode(
         package="magnetometer_pipeline",
         plugin="magnetometer_pipeline::MagnetometerBiasRemoverNodelet",
@@ -148,6 +160,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("use_mag")),
     )
 
+    # 5. Assemble LaunchDescription with container and delayed event handlers
     return LaunchDescription(
         [
             use_sim_time_arg,

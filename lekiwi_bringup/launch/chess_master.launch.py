@@ -1,5 +1,11 @@
 # Copyright 2026 LeKiwi Labs
-# Licensed under the Apache License, Version 2.0
+# Licensed under the Apache License, Version 2.0.
+
+"""Chess Master game engine and board state tracking bringup launch file.
+
+Launches ChessGameStateTracker, ChessEngineAction (Stockfish driver), and
+Chessboard2DVisualizer inside a multi-threaded composable container.
+"""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -10,13 +16,19 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Launch LeKiwi Chess Master subsystem as ROS 2 composable nodes in a multi-threaded container."""
+    """Configure multi-threaded container holding Chess Master composable nodes.
+
+    Returns:
+        LaunchDescription containing chess tracking and engine container.
+    """
+    # 1. Resolve chess master parameter configuration file path
     bringup_share = FindPackageShare("lekiwi_bringup")
 
     default_config = PathJoinSubstitution(
         [bringup_share, "config", "chess", "chess_master_params.yaml"]
     )
 
+    # 2. Declare launch arguments
     config_file_arg = DeclareLaunchArgument(
         "config_file",
         default_value=default_config,
@@ -29,6 +41,7 @@ def generate_launch_description():
         description="Use simulation clock if true",
     )
 
+    # 3. Define multi-threaded composable container holding chess components
     container = ComposableNodeContainer(
         name="chess_master_container",
         namespace="",
@@ -69,6 +82,7 @@ def generate_launch_description():
         output="screen",
     )
 
+    # 4. Assemble LaunchDescription
     return LaunchDescription(
         [
             config_file_arg,

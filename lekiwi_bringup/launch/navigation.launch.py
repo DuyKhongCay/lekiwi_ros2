@@ -1,6 +1,12 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""Nav2 autonomous mobile robot navigation bringup launch file.
+
+Configures map_server, SmacPlanner2D, MPPI local controller, behavior
+server, BT navigator, and automated TF-gated lifecycle management.
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
@@ -11,6 +17,12 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    """Configure Nav2 stack servers and TF-gated lifecycle manager node.
+
+    Returns:
+        LaunchDescription containing all Nav2 server nodes and lifecycle coordinator.
+    """
+    # 1. Resolve map and navigation parameter configuration files
     bringup_share = FindPackageShare("lekiwi_bringup")
 
     default_map = PathJoinSubstitution([bringup_share, "maps", "chessboard_arena.yaml"])
@@ -18,7 +30,7 @@ def generate_launch_description():
         [bringup_share, "config", "navigation", "nav2_params.yaml"]
     )
 
-    # Launch arguments
+    # 2. Declare launch arguments
     declare_map_yaml = DeclareLaunchArgument(
         "map",
         default_value=default_map,
@@ -50,7 +62,7 @@ def generate_launch_description():
     map_yaml_file = LaunchConfiguration("map")
     autostart = ParameterValue(LaunchConfiguration("autostart"), value_type=bool)
 
-    # 1. Map Server
+    # 3. Define Nav2 servers and lifecycle nodes
     map_server_node = Node(
         package="nav2_map_server",
         executable="map_server",
@@ -136,6 +148,7 @@ def generate_launch_description():
         condition=UnlessCondition(LaunchConfiguration("autostart")),
     )
 
+    # 4. Assemble LaunchDescription
     return LaunchDescription(
         [
             declare_map_yaml,
