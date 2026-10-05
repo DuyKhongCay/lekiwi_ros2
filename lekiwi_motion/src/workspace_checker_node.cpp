@@ -1,5 +1,23 @@
 // Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @file workspace_checker_node.cpp
+ * @brief Implementation of ROS 2 chess move reachability and feasibility checking node.
+ * @author LeKiwi Labs
+ * @copyright Apache-2.0
+ */
 
 #include "lekiwi_motion/workspace_checker_node.hpp"
 
@@ -21,6 +39,15 @@ namespace lekiwi_motion
     static_assert(workspace::PLAN_SINGLE_BASE == FeasibilityResponse::PLAN_SINGLE_BASE);
     static_assert(workspace::PLAN_DUAL_BASE == FeasibilityResponse::PLAN_DUAL_BASE);
 
+    /**
+     * @brief Declares a read-only ROS 2 parameter with description metadata.
+     * @tparam T Parameter data type.
+     * @param[in,out] node Target ROS 2 node.
+     * @param[in] name Parameter key.
+     * @param[in] value Default value.
+     * @param[in] desc Description text.
+     * @return Parameter value.
+     */
     template <typename T>
     T declare_fixed(rclcpp::Node &node, const std::string &name, const T &value, const std::string &desc)
     {
@@ -30,6 +57,17 @@ namespace lekiwi_motion
       return node.declare_parameter<T>(name, value, descriptor);
     }
 
+    /**
+     * @brief Declares a numeric floating-point parameter enforced within range bounds.
+     * @param[in,out] node Target ROS 2 node.
+     * @param[in] name Parameter key.
+     * @param[in] value Default value.
+     * @param[in] minimum Lower bound inclusive.
+     * @param[in] maximum Upper bound inclusive.
+     * @param[in] desc Description text.
+     * @return Validated floating-point value.
+     * @throws std::invalid_argument If retrieved parameter is out of bounds or non-finite.
+     */
     double declare_number(
         rclcpp::Node &node, const std::string &name, double value,
         double minimum, double maximum, const std::string &desc)
@@ -49,6 +87,14 @@ namespace lekiwi_motion
       return result;
     }
 
+    /**
+     * @brief Extracts planar yaw angle from quaternion and validates 2D leveling tolerance.
+     * @details Ensures that roll and pitch tilt do not exceed planar tolerance before extracting yaw.
+     * @param[in] rot Rotation quaternion.
+     * @param[in] tolerance Maximum permissible roll/pitch deviation in radians.
+     * @return Extracted yaw angle in radians [-pi, pi].
+     * @throws std::runtime_error If quaternion is unnormalized or exceeds tilt tolerance.
+     */
     double extract_planar_yaw(const geometry_msgs::msg::Quaternion &rot, double tolerance)
     {
       double norm = std::sqrt(rot.x * rot.x + rot.y * rot.y + rot.z * rot.z + rot.w * rot.w);

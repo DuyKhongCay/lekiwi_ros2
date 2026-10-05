@@ -1,5 +1,13 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file system_readiness_state.cpp
+ * @brief Implementation of domain readiness evaluator for LeKiwi mobile base and arm.
+ *
+ * Evaluates odometry velocity limits, covariance matrices, joint enumeration,
+ * and transform freshness to compute discrete readiness flags.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #include "lekiwi_motion/system_readiness_state.hpp"
 
@@ -51,7 +59,7 @@ namespace lekiwi_motion
                                                 config_.max_stop_angular_vel);
     }
 
-    // Nếu xe di chuyển hoặc local odom không tươi -> hủy chốt hội tụ khi đứng yên
+    // Invalidate stationary convergence latch if chassis is in motion or local odom is stale
     if (!report.is_stationary)
     {
       stationary_latched_ = false;
@@ -80,24 +88,24 @@ namespace lekiwi_motion
       }
     }
 
-    // Phân loại nguyên nhân trôi EKF:
+    // Categorize root cause of EKF divergence or covariance elevation
     if (global_ekf_converged)
     {
       report.drift_type = DriftType::NONE;
     }
     else if (!report.is_stationary)
     {
-      // Robot đang chuyển động: trôi do kinematic / trượt bánh
+      // Chassis in motion: kinematic slippage or transient visual track loss
       report.drift_type = DriftType::MOVING;
     }
     else if (!global_ekf_seeded_)
     {
-      // Đứng yên nhưng EKF chưa từng seed/hội tụ
+      // Stationary chassis, but global EKF has never converged since startup
       report.drift_type = DriftType::NOT_SEEDED;
     }
     else
     {
-      // Đứng yên nhưng mất dấu AprilTag hoặc variance tăng
+      // Stationary chassis, but AprilTag fiducial lost or filter variance drifted
       report.drift_type = DriftType::STATIONARY_NO_TAG;
     }
 
@@ -120,15 +128,15 @@ namespace lekiwi_motion
       }
     }
 
-    // ================= TẦNG 1: NAVIGATION READINESS =================
-    // Đòi hỏi: Local odom tươi, TF odom->base tươi, và Global EKF đã từng khóa vị trí ít nhất 1 lần.
+    // ================= TIER 1: NAVIGATION READINESS =================
+    // Requires: fresh local odom, fresh odom->base TF, and historical EKF initialization
     const bool seeded_ok = !config_.require_global_ekf_seed || global_ekf_seeded_;
     report.nav_ready = local_odom_fresh &&
                        tf_chains.odom_to_base_fresh &&
                        seeded_ok;
 
-    // ================= TẦNG 2: GRASP READINESS =================
-    // Cho phép chốt EKF nếu robot đứng yên liên tục kể từ lần EKF hội tụ gần nhất tại vị trí dừng
+    // ================= TIER 2: GRASP READINESS =================
+    // Permit latched EKF precision if chassis remained stationary continuously since last convergence
     const bool ekf_precision_ready = global_ekf_converged ||
                                      (report.is_stationary && stationary_latched_);
 
@@ -137,6 +145,7 @@ namespace lekiwi_motion
                          ekf_precision_ready &&
                          tf_chains.base_to_gripper_fresh &&
                          tf_chains.map_to_board_fresh;
+
 
     // Self-documenting blocker reason if grasp is not ready
     if (!report.grasp_ready)

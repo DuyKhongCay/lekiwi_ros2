@@ -1,5 +1,13 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file workspace_planner.cpp
+ * @brief Implementation of hierarchical mobile standoff search and arm trajectory planning.
+ *
+ * Employs concentric rectangular perimeter sampling to find collision-free, reach-compliant
+ * mobile base standoff poses for quiet and capture chess moves.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #include "lekiwi_motion/workspace_planner.hpp"
 
@@ -12,6 +20,16 @@ namespace lekiwi_motion::workspace
 
   namespace
   {
+    /**
+     * @brief Computes a metric base pose positioned along a specific board edge facing the center.
+     * @param[in] edge Edge index (0: -Y/South, 1: +Y/North, 2: -X/West, 3: +X/East).
+     * @param[in] along Lateral coordinate along edge (meters).
+     * @param[in] clearance Normal standoff distance from board boundary (meters).
+     * @param[in] base_z Chassis elevation in board frame (meters).
+     * @param[in] half_w Board half-width along X (meters).
+     * @param[in] half_h Board half-height along Y (meters).
+     * @return BasePose configured with position and inward heading yaw.
+     */
     BasePose compute_edge_base_pose(
         int edge, double along, double clearance, double base_z, double half_w, double half_h)
     {
@@ -44,6 +62,14 @@ namespace lekiwi_motion::workspace
       return base;
     }
 
+    /**
+     * @brief Sorts board edge indices by Euclidean distance to target centroid.
+     * @param[in] mid_x Centroid X coordinate of targets.
+     * @param[in] mid_y Centroid Y coordinate of targets.
+     * @param[in] half_w Board half-width along X.
+     * @param[in] half_h Board half-height along Y.
+     * @return 4-element array of edge indices ordered nearest to farthest.
+     */
     std::array<int, 4> sort_edges_by_distance(
         double mid_x, double mid_y, double half_w, double half_h)
     {
@@ -56,6 +82,7 @@ namespace lekiwi_motion::workspace
       return edges;
     }
   } // namespace
+
 
   WorkspacePlanner::WorkspacePlanner(
       std::shared_ptr<const KinematicsModel> model,
@@ -154,6 +181,7 @@ namespace lekiwi_motion::workspace
   std::vector<BasePose> WorkspacePlanner::generate_standoff_candidates(
       const std::vector<Point3D> &targets,
       double base_z) const
+
   {
     std::vector<BasePose> candidates;
     if (!config_.is_valid() || targets.empty() || !std::isfinite(base_z) || !solver_)

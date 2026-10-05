@@ -1,5 +1,23 @@
 // Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @file test_chessboard_mapper.cpp
+ * @brief Unit tests for ChessboardMapper domain logic and UCI move parsing.
+ * @author LeKiwi Labs
+ * @copyright Apache-2.0
+ */
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -10,6 +28,9 @@
 namespace lekiwi_motion::test
 {
 
+  /**
+   * @brief Verifies explicit initialization and getter reporting of board dimensions.
+   */
   TEST(ChessboardMapperTest, InitializationExplicit)
   {
     constexpr double kBoardW = 0.380;
@@ -24,6 +45,9 @@ namespace lekiwi_motion::test
     EXPECT_TRUE(mapper.origin_at_center());
   }
 
+  /**
+   * @brief Tests that non-positive or negative dimensions throw std::invalid_argument.
+   */
   TEST(ChessboardMapperTest, InvalidDimensions)
   {
     EXPECT_THROW(ChessboardMapper(-0.1, 0.2, 0.025), std::invalid_argument);
@@ -31,6 +55,9 @@ namespace lekiwi_motion::test
     EXPECT_THROW(ChessboardMapper(0.0, -0.5, 0.025), std::invalid_argument);
   }
 
+  /**
+   * @brief Validates geometric symmetry and center offsets across corner and inner squares.
+   */
   TEST(ChessboardMapperTest, SquareSymmetryAroundCenter)
   {
     // 0.20m width => each square is 0.025m (25mm)
@@ -76,6 +103,9 @@ namespace lekiwi_motion::test
     EXPECT_NEAR(pt.z, e5.z, 1e-6);
   }
 
+  /**
+   * @brief Verifies that malformed or out-of-range square notations throw std::invalid_argument.
+   */
   TEST(ChessboardMapperTest, InvalidSquareNotations)
   {
     ChessboardMapper mapper(0.380, 0.380, 0.025);
@@ -86,6 +116,9 @@ namespace lekiwi_motion::test
     EXPECT_THROW(mapper.square_to_metric(""), std::invalid_argument);
   }
 
+  /**
+   * @brief Tests parsing of standard 4-character UCI moves without promotion.
+   */
   TEST(ChessboardMapperTest, ParseUciMoveStandard)
   {
     constexpr double kBoardW = 0.20;
@@ -107,6 +140,9 @@ namespace lekiwi_motion::test
     EXPECT_NEAR(move.place_point().y, e4.y, 1e-6);
   }
 
+  /**
+   * @brief Tests parsing of UCI moves with piece promotion and capture flag.
+   */
   TEST(ChessboardMapperTest, ParseUciMovePromotionAndCapture)
   {
     ChessboardMapper mapper(0.380, 0.380, 0.025);
@@ -118,6 +154,9 @@ namespace lekiwi_motion::test
     EXPECT_TRUE(move.is_capture);
   }
 
+  /**
+   * @brief Verifies that invalid UCI strings throw std::invalid_argument.
+   */
   TEST(ChessboardMapperTest, ParseUciMoveInvalid)
   {
     ChessboardMapper mapper(0.380, 0.380, 0.025);

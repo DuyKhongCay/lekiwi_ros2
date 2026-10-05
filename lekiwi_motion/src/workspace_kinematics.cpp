@@ -1,5 +1,13 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file workspace_kinematics.cpp
+ * @brief Implementation of URDF chain parsing, forward kinematics, and analytical SO-101 IK solver.
+ *
+ * Employs closed-form trigonometry to solve the 5-DoF manipulator arm inverse kinematics,
+ * handling planar wrist decoupling and safety limit fitting.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #include "lekiwi_motion/workspace_kinematics.hpp"
 
@@ -23,7 +31,13 @@ namespace lekiwi_motion::workspace
     const Eigen::Vector3d DEFAULT_APPROACH_AXIS{0.0, 1.0, 0.0};
     const Eigen::Vector3d DEFAULT_UP_AXIS{0.0, 0.0, 1.0};
 
-    // Map joint angle into URDF joint limits considering 2*pi periodicity
+    /**
+     * @brief Normalizes an angle into specified joint limits considering 2*pi periodic wrap-around.
+     * @param[in] angle Target angle in radians.
+     * @param[in] lower Lower limit boundary in radians.
+     * @param[in] upper Upper limit boundary in radians.
+     * @return Wrapped angle if it fits within boundaries, std::nullopt otherwise.
+     */
     std::optional<double> fit_joint_angle(double angle, double lower, double upper)
     {
       if (!std::isfinite(angle) || !std::isfinite(lower) || !std::isfinite(upper) || lower >= upper)
@@ -43,7 +57,13 @@ namespace lekiwi_motion::workspace
       return std::clamp(value, lower, upper);
     }
 
-    // Compute target tool rotation matrix from yaw, pitch, roll
+    /**
+     * @brief Computes 3D tool rotation matrix from decoupled yaw, pitch, and roll angles.
+     * @param[in] yaw Pan heading angle around Z axis (rad).
+     * @param[in] pitch Elevation pitch angle around negative Y axis (rad).
+     * @param[in] roll Tool axial roll angle around X axis (rad).
+     * @return Rotation matrix representing tool frame orientation.
+     */
     Eigen::Matrix3d target_tool_rotation(double yaw, double pitch, double roll)
     {
       return (Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
@@ -52,7 +72,18 @@ namespace lekiwi_motion::workspace
           .toRotationMatrix();
     }
 
-    // Helper: Traverse URDF backwards from tip to base to collect joints
+
+    /**
+     * @brief Traverses URDF backwards from tip to base link, collecting revolute joints and origins.
+     * @param[in] urdf Parsed URDF interface.
+     * @param[in] base_frame Root link of manipulator chain.
+     * @param[in] tip_frame End-effector link of manipulator chain.
+     * @param[in] joint_names Ordered list of 5 expected revolute arm joint names.
+     * @param[in] safety_margin_rad Margin subtracted from URDF joint limit ranges.
+     * @param[out] model Model populated with ordered segments and cumulative reach bound.
+     * @param[out] error_msg Failure explanation string if parsing fails.
+     * @return True if valid 5-DoF kinematic chain successfully extracted.
+     */
     bool build_chain_segments(
         const urdf::ModelInterface &urdf,
         const std::string &base_frame,
@@ -186,6 +217,7 @@ namespace lekiwi_motion::workspace
   {
     init_geometry(model);
   }
+
 
   void SO101AnalyticalSolver::init_geometry(const KinematicsModel &model)
   {
@@ -394,3 +426,4 @@ namespace lekiwi_motion::workspace
   }
 
 } // namespace lekiwi_motion::workspace
+

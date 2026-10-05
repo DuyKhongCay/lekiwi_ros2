@@ -1,5 +1,23 @@
 // Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @file test_workspace_kinematics.cpp
+ * @brief Unit tests for URDF extraction, analytical inverse kinematics, and multi-tier workspace planning.
+ * @author LeKiwi Labs
+ * @copyright Apache-2.0
+ */
 
 #include <cmath>
 #include <gtest/gtest.h>
@@ -10,6 +28,10 @@
 
 namespace ws = lekiwi_motion::workspace;
 
+/**
+ * @class WorkspaceKinematicsTest
+ * @brief Test fixture loading URDF model and configuring SO101 analytical solver and planner.
+ */
 class WorkspaceKinematicsTest : public ::testing::Test
 {
 protected:
@@ -46,7 +68,9 @@ protected:
   std::shared_ptr<ws::WorkspacePlanner> planner_;
 };
 
-// Contract 1: URDF extracts valid link dimensions and Analytical IK matches Forward Kinematics
+/**
+ * @brief Tests Contract 1: Valid URDF link dimension extraction and roundtrip FK/IK consistency.
+ */
 TEST_F(WorkspaceKinematicsTest, URDFExtractionAndAnalyticalIK)
 {
   EXPECT_GT(solver_->link_lengths()[0], 0.08);
@@ -71,7 +95,9 @@ TEST_F(WorkspaceKinematicsTest, URDFExtractionAndAnalyticalIK)
   EXPECT_LT(pos_error, 1e-3) << "IK solution translation residual exceeds 1mm";
 }
 
-// Contract 2 - Tier 0: Robot currently in place can execute move with ZERO base motion
+/**
+ * @brief Tests Contract 2 - Tier 0: Robot executes move in-place with zero navigation.
+ */
 TEST_F(WorkspaceKinematicsTest, PlannerTierZero_ZeroNav)
 {
   ws::PlanningRequest req;
@@ -93,7 +119,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerTierZero_ZeroNav)
   EXPECT_TRUE(plan.place_joints.has_value());
 }
 
-// Contract 2 - Tier 1: Single Standoff Base reaches both Pick and Place
+/**
+ * @brief Tests Contract 2 - Tier 1: Single Standoff Base reaches both Pick and Place squares.
+ */
 TEST_F(WorkspaceKinematicsTest, PlannerTierOne_SingleBase)
 {
   ws::PlanningRequest req;
@@ -115,7 +143,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerTierOne_SingleBase)
   EXPECT_TRUE(plan.place_joints.has_value());
 }
 
-// Contract 2 - Tier 2: Dual Standoff Bases for diametrically opposite squares (e.g. A1 to H8)
+/**
+ * @brief Tests Contract 2 - Tier 2: Dual Standoff Bases for distant squares (e.g. A1 to H8).
+ */
 TEST_F(WorkspaceKinematicsTest, PlannerTierTwo_DualBase)
 {
   ws::PlanningRequest req;
@@ -136,7 +166,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerTierTwo_DualBase)
   EXPECT_TRUE(plan.place_joints.has_value());
 }
 
-// Contract 2 - Capture Tier 0: Robot currently in place can execute capture with ZERO base motion
+/**
+ * @brief Tests Contract 2 - Capture Tier 0: In-place capture execution with zero navigation.
+ */
 TEST_F(WorkspaceKinematicsTest, PlannerCapture_TierZero)
 {
   ws::PlanningRequest req;
@@ -159,7 +191,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerCapture_TierZero)
   EXPECT_DOUBLE_EQ(plan.pick_base.x, current.x);
 }
 
-// Contract 2 - Capture Tier 1: Single Standoff Base covers Clear, Pick, and Place
+/**
+ * @brief Tests Contract 2 - Capture Tier 1: Single Standoff Base reaches Clear, Pick, and Place.
+ */
 TEST_F(WorkspaceKinematicsTest, PlannerCapture_SingleBase)
 {
   ws::PlanningRequest req;
@@ -183,7 +217,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerCapture_SingleBase)
   EXPECT_DOUBLE_EQ(plan.pick_base.x, plan.place_base.x);
 }
 
-// Contract 2 - Capture Tier 3: Diametrically opposite squares (e.g. A1 takes H8)
+/**
+ * @brief Tests Contract 2 - Capture Tier 3: Distant diagonal capture requiring multiple standoff bases.
+ */
 TEST_F(WorkspaceKinematicsTest, PlannerCapture_TripleBase_DistantDiagonal)
 {
   ws::PlanningRequest req;
@@ -210,7 +246,9 @@ TEST_F(WorkspaceKinematicsTest, PlannerCapture_TripleBase_DistantDiagonal)
   EXPECT_DOUBLE_EQ(plan.clear_base.y, plan.place_base.y);
 }
 
-// Contract 2 - Infeasible: Target outside board reach
+/**
+ * @brief Tests Contract 2 - Infeasible query: Out-of-reach target fails gracefully with BASE_STANDOFF_EXHAUSTED.
+ */
 TEST_F(WorkspaceKinematicsTest, PlannerInfeasible)
 {
   ws::PlanningRequest req;

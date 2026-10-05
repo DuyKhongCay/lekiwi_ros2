@@ -1,5 +1,23 @@
 // Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @file test_feasibility_marker_builder.cpp
+ * @brief Unit tests for FeasibilityMarkerBuilder multi-layer RViz marker generation.
+ * @author LeKiwi Labs
+ * @copyright Apache-2.0
+ */
 
 #include <gtest/gtest.h>
 #include <builtin_interfaces/msg/time.hpp>
@@ -10,6 +28,9 @@
 using namespace lekiwi_motion::visualization;
 using FeasibilityResponse = lekiwi_interfaces::srv::CheckMoveFeasibility::Response;
 
+/**
+ * @brief Tests that an infeasible query produces DELETEALL and red HUD alert with no geometry layers.
+ */
 TEST(TestFeasibilityMarkerBuilder, RejectPlanBuildsHudWithError)
 {
   FeasibilityMarkerBuilder builder("map", "chessboard_frame");
@@ -44,6 +65,9 @@ TEST(TestFeasibilityMarkerBuilder, RejectPlanBuildsHudWithError)
   }
 }
 
+/**
+ * @brief Verifies marker generation for feasible single-base moves across all 5 visualization layers.
+ */
 TEST(TestFeasibilityMarkerBuilder, SingleBaseFeasiblePlan)
 {
   FeasibilityMarkerBuilder builder("map", "chessboard_frame");
@@ -119,6 +143,9 @@ TEST(TestFeasibilityMarkerBuilder, SingleBaseFeasiblePlan)
   EXPECT_TRUE(found_reach_ring);
 }
 
+/**
+ * @brief Tests capture move visualization with 3 distinct base standoffs and navigation trajectory.
+ */
 TEST(TestFeasibilityMarkerBuilder, CaptureTripleBasePlan)
 {
   FeasibilityMarkerBuilder builder("map", "chessboard_frame");

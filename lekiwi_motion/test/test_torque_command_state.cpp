@@ -1,12 +1,33 @@
 // Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @file test_torque_command_state.cpp
+ * @brief Unit tests for TorqueCommandState domain logic and joint group slicing.
+ * @author LeKiwi Labs
+ * @copyright Apache-2.0
+ */
+
 #include <gtest/gtest.h>
 #include "lekiwi_motion/torque_manager_node.hpp"
 
 using lekiwi_motion::TorqueCommandState;
 using Request = lekiwi_interfaces::srv::SetTorqueEnabled::Request;
 
-// Slice division preserves other group without side-effects.
+/**
+ * @brief Tests that applying torque settings to one joint group preserves states in other groups.
+ */
 TEST(TorqueCommandState, PreservesOtherGroup)
 {
   TorqueCommandState state({"a1", "a2"}, {"b1", "b2"});
@@ -16,7 +37,9 @@ TEST(TorqueCommandState, PreservesOtherGroup)
   EXPECT_EQ(state.apply(Request::TARGET_ARM, true), (std::vector<double>{1, 1, 0, 0}));
 }
 
-// Reset re-initializes states to 1.0
+/**
+ * @brief Verifies that reset() restores all joint group torque states to 1.0 (enabled).
+ */
 TEST(TorqueCommandState, ResetReinitializesToAllEnabled)
 {
   TorqueCommandState state({"a"}, {"b"});
@@ -26,7 +49,9 @@ TEST(TorqueCommandState, ResetReinitializesToAllEnabled)
   EXPECT_EQ(state.current_states(), (std::vector<double>{1, 1}));
 }
 
-// Invalid targets must not mutate state.
+/**
+ * @brief Verifies that invalid target identifiers throw std::invalid_argument without mutating state.
+ */
 TEST(TorqueCommandState, RejectsInvalidTargetWithoutChangingState)
 {
   TorqueCommandState state({"a"}, {"b"});
@@ -35,7 +60,9 @@ TEST(TorqueCommandState, RejectsInvalidTargetWithoutChangingState)
   EXPECT_EQ(state.apply(Request::TARGET_ARM, false), (std::vector<double>{0, 1}));
 }
 
-// Empty joint groups must fail at construction.
+/**
+ * @brief Ensures empty joint collections in constructor throw std::invalid_argument.
+ */
 TEST(TorqueCommandState, RejectsEmptyConfiguration)
 {
   EXPECT_THROW((TorqueCommandState({}, {"b"})), std::invalid_argument);
@@ -43,7 +70,9 @@ TEST(TorqueCommandState, RejectsEmptyConfiguration)
   EXPECT_THROW((TorqueCommandState({}, {})), std::invalid_argument);
 }
 
-// is_group_enabled accurately reflects current target group state using std::any_of
+/**
+ * @brief Tests that is_group_enabled accurately reports active joints across group mutations.
+ */
 TEST(TorqueCommandState, IsGroupEnabledAndToggles)
 {
   TorqueCommandState state({"a"}, {"b"});
@@ -68,7 +97,9 @@ TEST(TorqueCommandState, IsGroupEnabledAndToggles)
   EXPECT_FALSE(state.is_group_enabled(Request::TARGET_BASE));
 }
 
-// Verifies counts of multi-joint groups
+/**
+ * @brief Verifies partition count accessors for arm and total joints.
+ */
 TEST(TorqueCommandState, JointCounts)
 {
   TorqueCommandState state({"a1", "a2", "a3"}, {"b1", "b2"});

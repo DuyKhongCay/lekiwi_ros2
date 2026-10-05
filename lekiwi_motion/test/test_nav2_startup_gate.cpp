@@ -1,11 +1,33 @@
 // Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @file test_nav2_startup_gate.cpp
+ * @brief Unit tests for Nav2StartupGateNode parameter initialization and state checking.
+ * @author LeKiwi Labs
+ * @copyright Apache-2.0
+ */
 
 #include <gtest/gtest.h>
 #include <rclcpp/rclcpp.hpp>
 
 #include "lekiwi_motion/nav2_startup_gate_node.hpp"
 
+/**
+ * @class Nav2StartupGateTest
+ * @brief Test fixture initializing and shutting down rclcpp test context.
+ */
 class Nav2StartupGateTest : public ::testing::Test
 {
 protected:
@@ -26,6 +48,9 @@ protected:
   }
 };
 
+/**
+ * @brief Verifies default parameters and initial unstarted state.
+ */
 TEST_F(Nav2StartupGateTest, DefaultParametersAndInitialState)
 {
   rclcpp::NodeOptions options;
@@ -44,6 +69,9 @@ TEST_F(Nav2StartupGateTest, DefaultParametersAndInitialState)
   EXPECT_FALSE(node->get_parameter("exit_on_success").as_bool());
 }
 
+/**
+ * @brief Tests custom parameter overrides for frames, thresholds, and auto-exit configuration.
+ */
 TEST_F(Nav2StartupGateTest, CustomParameters)
 {
   rclcpp::NodeOptions options;

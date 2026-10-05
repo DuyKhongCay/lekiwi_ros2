@@ -1,5 +1,13 @@
-// Copyright 2026 LeKiwi Labs
-// Licensed under the Apache License, Version 2.0.
+/**
+ * @file chessboard_mapper.cpp
+ * @brief Implementation of chessboard algebraic square to metric Cartesian transformation.
+ *
+ * Implements FIDE square parsing, whitespace sanitation, bounds checking,
+ * and metric coordinate translation for the LeKiwi chess playing platform.
+ *
+ * @author DuyKhongCay
+ * @copyright Apache-2.0
+ */
 
 #include "lekiwi_motion/chessboard_mapper.hpp"
 
@@ -59,6 +67,7 @@ namespace lekiwi_motion
     }
     return true;
   }
+
 
   SquareCoordinate ChessboardMapper::square_to_metric(
       std::string_view square,
@@ -158,3 +167,4 @@ namespace lekiwi_motion
   }
 
 } // namespace lekiwi_motion
+
