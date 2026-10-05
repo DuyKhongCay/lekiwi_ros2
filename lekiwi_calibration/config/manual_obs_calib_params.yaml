@@ -1,0 +1,10 @@
+manual_obs_calibrator:
+  ros__parameters:
+    calib_mode: "post_move_verify"              # "relocalize" or "post_move_verify"
+    target_standoff_distance: 0.56        # Target standoff radius R in meters
+    orbit_linear_speed: 0.08              # Tangential velocity during circular orbit (m/s)
+    radial_kp: 1.2                        # Proportional gain for standoff radius tracking
+    yaw_kp: 1.5                           # Proportional gain for heading to board center
+    board_frame: "chessboard_frame"
+    base_frame: "base_footprint"
+    output_yaml: "/root/docker_ws/lekiwi_ros2/lekiwi_calibration/config/observation_angle_offsets.yaml"
