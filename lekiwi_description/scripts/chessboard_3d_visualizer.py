@@ -13,14 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Node trực quan hóa trạng thái bàn cờ 3D và nước cờ trên RViz2 cho robot LeKiwi.
+"""3D chessboard state and move trajectory visualizer for LeKiwi in RViz2.
 
-Tính năng:
-- Đọc thông điệp /chess/game_status (lekiwi_interfaces/msg/ChessGameStatus).
-- Dựng 32 quân cờ 3D Mesh STL thực tế (đã chuẩn hóa gốc tọa độ tâm đáy).
-- Tô màu ô xuất phát, ô đích, ô ăn quân (En Passant) và ô Vua bị chiếu.
-- Vẽ mũi tên 3D biểu diễn nước đi vừa thực hiện (last_move) và nước tối ưu (best_move).
+Subscribes to /chess/game_status and renders 3D STL chess pieces, board highlight
+overlays (origin, target, captures, king check), and 3D trajectory arrows for
+executed and engine-recommended moves.
 """
 
 from __future__ import annotations
@@ -50,7 +47,8 @@ PIECE_TYPE_MAP = {
 class Chessboard3DVisualizer(Node):
     """Visualizes live 3D chess pieces, highlights, and move trajectories in RViz2."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize parameters, subscribers, and publishers for 3D chess visualization."""
         super().__init__("chessboard_3d_visualizer")
 
         # -----------------------------------------------------------------
@@ -131,7 +129,7 @@ class Chessboard3DVisualizer(Node):
         )
         self.marker_pub = self.create_publisher(MarkerArray, marker_topic, pub_qos)
 
-        # Trạng thái ô cờ đã được dựng trước đó (để gửi Marker.DELETE đúng ID)
+        # Track previously occupied squares to dispatch Marker.DELETE for vacated squares
         self.previously_occupied_squares: set[int] = set()
 
         self.get_logger().info(
@@ -143,7 +141,7 @@ class Chessboard3DVisualizer(Node):
     # Coordinate Helpers
     # ---------------------------------------------------------------------
     def square_to_metric(self, square: str) -> tuple[float, float] | None:
-        """Chuyển đổi chuỗi ô chuẩn FIDE (e.g. 'e4') sang tọa độ (x, y) trên chessboard_frame."""
+        """Convert a standard FIDE square name (e.g., 'e4') to metric (x, y) coordinates."""
         if not square or len(square) < 2:
             return None
         cleaned = square.strip().lower()
@@ -156,15 +154,19 @@ class Chessboard3DVisualizer(Node):
         file_idx = ord(file_char) - ord("a")  # 0..7
         rank_idx = ord(rank_char) - ord("1")  # 0..7
 
-        # Tâm ô cờ đối với hệ tọa độ bàn cờ có tâm tại (0,0)
+        # Center offset relative to chessboard origin (0, 0) at the board center
         x = (file_idx - 3.5) * self.square_size
         y = (rank_idx - 3.5) * self.square_size
         return x, y
 
     def parse_fen_board(self, full_fen: str) -> list[str | None]:
-        """
-        Giải mã FEN thành mảng 64 phần tử từ a1 (index 0) đến h8 (index 63).
-        Trả về ký tự đại diện quân cờ (e.g. 'P', 'k') hoặc None nếu ô trống.
+        """Decode a FEN string into a 64-element list from a1 (index 0) to h8 (index 63).
+
+        Args:
+            full_fen: Full FEN string representing current game state.
+
+        Returns:
+            List of 64 elements containing piece characters (e.g., 'P', 'k') or None for empty squares.
         """
         board: list[str | None] = [None] * 64
         if not full_fen:
@@ -175,7 +177,7 @@ class Chessboard3DVisualizer(Node):
         if len(ranks) != 8:
             return board
 
-        # FEN bắt đầu từ hàng 8 (rank 7) xuống hàng 1 (rank 0)
+        # FEN ranks are serialized from rank 8 (index 7) down to rank 1 (index 0)
         for rank_offset, rank_str in enumerate(ranks):
             rank_idx = 7 - rank_offset
             file_idx = 0
@@ -192,21 +194,22 @@ class Chessboard3DVisualizer(Node):
     # ---------------------------------------------------------------------
     # Main Callback
     # ---------------------------------------------------------------------
-    def game_status_callback(self, msg: ChessGameStatus):
+    def game_status_callback(self, msg: ChessGameStatus) -> None:
+        """Process game status updates and publish aggregate visual markers."""
         now = self.get_clock().now().to_msg()
         markers = MarkerArray()
 
-        # 1. 3D Mesh STL Pieces
+        # 1. 3D mesh STL pieces
         if self.enable_pieces:
             piece_markers = self._build_piece_markers(msg.full_fen, now)
             markers.markers.extend(piece_markers)
 
-        # 2. Square Highlights (From, To, Capture, Check)
+        # 2. Square highlights (from, to, capture, check)
         if self.enable_highlights:
             highlight_markers: list[Any] = self._build_highlight_markers(msg, now)
             markers.markers.extend(highlight_markers)
 
-        # 3. 3D Trajectory Arrows
+        # 3. 3D trajectory arrows
         if self.enable_arrows:
             arrow_markers = self._build_arrow_markers(msg, now)
             markers.markers.extend(arrow_markers)
@@ -217,6 +220,15 @@ class Chessboard3DVisualizer(Node):
     # Marker Builders
     # ---------------------------------------------------------------------
     def _build_piece_markers(self, full_fen: str, stamp: Any) -> list[Marker]:
+        """Build 3D mesh markers for all active chess pieces from FEN state.
+
+        Args:
+            full_fen: Full FEN board representation string.
+            stamp: ROS timestamp attached to generated markers.
+
+        Returns:
+            List of ADD and DELETE Marker objects representing board pieces.
+        """
         markers: list[Marker] = []
         board = self.parse_fen_board(full_fen)
         current_occupied_squares: set[int] = set()
@@ -241,7 +253,7 @@ class Chessboard3DVisualizer(Node):
                 marker.type = Marker.MESH_RESOURCE
                 marker.action = Marker.ADD
                 marker.mesh_resource = f"package://lekiwi_description/assets/chess_pieces/{color_name}_{piece_type}.stl"
-                # Tỷ lệ: đơn vị file STL là mm -> đổi sang mét chuẩn ROS (0.001)
+                # STL model units are in millimeters; convert to ROS standard meters (0.001)
                 marker.scale.x = 0.001
                 marker.scale.y = 0.001
                 marker.scale.z = 0.001
@@ -250,7 +262,7 @@ class Chessboard3DVisualizer(Node):
                 marker.pose.position.y = y
                 marker.pose.position.z = self.board_z
 
-                # Hướng quay: Quân Mã Đen quay 180 độ đối diện với Mã Trắng
+                # Rotate black knight 180 degrees to face white knight across the board
                 if piece_char == "n":
                     marker.pose.orientation.z = 1.0
                     marker.pose.orientation.w = 0.0
@@ -258,17 +270,17 @@ class Chessboard3DVisualizer(Node):
                     marker.pose.orientation.z = 0.0
                     marker.pose.orientation.w = 1.0
 
-                # Màu sắc quân cờ
+                # Material colors
                 if is_white:
-                    marker.color = ColorRGBA(r=0.94, g=0.92, b=0.84, a=1.0)  # Trắng ngà
+                    marker.color = ColorRGBA(r=0.94, g=0.92, b=0.84, a=1.0)  # Ivory white
                 else:
-                    marker.color = ColorRGBA(r=0.18, g=0.18, b=0.20, a=1.0)  # Đen than
+                    marker.color = ColorRGBA(r=0.18, g=0.18, b=0.20, a=1.0)  # Charcoal black
 
                 marker.mesh_use_embedded_materials = False
                 marker.frame_locked = True
                 markers.append(marker)
             else:
-                # Nếu ô này từng có quân nhưng nay đã đi/bị ăn -> gửi Marker.DELETE
+                # Issue Marker.DELETE if square was previously occupied but is now empty
                 if sq_idx in self.previously_occupied_squares:
                     del_marker = Marker()
                     del_marker.header.frame_id = self.frame_id
@@ -284,13 +296,22 @@ class Chessboard3DVisualizer(Node):
     def _build_highlight_markers(
         self, msg: ChessGameStatus, stamp: Any
     ) -> list[Marker]:
+        """Build square overlay markers highlighting previous moves, captures, and checks.
+
+        Args:
+            msg: Current ChessGameStatus message.
+            stamp: ROS timestamp attached to generated markers.
+
+        Returns:
+            List of highlight Marker objects for square status display.
+        """
         markers: list[Marker] = []
         last_move = msg.last_move_details
         tile_size = self.square_size * 0.94
         tile_thick = 0.001
         z_pos = self.board_z + 0.0005
 
-        # 1. From Square Highlight (Vàng cam bán trong suốt)
+        # 1. From-square highlight (semi-transparent amber)
         if last_move.from_square:
             pt = self.square_to_metric(last_move.from_square)
             if pt:
@@ -310,7 +331,7 @@ class Chessboard3DVisualizer(Node):
         else:
             markers.append(self._create_delete_marker("chess/highlights", 101, stamp))
 
-        # 2. To Square Highlight (Xanh lục dạ quang bán trong suốt)
+        # 2. To-square highlight (semi-transparent green)
         if last_move.to_square:
             pt = self.square_to_metric(last_move.to_square)
             if pt:
@@ -330,7 +351,7 @@ class Chessboard3DVisualizer(Node):
         else:
             markers.append(self._create_delete_marker("chess/highlights", 102, stamp))
 
-        # 3. Capture Square Alert (Bia ngắm Đỏ rực tại ô bị ăn)
+        # 3. Capture square alert (semi-transparent red cylinder)
         if last_move.is_capture and last_move.captured_square:
             cap_pt = self.square_to_metric(last_move.captured_square)
             if cap_pt:
@@ -348,13 +369,13 @@ class Chessboard3DVisualizer(Node):
                 cap_marker.scale.x = self.square_size * 0.8
                 cap_marker.scale.y = self.square_size * 0.8
                 cap_marker.scale.z = 0.0015
-                cap_marker.color = ColorRGBA(r=1.0, g=0.1, b=0.1, a=0.7)  # Đỏ rực
+                cap_marker.color = ColorRGBA(r=1.0, g=0.1, b=0.1, a=0.7)  # Bright red
                 cap_marker.frame_locked = True
                 markers.append(cap_marker)
         else:
             markers.append(self._create_delete_marker("chess/highlights", 103, stamp))
 
-        # 4. Check / Checkmate King Alert (Tô đỏ ô quân Vua đang bị chiếu)
+        # 4. Check / checkmate alert (semi-transparent bright red cube over king)
         if (msg.is_check or msg.is_checkmate) and msg.full_fen:
             king_char = "K" if msg.active_color == "w" else "k"
             board = self.parse_fen_board(msg.full_fen)
@@ -385,11 +406,20 @@ class Chessboard3DVisualizer(Node):
         return markers
 
     def _build_arrow_markers(self, msg: ChessGameStatus, stamp: Any) -> list[Marker]:
+        """Build 3D trajectory arrow markers for executed moves and engine suggestions.
+
+        Args:
+            msg: Current ChessGameStatus message containing move details.
+            stamp: ROS timestamp attached to generated markers.
+
+        Returns:
+            List of arrow Marker objects for trajectory visualization.
+        """
         markers: list[Marker] = []
         last_move = msg.last_move_details
         best_move = msg.best_move_details
 
-        # 1. Last Move Arrow (Màu Cyan uốn nhẹ trong không gian)
+        # 1. Last executed move arrow (cyan)
         if last_move.from_square and last_move.to_square:
             p_from = self.square_to_metric(last_move.from_square)
             p_to = self.square_to_metric(last_move.to_square)
@@ -406,7 +436,7 @@ class Chessboard3DVisualizer(Node):
         else:
             markers.append(self._create_delete_marker("chess/move_arrows", 201, stamp))
 
-        # 2. Engine Best Move Arrow (Màu Xanh lá dạ quang đề xuất)
+        # 2. Engine recommended best move arrow (bright green)
         if best_move.from_square and best_move.to_square:
             bp_from = self.square_to_metric(best_move.from_square)
             bp_to = self.square_to_metric(best_move.to_square)
@@ -423,7 +453,7 @@ class Chessboard3DVisualizer(Node):
         else:
             markers.append(self._create_delete_marker("chess/move_arrows", 202, stamp))
 
-        # 3. Castling Secondary Rook Arrow (Màu Cam cho quân Xe nhập thành)
+        # 3. Castling secondary rook move arrow (orange)
         if (
             last_move.is_castling
             and last_move.castling_rook_from
@@ -460,8 +490,9 @@ class Chessboard3DVisualizer(Node):
         sy: float,
         sz: float,
         color: ColorRGBA,
-        stamp,
+        stamp: Any,
     ) -> Marker:
+        """Create a cube marker with specified pose, dimensions, and color."""
         m = Marker()
         m.header.frame_id = self.frame_id
         m.header.stamp = stamp
@@ -489,6 +520,7 @@ class Chessboard3DVisualizer(Node):
         color: ColorRGBA,
         stamp: Any,
     ) -> Marker:
+        """Create an elevated trajectory arrow marker connecting start and end points."""
         m = Marker()
         m.header.frame_id = self.frame_id
         m.header.stamp = stamp
@@ -497,12 +529,12 @@ class Chessboard3DVisualizer(Node):
         m.type = Marker.ARROW
         m.action = Marker.ADD
 
-        # Đường kính thân và đầu mũi tên
-        m.scale.x = 0.0035  # Đường kính thân (3.5mm)
-        m.scale.y = 0.0075  # Đường kính đầu mũi tên (7.5mm)
-        m.scale.z = 0.0120  # Chiều dài đầu mũi tên (12mm)
+        # Arrow shaft diameter (3.5 mm), head diameter (7.5 mm), head length (12 mm)
+        m.scale.x = 0.0035
+        m.scale.y = 0.0075
+        m.scale.z = 0.0120
 
-        # Mũi tên nâng cao trên không mô phỏng đường đi gắp nhả
+        # Elevated trajectory mimicking robotic pick-and-place arc
         z_lift = self.board_z + 0.025
         m.points = [
             Point(x=p_from[0], y=p_from[1], z=z_lift),
@@ -512,7 +544,8 @@ class Chessboard3DVisualizer(Node):
         m.frame_locked = True
         return m
 
-    def _create_delete_marker(self, ns: str, m_id: int, stamp) -> Marker:
+    def _create_delete_marker(self, ns: str, m_id: int, stamp: Any) -> Marker:
+        """Create a deletion marker for a specific namespace and ID."""
         m = Marker()
         m.header.frame_id = self.frame_id
         m.header.stamp = stamp
@@ -522,7 +555,8 @@ class Chessboard3DVisualizer(Node):
         return m
 
 
-def main(args=None):
+def main(args: list[str] | None = None) -> None:
+    """Initialize ROS 2 client library and spin Chessboard3DVisualizer node."""
     rclpy.init(args=args)
     try:
         node = Chessboard3DVisualizer()

@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Robot and chess game RViz2 visualization launch configuration.
+
+Launches the LeKiwi robot description, optional 3D chessboard visualizer node,
+and RViz2 configured with pre-defined displays for manipulation and perception.
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
@@ -22,14 +28,15 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
-def generate_launch_description():
-    """Launch RViz2 visualizer with optional description and joint_state_publisher_gui."""
+def generate_launch_description() -> LaunchDescription:
+    """Generate launch description for RViz2 and 3D chessboard visualizer."""
+    # Resolve default RViz configuration file path
     description_share = FindPackageShare("lekiwi_description")
-
     default_rviz_config = PathJoinSubstitution(
         [description_share, "config", "rviz", "lekiwi_full.rviz"]
     )
 
+    # Declare launch arguments for RViz configuration and visualization options
     declared_arguments = [
         DeclareLaunchArgument(
             "rviz_config",
@@ -52,6 +59,7 @@ def generate_launch_description():
     use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
     visualize_chess_game = LaunchConfiguration("visualize_chess_game")
 
+    # Include base robot description launch with mock hardware for visualization
     description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([description_share, "launch", "description.launch.py"])
@@ -63,6 +71,7 @@ def generate_launch_description():
         }.items(),
     )
 
+    # Conditionally launch 3D chessboard state and marker visualizer node
     chess_visualizer_node = Node(
         package="lekiwi_description",
         executable="chessboard_3d_visualizer.py",
@@ -81,6 +90,7 @@ def generate_launch_description():
         condition=IfCondition(visualize_chess_game),
     )
 
+    # Launch RViz2 display node with target config
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -92,6 +102,7 @@ def generate_launch_description():
         ],
     )
 
+    # Assemble and return complete launch description
     return LaunchDescription(
         [
             *declared_arguments,

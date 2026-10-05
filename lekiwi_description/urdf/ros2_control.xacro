@@ -1,6 +1,11 @@
 <?xml version="1.0"?>
+<!--
+  LeKiwi ros2_control Hardware Interface Macros
+  Configures transmission metadata, joint command/state interfaces for STS3215 servos
+  (arm position control, base wheel velocity control), and ICM20948 IMU sensor interfaces.
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <!-- Adds standard transmission metadata when a downstream consumer requires it. -->
+  <!-- Adds standard transmission metadata when a downstream simulator requires it. -->
   <xacro:macro name="simple_transmission" params="joint_name">
     <transmission name="${joint_name}_transmission">
       <type>transmission_interface/SimpleTransmission</type>
@@ -13,7 +18,7 @@
     </transmission>
   </xacro:macro>
 
-  <!-- Declares interfaces once so real and mock hardware expose the same contract. -->
+  <!-- Declares joint command and state interfaces matching the hardware contract. -->
   <xacro:macro name="lekiwi_control_joint" params="joint_name servo_id command_interface acceleration:='50' velocity_scale:='' velocity_direction:='1' max_velocity:='5.0'">
     <joint name="${joint_name}">
       <param name="id">${servo_id}</param>

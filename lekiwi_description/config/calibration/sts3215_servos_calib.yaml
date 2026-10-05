@@ -1,3 +1,6 @@
+# LeKiwi Feetech STS3215 Bus Servo Calibration & Control Parameters
+# IDs 1-6: SO-ARM100 6-DoF arm joints (position mode, homing offsets, angle limits, PID gains)
+# IDs 7-9: 3-wheel omnidirectional mobile base (velocity mode, speed tick scale factor)
 joints:
   arm_shoulder_pan:
     id: 1
