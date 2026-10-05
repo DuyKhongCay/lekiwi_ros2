@@ -2,6 +2,9 @@
  * @file chess_game_state_tracker_component.cpp
  * @brief Implementation of ChessGameStateTrackerComponent.
  *
+ * Implements camera vision debounce filtering, FIDE legal move validation,
+ * board state tracking, and autonomous Stockfish action goal dispatching.
+ *
  * @author DuyKhongCay
  * @copyright Apache-2.0
  */
@@ -23,6 +26,7 @@ namespace lekiwi_chess_master
         pending_placement_(""),
         consecutive_count_(0)
   {
+    // Declare and initialize tracking parameters
     raw_fen_topic_ = declare_parameter<std::string>("raw_fen_topic", "/chess/raw_fen");
     game_status_topic_ = declare_parameter<std::string>("game_status_topic", "/chess/game_status");
     debounce_frames_ = declare_parameter<int>("debounce_frames", 3);
@@ -38,24 +42,28 @@ namespace lekiwi_chess_master
         raw_fen_topic_.c_str(), game_status_topic_.c_str(), debounce_frames_,
         auto_trigger_engine_ ? "true" : "false", robot_color_.c_str(), think_time_ms_);
 
+    // Publish game status with reliable QoS for UI panels and motion orchestrators
     game_status_pub_ = create_publisher<ChessGameStatus>(
         game_status_topic_, rclcpp::SystemDefaultsQoS());
 
+    // Ingest high-rate camera FEN stream with best-effort SensorDataQoS
     raw_fen_sub_ = create_subscription<std_msgs::msg::String>(
         raw_fen_topic_, rclcpp::SensorDataQoS(),
         std::bind(&ChessGameStateTrackerComponent::raw_fen_callback, this, std::placeholders::_1));
 
+    // Provide reset service for operators and orchestrators
     reset_srv_ = create_service<std_srvs::srv::Trigger>(
         "/chess/reset_game",
         std::bind(&ChessGameStateTrackerComponent::handle_reset_service, this,
                   std::placeholders::_1, std::placeholders::_2));
 
+    // Optionally instantiate action client for autonomous Stockfish queries
     if (auto_trigger_engine_)
     {
       action_client_ = rclcpp_action::create_client<ComputeBestMove>(this, action_name_);
     }
 
-    // Publish initial starting game status
+    // Broadcast standard starting position status
     publish_game_status(true, true);
 
     if (auto_trigger_engine_)
@@ -68,6 +76,7 @@ namespace lekiwi_chess_master
   void ChessGameStateTrackerComponent::reset_game()
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    // Abort active engine search if game reset occurs mid-calculation
     if (is_engine_busy_ && current_goal_handle_)
     {
       RCLCPP_INFO(get_logger(), "Canceling active engine search due to game reset.");
@@ -79,6 +88,7 @@ namespace lekiwi_chess_master
     }
     is_engine_busy_ = false;
 
+    // Restore standard FIDE starting layout and clear historical move structures
     board_ = chess::Board();
     last_accepted_placement_ = kDefaultStartingPlacement;
     pending_placement_.clear();
@@ -91,6 +101,7 @@ namespace lekiwi_chess_master
     RCLCPP_INFO(get_logger(), "Chess game board reset to starting position: %s", board_.getFen().c_str());
     publish_game_status(true, true);
 
+    // If robot plays White, initiate the opening calculation immediately
     trigger_engine_if_needed();
   }
 
@@ -106,20 +117,24 @@ namespace lekiwi_chess_master
   bool ChessGameStateTrackerComponent::match_legal_move(
       const std::string &detected_placement, chess::Move &matched_move)
   {
+    // Enumerate all strictly legal moves from the current position
     chess::Movelist legal_moves;
     chess::movegen::legalmoves(legal_moves, board_);
 
+    // Simulate each candidate move in a sandbox to test resultant piece placement
     for (const auto &move : legal_moves)
     {
       board_.makeMove(move);
       std::string sim_fen = board_.getFen();
-      board_.unmakeMove(move);
+      board_.unmakeMove(move); // Revert simulation state
 
+      // Extract only the 8x8 piece placement token (first token prior to whitespace)
       auto space_idx = sim_fen.find(' ');
       std::string_view sim_placement = (space_idx != std::string::npos)
                                            ? std::string_view(sim_fen).substr(0, space_idx)
                                            : std::string_view(sim_fen);
 
+      // Confirm unique match with vision-detected placement
       if (sim_placement == detected_placement)
       {
         matched_move = move;
@@ -142,6 +157,7 @@ namespace lekiwi_chess_master
     msg.is_legal_move = is_legal;
     msg.is_check = board_.inCheck();
 
+    // Check for terminal conditions: checkmate or stalemate
     chess::Movelist legal_moves;
     chess::movegen::legalmoves(legal_moves, board_);
     if (legal_moves.empty())
@@ -176,6 +192,7 @@ namespace lekiwi_chess_master
       return;
     }
 
+    // Normalize color parameter and determine if it is the robot's active turn
     std::string norm_color = robot_color_;
     std::transform(norm_color.begin(), norm_color.end(), norm_color.begin(), ::tolower);
     bool is_white_turn = (board_.sideToMove() == chess::Color::WHITE);
@@ -187,6 +204,7 @@ namespace lekiwi_chess_master
       return;
     }
 
+    // Do not dispatch engine queries if position is already terminal (checkmate/stalemate)
     chess::Movelist legal_moves;
     chess::movegen::legalmoves(legal_moves, board_);
     if (legal_moves.empty())
@@ -195,6 +213,7 @@ namespace lekiwi_chess_master
       return;
     }
 
+    // Lock-free check-and-set: prevent launching concurrent overlapping calculation jobs
     if (is_engine_busy_.exchange(true))
     {
       RCLCPP_WARN(get_logger(), "Engine is already computing a move. Ignoring duplicate trigger.");
@@ -206,6 +225,7 @@ namespace lekiwi_chess_master
       action_client_ = rclcpp_action::create_client<ComputeBestMove>(this, action_name_);
     }
 
+    // Verify Action Server endpoint connectivity before constructing goal
     if (!action_client_->action_server_is_ready())
     {
       RCLCPP_WARN_THROTTLE(
@@ -216,6 +236,7 @@ namespace lekiwi_chess_master
       return;
     }
 
+    // Transition game phase to robot thinking and notify downstream observers
     current_phase_ = ChessGameStatus::PHASE_ROBOT_THINKING;
     best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
     publish_game_status(true, true);
@@ -246,6 +267,7 @@ namespace lekiwi_chess_master
   {
     if (!goal_handle)
     {
+      // Handle goal rejection by resetting state back to waiting for player
       RCLCPP_ERROR(get_logger(), "Auto-trigger goal was rejected by engine action server.");
       is_engine_busy_ = false;
       current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
@@ -253,6 +275,7 @@ namespace lekiwi_chess_master
     }
     else
     {
+      // Retain handle under lock to allow cancellation during game resets
       std::lock_guard<std::mutex> lock(state_mutex_);
       current_goal_handle_ = goal_handle;
       RCLCPP_INFO(get_logger(), "Auto-trigger goal accepted by engine action server, calculating best move...");
@@ -282,6 +305,7 @@ namespace lekiwi_chess_master
     switch (result.code)
     {
     case rclcpp_action::ResultCode::SUCCEEDED:
+      // Classify the engine's best move against current board state
       best_move_details_ = domain::classify_move(board_, result.result->best_move);
       current_eval_centipawns_ = result.result->eval_centipawns;
       current_phase_ = ChessGameStatus::PHASE_ROBOT_READY;
@@ -326,7 +350,7 @@ namespace lekiwi_chess_master
       return;
     }
 
-    // Extract piece placement (first token before any spaces)
+    // Extract piece placement substring (first token before whitespace)
     std::string placement = msg->data;
     auto space_pos = placement.find(' ');
     if (space_pos != std::string::npos)
@@ -336,7 +360,7 @@ namespace lekiwi_chess_master
 
     std::lock_guard<std::mutex> lock(state_mutex_);
 
-    // Debounce filter
+    // Apply temporal debounce filter to reject transitory vision noise or hand occlusion
     if (placement == pending_placement_)
     {
       consecutive_count_++;
@@ -349,19 +373,19 @@ namespace lekiwi_chess_master
 
     bool is_stable = (consecutive_count_ >= debounce_frames_);
 
-    // If placement is identical to current accepted board placement, it is stable and legal
+    // Discard redundant updates if placement is already accepted and current
     if (placement == last_accepted_placement_)
     {
-      return; // No change in board state
+      return;
     }
 
-    // Not yet stable: wait for more frames
+    // Await sufficient consecutive identical frames before accepting new board layout
     if (!is_stable)
     {
       return;
     }
 
-    // Starting position detected
+    // Detect vision reset back to standard starting position
     if (placement == kDefaultStartingPlacement)
     {
       if (last_accepted_placement_ != kDefaultStartingPlacement)
@@ -378,13 +402,13 @@ namespace lekiwi_chess_master
       return;
     }
 
-    // Check if stable new placement matches any legal move
+    // Verify whether the stable new placement corresponds to any legal candidate move
     chess::Move matched_move;
     if (match_legal_move(placement, matched_move))
     {
       std::string move_uci = chess::uci::moveToUci(matched_move);
       last_move_details_ = domain::classify_move(board_, move_uci);
-      board_.makeMove(matched_move);
+      board_.makeMove(matched_move); // Advance canonical game state
       last_accepted_placement_ = placement;
       best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
       current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
@@ -397,6 +421,7 @@ namespace lekiwi_chess_master
     }
     else
     {
+      // Vision state cannot be reached by any legal move: flag illegal board configuration
       RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 2000,
           "Stable vision placement '%s' does NOT match any legal move from FEN: %s",
