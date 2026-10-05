@@ -207,7 +207,19 @@ class MovePlanBuilder:
         details: ChessMoveGoal,
         observation_pose: PoseStamped | None = None,
     ) -> list[MoveStep]:
-        """Entry point for building move steps across all feasibility plan types via Strategy Map."""
+        """Transform workspace feasibility calculation response into an ordered MoveStep pipeline.
+
+        Applies strategy pattern to decompose single-base, dual-base, or capture trajectories
+        and appends an optional final observation standoff retreat step.
+
+        Args:
+            resp: Feasibility service response containing plan type, IK hints, and poses.
+            details: High-level chess move metadata including UCI squares and capture flags.
+            observation_pose: Optional final standoff retreat pose in map frame.
+
+        Returns:
+            List of sequential MoveStep objects ready for execution by MoveSequencer.
+        """
         builder = cls._BUILDERS.get(resp.plan_type, cls._build_fallback)
         steps = list(builder(resp, details))
         if observation_pose is not None:

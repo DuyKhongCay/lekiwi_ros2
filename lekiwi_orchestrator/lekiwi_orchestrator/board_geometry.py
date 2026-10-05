@@ -1,9 +1,10 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-"""
-Board geometry domain: SE(2) planar mathematics, radial standoff guards,
-and azimuth viewpoint candidate ranking for autonomous chess robot.
+"""Board geometry domain: SE(2) planar mathematics and observation standoff.
+
+Provides planar quaternion conversions, radial circle boundaries, and azimuth
+candidate ranking for active perception vantage point planning.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 
 
 def yaw_to_quaternion(yaw: float) -> Quaternion:
-    """Convert planar yaw angle (radians) to geometry_msgs Quaternion."""
+    """Convert planar yaw angle in radians to a geometry_msgs Quaternion."""
     half_yaw = yaw * 0.5
     return Quaternion(
         x=0.0,
@@ -30,10 +31,8 @@ def yaw_to_quaternion(yaw: float) -> Quaternion:
 
 
 def normalize_angle(angle: float) -> float:
-    """Normalize any planar angle (radians) to [-pi, pi]."""
+    """Normalize any planar angle in radians to the principal interval [-pi, pi]."""
     return math.atan2(math.sin(angle), math.cos(angle))
-
-
 
 
 def _create_standoff_pose(
@@ -42,7 +41,7 @@ def _create_standoff_pose(
     facing_yaw: float,
     frame_id: str,
 ) -> PoseStamped:
-    """Internal helper to construct a stamped planar pose facing the target."""
+    """Construct a PoseStamped with position (target_x, target_y) and heading facing_yaw."""
     pose = PoseStamped()
     pose.header.frame_id = frame_id
     pose.pose = Pose(
@@ -50,9 +49,6 @@ def _create_standoff_pose(
         orientation=yaw_to_quaternion(facing_yaw),
     )
     return pose
-
-
-
 
 
 # ==============================================================================
@@ -66,14 +62,9 @@ def is_on_standoff_circle(
     standoff_radius: float,
     tolerance: float = 0.04,
 ) -> bool:
-    """
-    Evaluate if planar position (x, y) lies on the observation circle of radius standoff_radius.
+    """Evaluate whether planar coordinates (x, y) lie on the standoff circle.
 
-    :param x: X position in chessboard_frame (meters).
-    :param y: Y position in chessboard_frame (meters).
-    :param standoff_radius: Target observation circle radius R (meters).
-    :param tolerance: Radial tolerance band delta_R (meters, default 4cm).
-    :return: True if |sqrt(x^2 + y^2) - standoff_radius| <= tolerance.
+    Prevents redundant base navigation if the robot is already within viewing tolerance.
     """
     r = math.hypot(x, y)
     return abs(r - standoff_radius) <= tolerance
@@ -86,11 +77,19 @@ def compute_radial_entry_pose(
     board_frame: str = "chessboard_frame",
     fallback_yaw: float = 0.0,
 ) -> PoseStamped:
-    """
-    Generate target entry pose on standoff circle along radial vector from origin through (curr_x, curr_y).
+    """Generate target entry pose on standoff circle along the radial vector.
 
-    Robot heading is oriented inward facing the chessboard center.
-    If robot is exactly at origin, uses fallback_yaw as the radial direction.
+    Orients robot heading inward facing the board center to re-acquire visual markers.
+
+    Args:
+        curr_x: Current X position in `board_frame` (meters).
+        curr_y: Current Y position in `board_frame` (meters).
+        standoff_radius: Target observation circle radius R from board origin (meters).
+        board_frame: Coordinate frame ID of the chessboard.
+        fallback_yaw: Fallback radial direction if current position is exactly at origin.
+
+    Returns:
+        PoseStamped representing the radial entry waypoint facing board center.
     """
     dist = math.hypot(curr_x, curr_y)
     azimuth = math.atan2(curr_y, curr_x) if dist > 1e-4 else fallback_yaw
@@ -130,16 +129,20 @@ def rank_by_azimuth(
     board_frame: str = "chessboard_frame",
     fallback_yaw: float = 0.0,
 ) -> list[RankedViewpoint]:
-    """
-    Rank candidate viewpoints by shortest azimuthal distance from current polar angle.
+    """Rank candidate viewpoints by shortest geodesic distance along the standoff circle.
 
-    :param curr_x: Current X position in chessboard_frame.
-    :param curr_y: Current Y position in chessboard_frame.
-    :param candidate_offsets: List of candidate azimuth angles (radians) in chessboard_frame.
-    :param standoff_radius: Observation radius R (meters).
-    :param board_frame: Frame ID of the chessboard.
-    :param fallback_yaw: Fallback angle if current position is at origin.
-    :return: List of RankedViewpoint sorted ascending by arc_cost (closest first).
+    Minimizes mobile base transit time by selecting the closest angular vantage point first.
+
+    Args:
+        curr_x: Current X position in `board_frame` (meters).
+        curr_y: Current Y position in `board_frame` (meters).
+        candidate_offsets: Candidate azimuth angles (radians) in `board_frame`.
+        standoff_radius: Observation radius R (meters).
+        board_frame: Coordinate frame ID of the chessboard.
+        fallback_yaw: Fallback angle if current robot position is at board origin.
+
+    Returns:
+        List of RankedViewpoint instances sorted ascending by arc_cost (closest first).
     """
     dist = math.hypot(curr_x, curr_y)
     curr_azimuth = math.atan2(curr_y, curr_x) if dist > 1e-4 else fallback_yaw

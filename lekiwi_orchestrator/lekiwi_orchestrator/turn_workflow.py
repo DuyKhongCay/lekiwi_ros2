@@ -142,7 +142,18 @@ class GameStatusHandler:
         msg: ChessGameStatus,
         clear_pending_recovery_cb: Callable[[], None] | None = None,
     ) -> None:
-        """Process game state updates from lekiwi_chess_master referee."""
+        """Process incoming referee status messages and gate robot turn eligibility.
+
+        Evaluates game termination conditions (mate/draw), verifies post-move stabilization,
+        checks turn ownership against robot color, and triggers move workflow dispatch.
+
+        Args:
+            msg: ChessGameStatus message received from chess referee engine.
+            clear_pending_recovery_cb: Optional callback to clear recovery goal upon fresh move.
+
+        Thread-safety:
+            Checks and updates `_last_processed_fen` under `_state_lock`.
+        """
         if self.handle_game_over_if_ended(msg):
             return
 
@@ -395,7 +406,11 @@ class PostMoveVerifier:
             self._timer = None
 
     def on_timeout(self) -> None:
-        """Handle verification timeout: board is occluded or unconfirmed -> reposition viewpoint."""
+        """Handle post-move verification timeout by repositioning base to alternative vantage point.
+
+        Called when chessboard FEN cannot be confirmed stable/legal within observation timeout.
+        Selects next viewpoint along standoff circle and cycles back to BOARD_STATE_SCAN.
+        """
         self.stop()
         with self._state_lock:
             if self._get_mission_state() != MacroMissionState.POST_MOVE_VERIFYING:

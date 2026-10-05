@@ -92,27 +92,33 @@ class ObsNavigator:
 
     @property
     def standoff_distance(self) -> float:
+        """Return the configured radial standoff viewing distance from board center (meters)."""
         return self._standoff_distance
 
     @property
     def viewpoint_index(self) -> int:
+        """Return the current candidate viewpoint index for post-move verification under lock."""
         with self._lock:
             return self._viewpoint_indices[ObservationIntent.POST_MOVE_VERIFY]
 
     def get_viewpoint_index(self, intent: ObservationIntent) -> int:
+        """Return the active viewpoint index for the specified observation intent."""
         with self._lock:
             return self._viewpoint_indices.get(intent, 0)
 
     def get_max_attempts(self, intent: ObservationIntent) -> int:
+        """Return the total number of candidate angular offsets for the specified intent."""
         return len(self._angle_offsets_map.get(intent, []))
 
     def has_exhausted_viewpoints(self, intent: ObservationIntent) -> bool:
+        """Return True if all configured angular offsets for the intent have been attempted."""
         with self._lock:
             return self._viewpoint_indices.get(intent, 0) >= self.get_max_attempts(
                 intent
             )
 
     def reset_viewpoint_index(self, intent: ObservationIntent | None = None) -> None:
+        """Reset observation viewpoint index for a specific intent or all intents."""
         with self._lock:
             if intent is not None:
                 self._viewpoint_indices[intent] = 0
@@ -121,10 +127,18 @@ class ObsNavigator:
                     self._viewpoint_indices[k] = 0
 
     def cancel(self) -> None:
+        """Cancel any ongoing navigation action dispatched by this observer."""
         self._dispatcher.cancel_active_goal()
 
     def pose_to_board_xy(self, pose: PoseStamped) -> tuple[float, float]:
-        """Convert a PoseStamped in any frame to (x, y) coordinates in chessboard_frame."""
+        """Convert a PoseStamped in any frame to planar (x, y) coordinates in `chessboard_frame`.
+
+        Args:
+            pose: PoseStamped to transform.
+
+        Returns:
+            Tuple of (x, y) coordinates in meters relative to chessboard origin.
+        """
         frame_id = getattr(getattr(pose, "header", None), "frame_id", "")
         if frame_id == self._board_frame:
             return float(pose.pose.position.x), float(pose.pose.position.y)
@@ -146,7 +160,14 @@ class ObsNavigator:
         self,
         reference_pose: PoseStamped | None = None,
     ) -> tuple[float, float]:
-        """Resolve robot base position (x, y) relative to chessboard_frame."""
+        """Resolve robot base planar position (x, y) relative to `chessboard_frame`.
+
+        Args:
+            reference_pose: Optional known base pose, bypassing TF lookup if provided.
+
+        Returns:
+            Tuple of (x, y) coordinates in meters in board frame.
+        """
         if reference_pose is not None:
             return self.pose_to_board_xy(reference_pose)
 
@@ -166,16 +187,20 @@ class ObsNavigator:
                     throttle_duration_sec=5.0,
                 )
 
-        # Canonical fallback along +X axis of chessboard_frame (azimuth = 0.0 rad)
+        # Fallback along +X axis of chessboard_frame (azimuth = 0.0 rad) when TF is offline
         return (self._standoff_distance, 0.0)
 
     def compute_observation_pose_for_base(
         self,
         base_pose: PoseStamped | None,
     ) -> PoseStamped | None:
-        """
-        Compute the radial standoff observation pose corresponding to a manipulation base pose.
-        If base_pose is None, falls back to robot's current live TF position.
+        """Compute the radial standoff observation pose in map frame for a base pose.
+
+        Args:
+            base_pose: Source manipulation pose, or None to sample live robot position.
+
+        Returns:
+            PoseStamped in map frame facing the board center, or None on TF error.
         """
         if base_pose is not None:
             bx, by = self.pose_to_board_xy(base_pose)
@@ -195,7 +220,14 @@ class ObsNavigator:
         self,
         pose_board: PoseStamped,
     ) -> PoseStamped | None:
-        """Transform a PoseStamped from chessboard_frame to map frame via TF."""
+        """Transform a PoseStamped from `chessboard_frame` to `map_frame` via TF2 buffer.
+
+        Args:
+            pose_board: PoseStamped expressed in board frame.
+
+        Returns:
+            PoseStamped in map frame, or None if transform lookup fails.
+        """
         if self._tf_buffer is not None:
             try:
                 return self._tf_buffer.transform(
@@ -209,7 +241,7 @@ class ObsNavigator:
                 )
                 return None
 
-        # Nominal pass-through for test environment without active TF daemon
+        # Pass-through fallback for isolated tests lacking an active TF daemon
         pose_map = PoseStamped()
         pose_map.header.frame_id = self._map_frame
         pose_map.header.stamp = pose_board.header.stamp
@@ -224,7 +256,20 @@ class ObsNavigator:
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
-        """Phase 2: Rank candidate viewpoints by Azimuth cost and dispatch optimal goal."""
+        """Rank candidate observation viewpoints by geodesic distance and dispatch navigation.
+
+        Sorts angular offsets along the standoff circle S^1 and sends a Nav2 goal to the closest.
+
+        Args:
+            intent: Semantic intent (POST_MOVE_VERIFY or RELOCALIZE).
+            curr_bx: Current robot X coordinate in `board_frame` (meters).
+            curr_by: Current robot Y coordinate in `board_frame` (meters).
+            timeout_sec: Action watchdog timeout in seconds.
+            on_completed: Callback invoked with ActionResult upon goal termination.
+
+        Returns:
+            True if Nav2 action goal was successfully dispatched, False otherwise.
+        """
         offsets = self._angle_offsets_map.get(intent, [0.0])
         if not offsets:
             return False
@@ -272,10 +317,20 @@ class ObsNavigator:
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
-        """
-        Reposition base executing 2-Phase Strategy:
-        1. Radial Standoff Guard: Ensure robot is on standoff circle of radius R.
-        2. Azimuth Cost Navigation: Navigate to lowest arc cost viewpoint.
+        """Execute two-phase active observation repositioning strategy.
+
+        Enforces radial standoff safety before traversing azimuth viewpoints along the circle.
+        Phase 1: Radial retreat if robot is inside or outside standoff tolerance band.
+        Phase 2: Shortest-arc azimuth navigation to the next unoccluded vantage angle.
+
+        Args:
+            intent: Semantic intent (POST_MOVE_VERIFY or RELOCALIZE).
+            reference_pose: Optional reference base pose to evaluate instead of live TF.
+            timeout_sec: Action watchdog timeout in seconds for navigation steps.
+            on_completed: Callback invoked with ActionResult upon final goal termination.
+
+        Returns:
+            True if navigation goal sequence was successfully initiated, False otherwise.
         """
         offsets = self._angle_offsets_map.get(intent, [0.0])
         if not offsets:

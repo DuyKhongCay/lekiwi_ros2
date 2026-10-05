@@ -206,6 +206,19 @@ class RosMotionClient(MotionClient):
         on_success: Callable[[CheckMoveFeasibility.Response], None] | None = None,
         on_error: Callable[[str], None] | None = None,
     ) -> bool:
+        """Query reachability and inverse kinematics feasibility for a candidate chess move.
+
+        Calls the `/workspace/check_move_feasibility` service asynchronously with a timeout timer.
+
+        Args:
+            goal: Move candidate goal specifying source/target squares and piece types.
+            timeout_sec: Maximum wait duration before triggering query timeout callback.
+            on_success: Callback invoked with feasibility response when query succeeds.
+            on_error: Callback invoked with diagnostic error message upon failure.
+
+        Returns:
+            True if request was sent to service server, False if client is unready.
+        """
         if (
             self._feasibility_client is None
             or not self._feasibility_client.service_is_ready()
@@ -289,7 +302,18 @@ class RosMotionClient(MotionClient):
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
-        """Dispatch target_pose to Nav2 with integrated watchdog."""
+        """Dispatch target_pose to Nav2 NavigateToPose action server with integrated watchdog.
+
+        Monitors goal acceptance and completion status, cancelling active goal if timeout expires.
+
+        Args:
+            target_pose: Target robot base pose expressed in map coordinate frame.
+            timeout_sec: Maximum duration in seconds before cancelling navigation.
+            on_completed: Callback invoked with ActionResult upon termination.
+
+        Returns:
+            True if action goal was accepted for submission, False if server is offline.
+        """
         if self._mock_nav2:
             self._node.get_logger().info(
                 f"[MOCK NAV2] Base repositioning bypassed to "
@@ -368,7 +392,19 @@ class RosMotionClient(MotionClient):
         on_feedback: Callable[[Any], None] | None = None,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
-        """Dispatch manipulation goal to Arm Manipulation action server with integrated watchdog."""
+        """Dispatch a chess move trajectory goal to the arm manipulation action server.
+
+        Integrates feedback streaming and action watchdog timer to prevent robotic arm deadlocks.
+
+        Args:
+            goal: ExecuteChessMove.Goal action message.
+            timeout_sec: Maximum duration in seconds allowed for arm execution.
+            on_feedback: Optional callback invoked with action feedback messages.
+            on_completed: Callback invoked with ActionResult upon action completion or error.
+
+        Returns:
+            True if action goal was accepted for submission, False if server is unready.
+        """
         if (
             self._manipulation_client is None
             or not self._manipulation_client.server_is_ready()

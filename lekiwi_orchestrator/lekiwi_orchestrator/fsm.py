@@ -5,7 +5,7 @@
 Hierarchical State Pattern & Finite State Machine (HFSM) Definitions for LeKiwi.
 
 Architecture:
-1. Level 1: Macro Mission FSM (`MacroMissionState` / `MissionState`)
+1. Level 1: Macro Mission FSM (`MacroMissionState`)
    Manages game turn ownership, localization safety, move planning, and game outcome.
 2. Level 2: Motion Execution Sub-FSM (`MotionExecutionState`)
    Semantic micro-steps decomposing the move (Clear -> Pick -> Place -> Verify).
@@ -21,7 +21,10 @@ from lekiwi_interfaces.msg import PerceptionContext
 
 
 class MacroMissionState(IntEnum):
-    """Level 1: High-level autonomous chess mission lifecycle states."""
+    """Level 1: High-level autonomous chess mission lifecycle states.
+
+    Tracks high-level turn progression, safety leases, and recovery states.
+    """
 
     BOOT_INITIALIZING = 0
     WAITING_FOR_TF_READY = 1
@@ -33,7 +36,6 @@ class MacroMissionState(IntEnum):
     TURN_COMPLETED = 7
     GAME_OVER = 8
     ERROR_FALLBACK = 9
-
 
 
 MISSION_STATE_NAMES: dict[MacroMissionState, str] = {
@@ -100,7 +102,7 @@ ALLOWED_MISSION_TRANSITIONS: dict[MacroMissionState, set[MacroMissionState]] = {
     },
     MacroMissionState.GAME_OVER: {
         MacroMissionState.GAME_OVER,
-        MacroMissionState.BOOT_INITIALIZING,  # Reset game
+        MacroMissionState.BOOT_INITIALIZING,  # Reset game upon new match
     },
     MacroMissionState.ERROR_FALLBACK: {
         MacroMissionState.ERROR_FALLBACK,
@@ -111,7 +113,10 @@ ALLOWED_MISSION_TRANSITIONS: dict[MacroMissionState, set[MacroMissionState]] = {
 
 
 class MotionExecutionState(IntEnum):
-    """Level 2: Semantic micro-steps inside EXECUTING_MOVE_PIPELINE."""
+    """Level 2: Semantic micro-steps inside EXECUTING_MOVE_PIPELINE.
+
+    Sequences approach navigation, piece clearance, grasp, placement, and retreat.
+    """
 
     IDLE = 0
     NAV_TO_CLEAR = 1
@@ -246,21 +251,30 @@ ALLOWED_PERCEPTION_TRANSITIONS: dict[int, set[int]] = {
 def is_mission_transition_allowed(
     current_state: MacroMissionState, requested_state: MacroMissionState
 ) -> bool:
-    """Return True if the mission Level 1 FSM permits transition."""
+    """Verify whether a Level 1 MacroMissionState transition is valid.
+
+    Guards against illegal FSM jumps to enforce safety invariants.
+    """
     return requested_state in ALLOWED_MISSION_TRANSITIONS.get(current_state, set())
 
 
 def is_motion_transition_allowed(
     current_state: MotionExecutionState, requested_state: MotionExecutionState
 ) -> bool:
-    """Return True if the motion Level 2 Sub-FSM permits transition."""
+    """Verify whether a Level 2 MotionExecutionState transition is valid.
+
+    Ensures pipeline step sequencing respects physical arm and base safety rules.
+    """
     return requested_state in ALLOWED_MOTION_TRANSITIONS.get(current_state, set())
 
 
 def is_perception_transition_allowed(
     current_context: int, requested_context: int
 ) -> bool:
-    """Return True if the PerceptionContext transition is allowed."""
+    """Verify whether a PerceptionContext hardware valve transition is valid.
+
+    Protects camera pipeline switches between navigation, detection, and manipulation.
+    """
     return requested_context in ALLOWED_PERCEPTION_TRANSITIONS.get(
         current_context, set()
     )

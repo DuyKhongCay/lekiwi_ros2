@@ -131,7 +131,18 @@ class MoveSequencer:
         stages: list[MoveStep],
         feasibility_resp: CheckMoveFeasibility.Response,
     ) -> None:
-        """Begin execution of a newly built list of MoveSteps."""
+        """Begin execution of a newly built sequential move pipeline.
+
+        Resets cancellation flags and recovery counters before triggering the first atomic stage.
+
+        Args:
+            stages: Ordered list of MoveStep primitives (approach, clear, pick, place, verify).
+            feasibility_resp: Kinematic response from workspace reachability service with IK hints.
+
+        Thread-safety:
+            Pipeline initialization is synchronized using `_lock`. Stage execution is advanced
+            asynchronously across action client callback threads.
+        """
         self._cancel_event.clear()
         with self._lock:
             self._stages = list(stages)
