@@ -1,19 +1,21 @@
 # `lekiwi_manipulation`
-
-Mock manipulation action server for the LeKiwi chess robot.
-
+ 
+Manipulation subsystem for LeKiwi: provides high-level AI policy interfaces and mock policy server. Hardware motion planning and trajectory execution are handled deterministically in C++ within `lekiwi_motion`.
+ 
 ---
-
+ 
 ## 🏛️ Architecture & Nodes
-
-`lekiwi_manipulation` provides a lightweight, pure-software simulation server for manipulation tasks:
-
+ 
+`lekiwi_manipulation` provides high-level policy interfaces:
+ 
 - **`mock_policy_server` (`MockPolicyServer`)**:
   - Implements the `/manipulation/execute_chess_move` Action Server (`lekiwi_interfaces/action/ExecuteChessMove`).
-  - Simulates the sequential atomic phases:
+  - Simulates the sequential atomic phases for rapid testing without physical robot motion:
     `APPROACH_PICK` $\to$ `DESCEND_PICK` $\to$ `GRASP` $\to$ `LIFT` $\to$ `TRANSIT_PLACE` $\to$ `DESCEND_PLACE` $\to$ `RELEASE` $\to$ `RETRACT_STOW`.
   - Supports incremental sleep with preemption / graceful cancel handling and periodic progress feedback.
   - Publishes diagnostic status on `/diagnostics`.
+- **Real Hardware Execution**:
+  - Delegated to `lekiwi_motion::ManipulationActionServer` and `lekiwi_motion::CartesianServiceNode` (C++). Launchable via `ros2 launch lekiwi_bringup orchestrator.launch.py use_mock:=false`.
 
 ---
 
@@ -32,9 +34,14 @@ Mock manipulation action server for the LeKiwi chess robot.
 
 ## 🚀 Launch & Usage
 
+Manipulation is unified under `lekiwi_bringup`:
+
 ```bash
-# Launch mock policy server with default parameters
-ros2 launch lekiwi_manipulation manipulation.launch.py
+# Launch orchestrator with mock manipulation server (testing / simulation)
+ros2 launch lekiwi_bringup orchestrator.launch.py use_mock:=true
+
+# Launch orchestrator with real hardware C++ manipulation nodes
+ros2 launch lekiwi_bringup orchestrator.launch.py use_mock:=false
 ```
 
 ---
