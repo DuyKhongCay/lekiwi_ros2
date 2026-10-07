@@ -298,6 +298,7 @@ python3 $(ros2 pkg prefix lekiwi_description)/lib/lekiwi_description/recenter_ch
 | `hardware_type` | `string` | `"real"` | Target hardware interface: `"real"` (Feetech hardware driver) or `"mock"` (generic simulated system). |
 | `use_sim_time` | `bool` | `false` | Synchronizes nodes to simulation `/clock` when set to `true`. |
 | `robot_description_topic` | `string` | `"robot_description"` | Topic name on which to publish the URDF XML model string. |
+| `arm_control_mode` | `string` | `"kinematics"` | Arm control paradigm: `"kinematics"` (accel=0 for smooth C² trajectories) or `"policy"` (accel=50 for discrete policy jitter smoothing). |
 
 ### `visualizer.launch.py`
 

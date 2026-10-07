@@ -55,6 +55,19 @@ def generate_launch_description() -> LaunchDescription:
             default_value="robot_description",
             description="Topic name to publish the robot_description string.",
         ),
+        DeclareLaunchArgument(
+            "arm_control_mode",
+            default_value="kinematics",
+            choices=["kinematics", "policy"],
+            description="Arm control paradigm: 'kinematics' (accel=0) or 'policy' (accel=50)",
+        ),
+        DeclareLaunchArgument(
+            "servo_calib_file",
+            default_value=PathJoinSubstitution(
+                [description_share, "config", "calibration", "DuyKhongCay.json"]
+            ),
+            description="Path to STS3215 bus servo calibration JSON file",
+        ),
     ]
 
     # Evaluate Xacro into URDF XML string parameter
@@ -65,6 +78,10 @@ def generate_launch_description() -> LaunchDescription:
                 xacro_file,
                 " hardware_type:=",
                 LaunchConfiguration("hardware_type"),
+                " arm_control_mode:=",
+                LaunchConfiguration("arm_control_mode"),
+                " servo_calib_file:=",
+                LaunchConfiguration("servo_calib_file"),
             ]
         ),
         value_type=str,
