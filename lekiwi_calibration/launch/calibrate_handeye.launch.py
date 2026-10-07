@@ -76,7 +76,6 @@ def generate_launch_description():
             PathJoinSubstitution([bringup_share, "launch", "controllers.launch.py"])
         ),
         launch_arguments={
-            "hardware_type": LaunchConfiguration("hardware_type"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "arm_controller": "true",
             "base_controller": "false",

@@ -29,6 +29,7 @@ setup(
             "generate_charuco = lekiwi_calibration.handeye.generate_charuco:main",
             "calibrate_standoff = lekiwi_calibration.standoff.standoff_calibrator_node:main",
             "calibrate_observation_gamepad = lekiwi_calibration.observation.manual_obs_calibrator_node:main",
+            "calibrate_arm_pose = lekiwi_calibration.arm.arm_pose_calibrator_node:main",
         ],
     },
 )

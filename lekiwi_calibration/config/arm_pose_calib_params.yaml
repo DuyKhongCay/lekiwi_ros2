@@ -1,0 +1,42 @@
+# ==============================================================================
+# LeKiwi Arm Pose Calibrator Node Parameters
+# Clean, externalized configuration for human-in-the-loop landmark pose calibration.
+# ==============================================================================
+
+arm_pose_calibrator:
+  ros__parameters:
+    # Target landmark pose sequence to calibrate in order (Open/Closed Principle)
+    target_poses:
+      - "home"
+      - "stow"
+      - "clear_left"
+      - "clear_right"
+
+    # Explicit joint ordering for arm manipulation (strictly mapped from JointState)
+    arm_joints:
+      - "arm_shoulder_pan"
+      - "arm_shoulder_lift"
+      - "arm_elbow_flex"
+      - "arm_wrist_flex"
+      - "arm_wrist_roll"
+      - "arm_gripper"
+
+    # Destination YAML file path for exported calibrated poses
+    output_yaml: "lekiwi_ros2/lekiwi_calibration/calib_results/arm_named_poses.yaml"
+
+    # ROS Topics
+    joint_states_topic: "/joint_states"
+    joy_topic: "/joy"
+
+    # Gamepad button and axis mapping (Flydigi / Xbox 360 controller)
+    # dpad_y_axis: D-Pad Up (>0.5: record), D-Pad Down (<-0.5: undo)
+    # menu_button: Start / Menu button (Index 7) to export
+    dpad_y_axis: 7
+    menu_button: 7
+
+    # Guard condition: require all poses in target_poses to be captured before export
+    require_all_poses: true
+
+    # Export formatting
+    float_precision: 4
+
