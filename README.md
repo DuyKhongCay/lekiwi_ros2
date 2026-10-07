@@ -178,7 +178,7 @@ ros2 launch lekiwi_bringup robot.launch.py hardware_type:=mock
 # Launches real hardware interfaces, Hailo-8 NPU inference, and orchestrator FSM
 ros2 launch lekiwi_bringup robot.launch.py \
   hardware_type:=real \
-  use_mock_manipulation:=false \
+  manipulation:=kinematics \
   chess_master:=true \
   cameras:=true
 ```

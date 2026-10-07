@@ -9,9 +9,13 @@ and orchestration subsystems into a unified runtime tree.
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -25,7 +29,6 @@ def generate_launch_description():
     # 1. Locate dependent package shares
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")
-    manipulation_share = FindPackageShare("lekiwi_manipulation")
 
     # 2. Declare global and subsystem launch arguments
     declared_arguments = [
@@ -33,16 +36,6 @@ def generate_launch_description():
             "enable_orchestrator",
             default_value="true",
             description="Start LeKiwi orchestration and readiness subsystem",
-        ),
-        DeclareLaunchArgument(
-            "enable_readiness_checks",
-            default_value="true",
-            description="Start both TF and workspace readiness checks",
-        ),
-        DeclareLaunchArgument(
-            "start_mission",
-            default_value="true",
-            description="Start autonomous chess mission orchestrator",
         ),
         DeclareLaunchArgument(
             "cameras",
@@ -101,13 +94,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "manipulation",
-            default_value="true",
-            description="Start LeKiwi manipulation subsystem (cartesian service and action server)",
-        ),
-        DeclareLaunchArgument(
-            "use_mock_manipulation",
-            default_value="false",
-            description="Use mock_policy_server instead of real hardware manipulation action server",
+            default_value="mock",
+            choices=["mock", "kinematics", "policy", "false"],
+            description="Manipulation subsystem mode: 'mock' (mock_policy_server, default), "
+            "'kinematics' (real action server + cartesian service, accel=0), "
+            "'policy' (LeRobot ACT/SmolVLA, accel=50), or 'false' (disabled)",
         ),
     ]
 
@@ -119,6 +110,11 @@ def generate_launch_description():
         launch_arguments={
             "hardware_type": LaunchConfiguration("hardware_type"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "arm_control_mode": PythonExpression(
+                [
+                    "'policy' if '",LaunchConfiguration("manipulation"),"' == 'policy' else 'kinematics'",
+                ]
+            ),
         }.items(),
     )
 
@@ -127,7 +123,6 @@ def generate_launch_description():
             PathJoinSubstitution([bringup_share, "launch", "controllers.launch.py"])
         ),
         launch_arguments={
-            "hardware_type": LaunchConfiguration("hardware_type"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "arm_controller": LaunchConfiguration("arm_controller"),
             "base_controller": LaunchConfiguration("base_controller"),
@@ -163,9 +158,8 @@ def generate_launch_description():
                 [bringup_share, "config", "control", "orchestrator.yaml"]
             ),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "start_mission": LaunchConfiguration("start_mission"),
-            "start_readiness_manager": LaunchConfiguration("enable_readiness_checks"),
             "navigation": LaunchConfiguration("navigation"),
+            "manipulation": LaunchConfiguration("manipulation"),
         }.items(),
         condition=IfCondition(LaunchConfiguration("enable_orchestrator")),
     )
@@ -229,19 +223,6 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("chess_master")),
     )
 
-    manipulation = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution(
-                [manipulation_share, "launch", "manipulation.launch.py"]
-            )
-        ),
-        launch_arguments={
-            "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "use_mock": LaunchConfiguration("use_mock_manipulation"),
-        }.items(),
-        condition=IfCondition(LaunchConfiguration("manipulation")),
-    )
-
     # 4. Assemble LaunchDescription
     return LaunchDescription(
         [
@@ -257,6 +238,5 @@ def generate_launch_description():
             teleop_uarm,
             navigation,
             chess_master,
-            manipulation,
         ]
     )

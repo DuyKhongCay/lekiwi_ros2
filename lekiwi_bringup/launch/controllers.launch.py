@@ -12,7 +12,6 @@ from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import (
-    Command,
     LaunchConfiguration,
     PathJoinSubstitution,
 )
@@ -29,11 +28,7 @@ def generate_launch_description():
     """
     # 1. Resolve package paths and configuration files
     bringup_share = FindPackageShare("lekiwi_bringup")
-    description_share = FindPackageShare("lekiwi_description")
 
-    xacro_file = PathJoinSubstitution(
-        [description_share, "urdf", "lekiwi_robot.urdf.xacro"]
-    )
     controller_config = PathJoinSubstitution(
         [bringup_share, "config", "control", "controllers.yaml"]
     )
@@ -43,11 +38,6 @@ def generate_launch_description():
 
     # 2. Declare launch arguments
     declared_arguments = [
-        DeclareLaunchArgument(
-            "hardware_type",
-            default_value="real",
-            description="Hardware type: real or mock",
-        ),
         DeclareLaunchArgument(
             "use_sim_time",
             default_value="false",
@@ -75,31 +65,16 @@ def generate_launch_description():
         ),
     ]
 
-    # 3. Load robot URDF via xacro command
-    robot_description = {
-        "robot_description": ParameterValue(
-            Command(
-                [
-                    "xacro ",
-                    xacro_file,
-                    " hardware_type:=",
-                    LaunchConfiguration("hardware_type"),
-                ]
-            ),
-            value_type=str,
-        )
-    }
-
     use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
 
-    # 4. Define ros2_control controller_manager and controller spawners
+    # 3. Define ros2_control controller_manager and controller spawners
+    # In ROS 2 Jazzy, controller_manager subscribes to /robot_description published by robot_state_publisher
     controller_manager = Node(
         package="controller_manager",
         executable="ros2_control_node",
         name="controller_manager",
         output="screen",
         parameters=[
-            robot_description,
             controller_config,
             {"use_sim_time": use_sim_time},
         ],
