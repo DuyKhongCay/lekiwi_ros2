@@ -191,24 +191,3 @@ def test_parameters_invalid_readiness_timeout():
             OrchestratorParameters(test_node)
     finally:
         test_node.destroy_node()
-
-
-def test_move_step_to_ros_goal_missing_interface(monkeypatch):
-    import lekiwi_orchestrator.move_planner as mp
-    from geometry_msgs.msg import Point
-
-    monkeypatch.setattr(mp, "ExecuteChessMove", None)
-    step = mp.MoveStep(
-        name="TEST",
-        target_pose=None,
-        instruction="test",
-        from_square="e2",
-        to_square="e4",
-        is_capture=False,
-        pick_point=Point(),
-        place_point=Point(),
-    )
-    with pytest.raises(
-        RuntimeError, match="ExecuteChessMove action interface is unavailable"
-    ):
-        step.to_ros_goal("board")

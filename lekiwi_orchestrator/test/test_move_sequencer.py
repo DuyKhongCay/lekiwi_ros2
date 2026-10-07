@@ -745,27 +745,35 @@ def test_build_fallback_stage(base_goal):
     assert stages[0].target_pose is not None
 
 
-def test_to_ros_goal_ik_hints():
+def test_build_manipulation_goal(ros_context):
+    node = Node("test_build_goal_node")
+    dispatcher = DummyPipelineDispatcher()
+    executor = MoveSequencer(
+        node=node,
+        dispatcher=dispatcher,
+        perception=Mock(),
+        board_frame="chessboard_frame",
+    )
     stage = MoveStep(
         name="TEST",
         target_pose=None,
-        instruction="test",
-        from_square="e2",
-        to_square="e4",
-        is_capture=False,
-        pick_point=Point(),
-        place_point=Point(),
+        instruction="Pick c7, place c5",
+        from_square="c7",
+        to_square="c5",
+        is_capture=True,
+        pick_point=Point(x=0.1, y=0.2, z=0.03),
+        place_point=Point(x=0.3, y=0.4, z=0.03),
         motion_state=MotionExecutionState.PICKING_PIECE,
     )
-    resp = Mock()
-    resp.pick_ik_solution = Mock()
-    resp.pick_ik_solution.name = ["joint_1"]
-    resp.place_ik_solution = Mock()
-    resp.place_ik_solution.name = ["joint_1"]
-    ros_goal = stage.to_ros_goal("chessboard_frame", resp)
-    assert ros_goal.instruction == "test"
-    assert hasattr(ros_goal, "pick_ik_hint")
-    assert hasattr(ros_goal, "place_ik_hint")
+    goal = executor._build_manipulation_goal(stage)
+    assert goal.instruction == "Pick c7, place c5"
+    assert goal.from_square == "c7"
+    assert goal.to_square == "c5"
+    assert goal.is_capture is True
+    assert goal.pick_point.x == 0.1
+    assert goal.place_point.x == 0.3
+    assert goal.target_frame == "chessboard_frame"
+    node.destroy_node()
 
 
 def test_manipulation_feedback_and_failure(ros_context):

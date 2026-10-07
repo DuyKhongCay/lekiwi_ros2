@@ -22,12 +22,6 @@ from lekiwi_interfaces.srv import CheckMoveFeasibility
 from lekiwi_orchestrator.fsm import MotionExecutionState
 from lekiwi_orchestrator.mission_types import ChessMoveGoal
 
-try:
-    from lekiwi_interfaces.action import ExecuteChessMove
-except ImportError:
-    ExecuteChessMove = None  # type: ignore[assignment, misc]
-
-
 class StepKind(str, Enum):
     """Enumeration of atomic move execution step types."""
 
@@ -56,35 +50,6 @@ class MoveStep:
     place_point: Point
     motion_state: MotionExecutionState = MotionExecutionState.IDLE
     nav_motion_state: MotionExecutionState | None = None
-
-    def to_ros_goal(
-        self,
-        board_frame: str,
-        feasibility_resp: CheckMoveFeasibility.Response | None = None,
-    ) -> Any:
-        """Assemble ExecuteChessMove.Goal message with points and IK hints."""
-        if ExecuteChessMove is None:
-            raise RuntimeError("ExecuteChessMove action interface is unavailable")
-
-        goal = ExecuteChessMove.Goal()
-        goal.instruction = self.instruction
-        goal.from_square = self.from_square
-        goal.to_square = self.to_square
-        goal.is_capture = self.is_capture
-        goal.pick_point = self.pick_point
-        goal.place_point = self.place_point
-        goal.target_frame = board_frame
-
-        if feasibility_resp is not None:
-            if hasattr(feasibility_resp, "pick_ik_solution") and getattr(
-                feasibility_resp.pick_ik_solution, "name", None
-            ):
-                goal.pick_ik_hint = feasibility_resp.pick_ik_solution
-            if hasattr(feasibility_resp, "place_ik_solution") and getattr(
-                feasibility_resp.place_ik_solution, "name", None
-            ):
-                goal.place_ik_hint = feasibility_resp.place_ik_solution
-        return goal
 
 
 def _clear_step(
@@ -213,7 +178,7 @@ class MovePlanBuilder:
         and appends an optional final observation standoff retreat step.
 
         Args:
-            resp: Feasibility service response containing plan type, IK hints, and poses.
+            resp: Feasibility service response containing plan type, target coordinates, and poses.
             details: High-level chess move metadata including UCI squares and capture flags.
             observation_pose: Optional final standoff retreat pose in map frame.
 
