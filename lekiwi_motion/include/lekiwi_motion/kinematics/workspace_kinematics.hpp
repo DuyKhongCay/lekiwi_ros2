@@ -212,6 +212,16 @@ namespace lekiwi_motion::workspace
      */
     void init_geometry(const KinematicsModel &model);
 
+    /**
+     * @brief Evaluates an elbow candidate bend angle against joint limits and forward kinematics.
+     * @return 5-joint configuration if valid, or nullopt if limits/tolerances are violated.
+     */
+    std::optional<std::array<double, 5>> evaluate_elbow_branch(
+        double bend, double rw, double zw, double l1, double l2,
+        double q1, double q5, double pitch_sum,
+        const Eigen::Vector3d &target,
+        double yaw, double pitch, double roll) const;
+
     KinematicsModel model_;                         ///< Cached URDF chain and limits.
     std::array<double, 5> signs_{};                 ///< Directional sign multipliers for joints.
     Eigen::Vector3d pan_origin_{Eigen::Vector3d::Zero()};   ///< Base pan joint rotation origin.

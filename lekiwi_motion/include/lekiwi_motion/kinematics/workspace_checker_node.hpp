@@ -32,6 +32,7 @@
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <lekiwi_interfaces/srv/check_move_feasibility.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -40,10 +41,10 @@
 #include <tf2_ros/transform_listener.h>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include "lekiwi_motion/chessboard_mapper.hpp"
-#include "lekiwi_motion/feasibility_marker_builder.hpp"
-#include "lekiwi_motion/workspace_kinematics.hpp"
-#include "lekiwi_motion/workspace_planner.hpp"
+#include "lekiwi_motion/kinematics/chessboard_mapper.hpp"
+#include "lekiwi_motion/kinematics/feasibility_marker_builder.hpp"
+#include "lekiwi_motion/kinematics/workspace_kinematics.hpp"
+#include "lekiwi_motion/kinematics/workspace_planner.hpp"
 
 namespace lekiwi_motion
 {

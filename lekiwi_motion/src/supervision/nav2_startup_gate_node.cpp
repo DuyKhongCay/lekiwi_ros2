@@ -19,7 +19,7 @@
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_motion/nav2_startup_gate_node.hpp"
+#include "lekiwi_motion/supervision/nav2_startup_gate_node.hpp"
 
 #include <chrono>
 #include <functional>

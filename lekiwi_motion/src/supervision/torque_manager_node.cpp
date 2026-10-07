@@ -19,7 +19,7 @@
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_motion/torque_manager_node.hpp"
+#include "lekiwi_motion/supervision/torque_manager_node.hpp"
 
 #include <functional>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>

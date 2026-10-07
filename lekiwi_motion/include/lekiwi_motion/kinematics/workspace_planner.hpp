@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include "lekiwi_motion/workspace_kinematics.hpp"
+#include "lekiwi_motion/kinematics/workspace_kinematics.hpp"
 
 namespace lekiwi_motion::workspace
 {
@@ -239,6 +239,11 @@ namespace lekiwi_motion::workspace
         const PlanningRequest &req,
         const BasePose &base,
         uint8_t plan_type) const;
+
+    bool is_pose_within_reach(
+        const BasePose &base,
+        const std::vector<Point3D> &targets,
+        double reach) const;
 
     std::optional<PlanResult> try_single_pose_capture(
         const PlanningRequest &req,

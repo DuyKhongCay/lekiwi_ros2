@@ -23,8 +23,8 @@
 #include <gtest/gtest.h>
 #include <urdf_parser/urdf_parser.h>
 
-#include "lekiwi_motion/workspace_kinematics.hpp"
-#include "lekiwi_motion/workspace_planner.hpp"
+#include "lekiwi_motion/kinematics/workspace_kinematics.hpp"
+#include "lekiwi_motion/kinematics/workspace_planner.hpp"
 
 namespace ws = lekiwi_motion::workspace;
 

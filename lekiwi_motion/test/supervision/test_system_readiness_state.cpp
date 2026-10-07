@@ -20,7 +20,7 @@
  */
 
 #include <gtest/gtest.h>
-#include "lekiwi_motion/system_readiness_state.hpp"
+#include "lekiwi_motion/supervision/system_readiness_state.hpp"
 
 using namespace lekiwi_motion;
 

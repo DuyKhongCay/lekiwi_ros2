@@ -39,7 +39,7 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
-#include "lekiwi_motion/system_readiness_state.hpp"
+#include "lekiwi_motion/supervision/system_readiness_state.hpp"
 
 namespace lekiwi_motion
 {
@@ -165,7 +165,7 @@ namespace lekiwi_motion
         std::string map_frame_{"map"};
         std::string odom_frame_{"odom"};
         std::string base_frame_{"base_footprint"};
-        std::string ee_frame_{"gripperframe"};
+        std::string tip_frame_{"gripperframe"};
         std::string board_frame_{"chessboard_frame"};
         std::string local_odom_topic_{"/odometry/local"};
         std::string global_odom_topic_{"/odometry/global"};

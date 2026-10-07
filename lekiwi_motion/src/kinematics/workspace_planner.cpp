@@ -9,7 +9,7 @@
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_motion/workspace_planner.hpp"
+#include "lekiwi_motion/kinematics/workspace_planner.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -178,6 +178,21 @@ namespace lekiwi_motion::workspace
     return std::nullopt;
   }
 
+  bool WorkspacePlanner::is_pose_within_reach(
+      const BasePose &base,
+      const std::vector<Point3D> &targets,
+      double reach) const
+  {
+    for (const auto &pt : targets)
+    {
+      if (std::hypot(pt.x - base.x, pt.y - base.y, pt.z - base.z) > reach)
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
   std::vector<BasePose> WorkspacePlanner::generate_standoff_candidates(
       const std::vector<Point3D> &targets,
       double base_z) const
@@ -248,17 +263,7 @@ namespace lekiwi_motion::workspace
             const BasePose base = compute_edge_base_pose(
                 edge, along, clearance, base_z, config_.half_w, config_.half_h);
 
-            bool reachable = true;
-            for (const auto &pt : targets)
-            {
-              if (std::hypot(pt.x - base.x, pt.y - base.y, pt.z - base.z) > reach)
-              {
-                reachable = false;
-                break;
-              }
-            }
-
-            if (reachable)
+            if (is_pose_within_reach(base, targets, reach))
             {
               candidates.push_back(base);
               if (static_cast<int>(candidates.size()) >= config_.max_samples)

@@ -9,7 +9,7 @@
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_motion/system_readiness_state.hpp"
+#include "lekiwi_motion/supervision/system_readiness_state.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -118,7 +118,7 @@ namespace lekiwi_motion
       const bool joints_fresh = policy::fresh(
           now_sec, joints.stamp_sec, config_.max_transform_age_sec);
       joints_complete = joints_fresh;
-      for (const auto &required : config_.required_arm_joints)
+      for (const auto &required : config_.arm_joints)
       {
         if (joints.joint_names.find(required) == joints.joint_names.end())
         {

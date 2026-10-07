@@ -23,7 +23,7 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "lekiwi_motion/chessboard_mapper.hpp"
+#include "lekiwi_motion/kinematics/chessboard_mapper.hpp"
 
 namespace lekiwi_motion::test
 {

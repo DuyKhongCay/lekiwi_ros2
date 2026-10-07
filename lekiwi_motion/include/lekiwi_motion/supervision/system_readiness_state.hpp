@@ -143,9 +143,9 @@ namespace lekiwi_motion
     double max_stop_velocity{0.03};          ///< Linear speed threshold below which robot is stationary (m/s).
     double max_stop_angular_vel{0.08};       ///< Angular speed threshold below which robot is stationary (rad/s).
     bool require_global_ekf_seed{true};      ///< Require global EKF convergence at least once before nav ready.
-    std::vector<std::string> required_arm_joints{
+    std::vector<std::string> arm_joints{
         "arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex",
-        "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"}; ///< Required joint names for arm integrity.
+        "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"}; ///< Monitored joint names for arm integrity.
   };
 
   /**

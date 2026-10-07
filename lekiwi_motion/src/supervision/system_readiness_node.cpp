@@ -19,7 +19,7 @@
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_motion/system_readiness_node.hpp"
+#include "lekiwi_motion/supervision/system_readiness_node.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -60,12 +60,12 @@ namespace lekiwi_motion
     declare("map_frame", std::string("map"), "Global map frame");
     declare("odom_frame", std::string("odom"), "Odometry frame");
     declare("base_frame", std::string("base_footprint"), "Base footprint frame");
-    declare("ee_frame", std::string("gripperframe"), "End-effector / gripper frame");
+    declare("tip_frame", std::string("gripperframe"), "End-effector / gripper frame");
     declare("board_frame", std::string("chessboard_frame"), "Chessboard target frame");
     declare("local_odom_topic", std::string("/odometry/local"), "Topic name for local filtered odometry");
     declare("global_odom_topic", std::string("/odometry/global"), "Topic name for global fused odometry");
     declare("joint_states_topic", std::string("/joint_states"), "Topic name for robot joint states");
-    declare("required_arm_joints", std::vector<std::string>{"arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"},
+    declare("arm_joints", std::vector<std::string>{"arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"},
             "List of required joints for arm grasp readiness");
 
     EvaluatorConfig config;
@@ -76,7 +76,7 @@ namespace lekiwi_motion
     config.max_stop_velocity = get_parameter("max_stop_velocity").as_double();
     config.max_stop_angular_vel = get_parameter("max_stop_angular_vel").as_double();
     config.require_global_ekf_seed = get_parameter("require_global_ekf_seed").as_bool();
-    config.required_arm_joints = get_parameter("required_arm_joints").as_string_array();
+    config.arm_joints = get_parameter("arm_joints").as_string_array();
 
     check_frequency_hz_ = get_parameter("check_frequency_hz").as_double();
     max_transform_age_sec_ = config.max_transform_age_sec;
@@ -85,7 +85,7 @@ namespace lekiwi_motion
     map_frame_ = get_parameter("map_frame").as_string();
     odom_frame_ = get_parameter("odom_frame").as_string();
     base_frame_ = get_parameter("base_frame").as_string();
-    ee_frame_ = get_parameter("ee_frame").as_string();
+    tip_frame_ = get_parameter("tip_frame").as_string();
     board_frame_ = get_parameter("board_frame").as_string();
     local_odom_topic_ = get_parameter("local_odom_topic").as_string();
     global_odom_topic_ = get_parameter("global_odom_topic").as_string();
@@ -229,7 +229,7 @@ namespace lekiwi_motion
     tf_chains.odom_to_base_fresh = is_transform_fresh(
         odom_frame_, base_frame_, now_sec, nav_odom_max_age_sec_, false);
     tf_chains.base_to_gripper_fresh = is_transform_fresh(
-        base_frame_, ee_frame_, now_sec, max_transform_age_sec_, false);
+        base_frame_, tip_frame_, now_sec, max_transform_age_sec_, false);
     tf_chains.map_to_board_fresh = is_transform_fresh(
         map_frame_, board_frame_, now_sec, max_transform_age_sec_, true);
 

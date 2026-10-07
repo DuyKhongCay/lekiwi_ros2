@@ -20,7 +20,7 @@
  */
 
 #include <gtest/gtest.h>
-#include "lekiwi_motion/torque_manager_node.hpp"
+#include "lekiwi_motion/supervision/torque_manager_node.hpp"
 
 using lekiwi_motion::TorqueCommandState;
 using Request = lekiwi_interfaces::srv::SetTorqueEnabled::Request;

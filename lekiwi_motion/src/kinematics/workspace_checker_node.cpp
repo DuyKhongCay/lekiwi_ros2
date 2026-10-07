@@ -19,7 +19,7 @@
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_motion/workspace_checker_node.hpp"
+#include "lekiwi_motion/kinematics/workspace_checker_node.hpp"
 
 #include <algorithm>
 #include <cmath>

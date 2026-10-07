@@ -19,7 +19,7 @@
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_motion/feasibility_marker_builder.hpp"
+#include "lekiwi_motion/kinematics/feasibility_marker_builder.hpp"
 
 #include <cmath>
 #include <utility>
@@ -196,106 +196,107 @@ namespace lekiwi_motion::visualization
     }
   }
 
+  void FeasibilityMarkerBuilder::append_single_base_markers(
+      visualization_msgs::msg::MarkerArray &out,
+      int id,
+      const geometry_msgs::msg::PoseStamped &pose,
+      float r, float g, float b,
+      const std::string &label,
+      const builtin_interfaces::msg::Time &stamp) const
+  {
+    // 1. Circular chassis footprint cylinder disc
+    visualization_msgs::msg::Marker disk;
+    disk.header = pose.header;
+    if (disk.header.frame_id.empty())
+    {
+      disk.header.frame_id = map_frame_;
+    }
+    disk.header.stamp = stamp;
+    disk.ns = "feasibility/base_footprints";
+    disk.id = id;
+    disk.type = visualization_msgs::msg::Marker::CYLINDER;
+    disk.action = visualization_msgs::msg::Marker::ADD;
+    disk.pose = pose.pose;
+    disk.pose.position.z = config_.footprint_thickness * 0.5;
+    disk.scale.x = disk.scale.y = config_.chassis_radius * 2.0;
+    disk.scale.z = config_.footprint_thickness;
+    disk.color.r = r;
+    disk.color.g = g;
+    disk.color.b = b;
+    disk.color.a = 0.45f;
+    out.markers.push_back(std::move(disk));
+
+    // 2. Heading Arrow along vehicle yaw orientation
+    visualization_msgs::msg::Marker arrow;
+    arrow.header = pose.header;
+    if (arrow.header.frame_id.empty())
+    {
+      arrow.header.frame_id = map_frame_;
+    }
+    arrow.header.stamp = stamp;
+    arrow.ns = "feasibility/base_footprints";
+    arrow.id = id + 100;
+    arrow.type = visualization_msgs::msg::Marker::ARROW;
+    arrow.action = visualization_msgs::msg::Marker::ADD;
+    arrow.pose = pose.pose;
+    arrow.scale.x = 0.20;
+    arrow.scale.y = 0.025;
+    arrow.scale.z = 0.025;
+    arrow.color.r = r;
+    arrow.color.g = g;
+    arrow.color.b = b;
+    arrow.color.a = 0.90f;
+    out.markers.push_back(std::move(arrow));
+
+    // 3. Standoff Base Label
+    visualization_msgs::msg::Marker text;
+    text.header = pose.header;
+    if (text.header.frame_id.empty())
+    {
+      text.header.frame_id = map_frame_;
+    }
+    text.header.stamp = stamp;
+    text.ns = "feasibility/base_footprints";
+    text.id = id + 200;
+    text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    text.action = visualization_msgs::msg::Marker::ADD;
+    text.pose = pose.pose;
+    text.pose.position.z += 0.06;
+    text.scale.z = 0.014;
+    text.color.r = r;
+    text.color.g = g;
+    text.color.b = b;
+    text.color.a = 0.95f;
+    text.text = label;
+    out.markers.push_back(std::move(text));
+  }
+
   void FeasibilityMarkerBuilder::append_base_footprints(
       visualization_msgs::msg::MarkerArray &out,
       const lekiwi_interfaces::srv::CheckMoveFeasibility::Response &resp,
       const builtin_interfaces::msg::Time &stamp) const
   {
-    auto add_base_pose_markers = [&](int id, const geometry_msgs::msg::PoseStamped &pose,
-                                     float r, float g, float b, const std::string &label)
-    {
-      // 1. Circular chassis footprint cylinder disc
-      visualization_msgs::msg::Marker disk;
-      disk.header = pose.header;
-      if (disk.header.frame_id.empty())
-      {
-        disk.header.frame_id = map_frame_;
-      }
-      disk.header.stamp = stamp;
-      disk.ns = "feasibility/base_footprints";
-      disk.id = id;
-      disk.type = visualization_msgs::msg::Marker::CYLINDER;
-      disk.action = visualization_msgs::msg::Marker::ADD;
-      disk.pose = pose.pose;
-      disk.pose.position.z = config_.footprint_thickness * 0.5; // Sit slightly on the floor
-      disk.scale.x = disk.scale.y = config_.chassis_radius * 2.0;
-      disk.scale.z = config_.footprint_thickness;
-      disk.color.r = r;
-      disk.color.g = g;
-      disk.color.b = b;
-      disk.color.a = 0.45f;
-      out.markers.push_back(std::move(disk));
-
-      // 2. Heading Arrow along vehicle yaw orientation
-      visualization_msgs::msg::Marker arrow;
-      arrow.header = pose.header;
-      if (arrow.header.frame_id.empty())
-      {
-        arrow.header.frame_id = map_frame_;
-      }
-      arrow.header.stamp = stamp;
-      arrow.ns = "feasibility/base_footprints";
-      arrow.id = id + 100;
-      arrow.type = visualization_msgs::msg::Marker::ARROW;
-      arrow.action = visualization_msgs::msg::Marker::ADD;
-      arrow.pose = pose.pose;
-      arrow.scale.x = 0.20;  // Length: 20cm
-      arrow.scale.y = 0.025; // Shaft diameter: 2.5cm
-      arrow.scale.z = 0.025;
-      arrow.color.r = r;
-      arrow.color.g = g;
-      arrow.color.b = b;
-      arrow.color.a = 0.90f;
-      out.markers.push_back(std::move(arrow));
-
-      // 3. Standoff Base Label
-      visualization_msgs::msg::Marker text;
-      text.header = pose.header;
-      if (text.header.frame_id.empty())
-      {
-        text.header.frame_id = map_frame_;
-      }
-      text.header.stamp = stamp;
-      text.ns = "feasibility/base_footprints";
-      text.id = id + 200;
-      text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-      text.action = visualization_msgs::msg::Marker::ADD;
-      text.pose = pose.pose;
-      text.pose.position.z += 0.06;
-      text.scale.z = 0.014;
-      text.color.r = r;
-      text.color.g = g;
-      text.color.b = b;
-      text.color.a = 0.95f;
-      text.text = label;
-      out.markers.push_back(std::move(text));
-    };
-
     switch (resp.plan_type)
     {
     case lekiwi_interfaces::srv::CheckMoveFeasibility::Response::PLAN_ZERO_NAV:
     case lekiwi_interfaces::srv::CheckMoveFeasibility::Response::PLAN_CAPTURE_ZERO_NAV:
-      // Zero navigation needed: robot executes purely in-place
       break;
 
     case lekiwi_interfaces::srv::CheckMoveFeasibility::Response::PLAN_SINGLE_BASE:
     case lekiwi_interfaces::srv::CheckMoveFeasibility::Response::PLAN_CAPTURE_SINGLE_BASE:
-      // Unified single base pose covering manipulation targets
-      add_base_pose_markers(20, resp.pick_base_pose, 0.2f, 1.0f, 0.3f, "Single Standoff");
+      append_single_base_markers(out, 20, resp.pick_base_pose, 0.2f, 1.0f, 0.3f, "Single Standoff", stamp);
       break;
 
     case lekiwi_interfaces::srv::CheckMoveFeasibility::Response::PLAN_DUAL_BASE:
     case lekiwi_interfaces::srv::CheckMoveFeasibility::Response::PLAN_CAPTURE_DUAL_BASE:
-      // Separate Pick & Place base poses
-      add_base_pose_markers(21, resp.pick_base_pose, 1.0f, 0.8f, 0.0f, "Pick Base");
-      add_base_pose_markers(22, resp.place_base_pose, 0.0f, 0.8f, 1.0f, "Place Base");
+      append_single_base_markers(out, 21, resp.pick_base_pose, 1.0f, 0.8f, 0.0f, "Pick Base", stamp);
+      append_single_base_markers(out, 22, resp.place_base_pose, 0.0f, 0.8f, 1.0f, "Place Base", stamp);
       break;
 
     case lekiwi_interfaces::srv::CheckMoveFeasibility::Response::PLAN_CAPTURE_TRIPLE_BASE:
-      // 3 distinct standoff bases: Clear -> Pick -> Place
-      add_base_pose_markers(23, resp.clear_base_pose, 1.0f, 0.1f, 0.1f, "Clear Base");
-      add_base_pose_markers(24, resp.pick_base_pose, 1.0f, 0.8f, 0.0f, "Pick Base");
-      add_base_pose_markers(25, resp.place_base_pose, 0.0f, 0.8f, 1.0f, "Place Base");
+      append_single_base_markers(out, 23, resp.clear_base_pose, 1.0f, 0.1f, 0.1f, "Clear Base", stamp);
+      append_single_base_markers(out, 24, resp.pick_base_pose, 1.0f, 0.8f, 0.0f, "Pick Base", stamp);
+      append_single_base_markers(out, 25, resp.place_base_pose, 0.0f, 0.8f, 1.0f, "Place Base", stamp);
       break;
 
     default:

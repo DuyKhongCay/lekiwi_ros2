@@ -22,7 +22,7 @@
 #include <gtest/gtest.h>
 #include <rclcpp/rclcpp.hpp>
 
-#include "lekiwi_motion/nav2_startup_gate_node.hpp"
+#include "lekiwi_motion/supervision/nav2_startup_gate_node.hpp"
 
 /**
  * @class Nav2StartupGateTest

@@ -9,7 +9,7 @@
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_motion/workspace_kinematics.hpp"
+#include "lekiwi_motion/kinematics/workspace_kinematics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -302,6 +302,44 @@ namespace lekiwi_motion::workspace
     reach_bound_ = model_.reach_bound;
   }
 
+  std::optional<std::array<double, 5>> SO101AnalyticalSolver::evaluate_elbow_branch(
+      double bend, double rw, double zw, double l1, double l2,
+      double q1, double q5, double pitch_sum,
+      const Eigen::Vector3d &target,
+      double yaw, double pitch, double roll) const
+  {
+    const double first_angle = std::atan2(zw, rw) - std::atan2(l2 * std::sin(bend), l1 + l2 * std::cos(bend));
+    std::array<double, 5> joints{
+        q1,
+        (first_angle - link_angles_[0]) / signs_[1],
+        (bend - link_angles_[1] + link_angles_[0]) / signs_[2],
+        0.0,
+        q5};
+    joints[3] = (pitch_sum - signs_[1] * joints[1] - signs_[2] * joints[2]) / signs_[3];
+
+    for (size_t i = 1; i < 4; ++i)
+    {
+      auto angle = fit_joint_angle(joints[i], model_.lower_limits[i], model_.upper_limits[i]);
+      if (!angle)
+      {
+        return std::nullopt;
+      }
+      joints[i] = *angle;
+    }
+
+    const auto fk = forward_kinematics(model_, joints);
+    const Eigen::Matrix3d desired = target_tool_rotation(yaw, pitch, roll) * tool_basis_.transpose();
+    const double angle_error = Eigen::AngleAxisd(desired.transpose() * fk.linear()).angle();
+
+    if ((fk.translation() - target).norm() > POSITION_TOLERANCE ||
+        angle_error > ORIENTATION_TOLERANCE)
+    {
+      return std::nullopt;
+    }
+
+    return joints;
+  }
+
   IkResult SO101AnalyticalSolver::solve(
       double x, double y, double z,
       double pitch,
@@ -374,45 +412,15 @@ namespace lekiwi_motion::workspace
       const double elbow = std::acos(std::clamp(cos_elbow, -1.0, 1.0));
       for (double bend : {-elbow, elbow})
       {
-        const double first_angle = std::atan2(zw, rw) - std::atan2(l2 * std::sin(bend), l1 + l2 * std::cos(bend));
-        std::array<double, 5> joints{
-            *q1,
-            (first_angle - link_angles_[0]) / signs_[1],
-            (bend - link_angles_[1] + link_angles_[0]) / signs_[2],
-            0.0,
-            *q5};
-        joints[3] = (pitch_sum - signs_[1] * joints[1] - signs_[2] * joints[2]) / signs_[3];
-
-        bool valid = true;
-        for (size_t i = 1; i < 4; ++i)
+        auto valid_joints = evaluate_elbow_branch(
+            bend, rw, zw, l1, l2, *q1, *q5, pitch_sum, target, yaw, pitch, roll);
+        if (valid_joints)
         {
-          auto angle = fit_joint_angle(joints[i], model_.lower_limits[i], model_.upper_limits[i]);
-          if (!angle)
-          {
-            valid = false;
-            break;
-          }
-          joints[i] = *angle;
+          result.success = true;
+          result.joints = *valid_joints;
+          result.reason = "REACHABLE (FK verified)";
+          return result;
         }
-        if (!valid)
-        {
-          continue;
-        }
-
-        const auto fk = forward_kinematics(model_, joints);
-        const Eigen::Matrix3d desired = target_tool_rotation(yaw, pitch, roll) * tool_basis_.transpose();
-        const double angle_error = Eigen::AngleAxisd(desired.transpose() * fk.linear()).angle();
-
-        if ((fk.translation() - target).norm() > POSITION_TOLERANCE ||
-            angle_error > ORIENTATION_TOLERANCE)
-        {
-          continue;
-        }
-
-        result.success = true;
-        result.joints = joints;
-        result.reason = "REACHABLE (FK verified)";
-        return result;
       }
     }
     return result;

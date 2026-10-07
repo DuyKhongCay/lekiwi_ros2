@@ -23,7 +23,7 @@
 #include <builtin_interfaces/msg/time.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 
-#include "lekiwi_motion/feasibility_marker_builder.hpp"
+#include "lekiwi_motion/kinematics/feasibility_marker_builder.hpp"
 
 using namespace lekiwi_motion::visualization;
 using FeasibilityResponse = lekiwi_interfaces::srv::CheckMoveFeasibility::Response;

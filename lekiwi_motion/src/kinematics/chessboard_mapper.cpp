@@ -9,7 +9,7 @@
  * @copyright Apache-2.0
  */
 
-#include "lekiwi_motion/chessboard_mapper.hpp"
+#include "lekiwi_motion/kinematics/chessboard_mapper.hpp"
 
 #include <algorithm>
 #include <cctype>
