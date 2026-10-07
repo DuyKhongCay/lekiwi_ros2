@@ -19,7 +19,6 @@ bool feasible                       # True if inverse kinematics & path exist
 geometry_msgs/PoseStamped clear_base_pose  # Base pose to clear captured piece
 geometry_msgs/PoseStamped pick_base_pose   # Base pose to pick moving piece
 geometry_msgs/PoseStamped place_base_pose  # Base pose to place moving piece
-
 # 3D grasp/place coordinates in chessboard_frame [m]
 geometry_msgs/Point clear_point            # Grasp point for captured piece
 geometry_msgs/Point pick_point             # Grasp point for moving piece
