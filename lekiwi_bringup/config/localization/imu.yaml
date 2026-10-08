@@ -1,9 +1,15 @@
-# Configuration for IMU Pre-processing & Filtering (Layer 2)
-# Supported by imu_filter_madgwick (imu_tools) and imu_transformer (imu_pipeline)
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
+
+# Configuration for IMU Pre-processing & State Estimation Pipeline
+# Subsystems: imu_filter_madgwick, imu_transformer, and magnetometer calibration
+
+/**:
+  ros__parameters:
+    use_sim_time: false
 
 imu_filter:
   ros__parameters:
-    use_sim_time: false
     stateless: false
     use_mag: false               # Enabled: 9-DoF mode (Gyro + Accel + Magnetometer) for drift-free orientation in odom frame
     publish_tf: false          # Do not publish TF directly from filter; handled by robot_state_publisher & EKF
@@ -21,6 +27,11 @@ imu_filter:
 
 imu_transformer:
   ros__parameters:
-    use_sim_time: false
     target_frame: "base_footprint"  # Transform IMU kinematic tensor to robot base frame
+
+mag_bias_observer:
+  ros__parameters:
+    magnetometer_bias_x: -1.7474999999999998e-05
+    magnetometer_bias_y: 5.6249999999999995e-06
+    magnetometer_bias_z: 2.9625e-05
 

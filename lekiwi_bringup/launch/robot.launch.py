@@ -8,7 +8,11 @@ and orchestration subsystems into a unified runtime tree.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    SetEnvironmentVariable,
+)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
@@ -33,7 +37,7 @@ def generate_launch_description():
     # 2. Declare global and subsystem launch arguments
     declared_arguments = [
         DeclareLaunchArgument(
-            "enable_orchestrator",
+            "orchestrator",
             default_value="true",
             description="Start LeKiwi orchestration and readiness subsystem",
         ),
@@ -94,15 +98,31 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "manipulation",
-            default_value="mock",
-            choices=["mock", "kinematics", "policy", "false"],
-            description="Manipulation subsystem mode: 'mock' (mock_policy_server, default), "
-            "'kinematics' (real action server + cartesian service, accel=0), "
+            default_value="kinematics",
+            choices=["kinematics", "policy", "false"],
+            description="Manipulation subsystem mode: "
+            "'kinematics' (mock/real action server + cartesian service, accel=0), "
             "'policy' (LeRobot ACT/SmolVLA, accel=50), or 'false' (disabled)",
+        ),
+        DeclareLaunchArgument(
+            "log_level",
+            default_value="WARN",
+            choices=["DEBUG", "INFO", "WARN", "ERROR", "FATAL"],
+            description="Global logging severity threshold for all nodes and containers",
         ),
     ]
 
-    # 3. Define subsystem launch includes
+    # 3. Configure global logging severity threshold and colorized console
+    set_log_level_env = SetEnvironmentVariable(
+        name="RCUTILS_LOG_SEVERITY_THRESHOLD",
+        value=LaunchConfiguration("log_level"),
+    )
+    set_color_env = SetEnvironmentVariable(
+        name="RCUTILS_COLORIZED_OUTPUT",
+        value="1",
+    )
+
+    # 4. Define subsystem launch includes
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([description_share, "launch", "description.launch.py"])
@@ -131,17 +151,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    imu = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([bringup_share, "launch", "imu.launch.py"])
-        ),
-        launch_arguments={
-            "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "use_mag": "false",
-        }.items(),
-        condition=IfCondition(LaunchConfiguration("imu_broadcaster")),
-    )
-
     cameras = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([bringup_share, "launch", "cameras.launch.py"])
@@ -161,7 +170,7 @@ def generate_launch_description():
             "navigation": LaunchConfiguration("navigation"),
             "manipulation": LaunchConfiguration("manipulation"),
         }.items(),
-        condition=IfCondition(LaunchConfiguration("enable_orchestrator")),
+        condition=IfCondition(LaunchConfiguration("orchestrator")),
     )
 
     diagnostics = IncludeLaunchDescription(
@@ -209,6 +218,7 @@ def generate_launch_description():
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "enable_ekf": LaunchConfiguration("enable_ekf"),
+            "use_mag": "false",
         }.items(),
         condition=IfCondition(LaunchConfiguration("enable_ekf")),
     )
@@ -223,13 +233,14 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("chess_master")),
     )
 
-    # 4. Assemble LaunchDescription
+    # 5. Assemble LaunchDescription
     return LaunchDescription(
         [
             *declared_arguments,
+            set_log_level_env,
+            set_color_env,
             description,
             controllers,
-            imu,
             localization,
             cameras,
             diagnostics,
