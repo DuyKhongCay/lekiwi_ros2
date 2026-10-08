@@ -26,9 +26,13 @@ from lekiwi_orchestrator.fsm import (
 
 
 class PerceptionContextManager:
-    """
-    Manages vision operational context and controls camera valve gating / NPU state.
-    Provides latched /perception_context topic and service handling decoupled from mission orchestration.
+    """Manages vision operational context and controls camera valve gating and NPU state.
+
+    Provides a latched /perception_context topic and ROS 2 service server decoupled
+    from macro mission orchestration.
+
+    Thread-safety:
+        Context transitions and queries are synchronized using a reentrant lock (`_lock`).
     """
 
     def __init__(
@@ -39,6 +43,7 @@ class PerceptionContextManager:
         callback_group: Any = None,
         initial_context: int = PerceptionContext.IDLE_STANDBY,
     ) -> None:
+        """Initialize perception context publisher, service server, and initial latched state."""
         self._node = node
         self._lock = threading.RLock()
         self._current_context = initial_context
@@ -61,18 +66,26 @@ class PerceptionContextManager:
             callback_group=callback_group,
         )
 
-        # Publish initial latched message
+        # Seed latched topic immediately so late-joining perception nodes receive initial state
         self._publish_current_context()
 
     @property
     def context(self) -> int:
+        """Return the current active PerceptionContext enum value under state lock."""
         with self._lock:
             return self._current_context
 
     def set_context(self, requested_context: int) -> bool:
-        """
-        Transition perception context verifying against allowed transition matrix.
-        Publishes updated context to latched topic upon success.
+        """Transition perception context and update downstream camera valves.
+
+        Validates requested context against the allowed transition matrix before applying.
+        Publishes the updated context to the latched ROS 2 topic upon success.
+
+        Args:
+            requested_context: Target PerceptionContext integer value.
+
+        Returns:
+            True if transition was permitted and broadcast, False if rejected by matrix.
         """
         with self._lock:
             current = self._current_context
@@ -98,6 +111,7 @@ class PerceptionContextManager:
         return True
 
     def _publish_current_context(self) -> None:
+        """Publish the current perception context message to the latched topic."""
         p_msg = PerceptionContext()
         p_msg.value = self._current_context
         self._perception_context_pub.publish(p_msg)
@@ -107,7 +121,7 @@ class PerceptionContextManager:
         request: SetPerceptionContext.Request,
         response: SetPerceptionContext.Response,
     ) -> SetPerceptionContext.Response:
-        """ROS 2 Service callback for external/manual context setting."""
+        """Handle incoming SetPerceptionContext service requests from external clients."""
         req_val = request.requested_context.value
         success = self.set_context(req_val)
         response.success = success
@@ -120,7 +134,7 @@ class PerceptionContextManager:
         return response
 
     def destroy(self) -> None:
-        """Destroy publisher and service server upon shutdown."""
+        """Destroy publisher and service handles upon orchestrator shutdown."""
         if hasattr(self, "_service") and self._service is not None:
             self._node.destroy_service(self._service)
         if (

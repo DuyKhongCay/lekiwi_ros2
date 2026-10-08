@@ -1,4 +1,4 @@
-"""Chessboard AprilTag Bundle Adjustment Solver and YAML serialization."""
+"""Chessboard AprilTag Bundle Adjustment solver and YAML serialization."""
 
 import datetime
 import math
@@ -17,7 +17,7 @@ except ImportError:
 
 
 def resolve_path(path_str: str) -> str:
-    """Resolves package:// URI or relative paths into absolute filesystem paths."""
+    """Resolve package:// URI or relative file path to absolute filesystem path."""
     if not path_str:
         return ""
     if path_str.startswith("package://"):
@@ -41,7 +41,7 @@ def resolve_path(path_str: str) -> str:
 
 
 def parse_camera_info(info_path: str) -> Tuple[np.ndarray, np.ndarray]:
-    """Parses camera matrix K and distortion coefficients D from YAML."""
+    """Parse intrinsic camera matrix K and distortion coefficients D from YAML file."""
     resolved = resolve_path(info_path)
     if not os.path.exists(resolved):
         raise FileNotFoundError(f"Camera info file not found: {resolved}")
@@ -57,7 +57,13 @@ def parse_camera_info(info_path: str) -> Tuple[np.ndarray, np.ndarray]:
 def save_to_chessboard_yaml(
     res_data: Dict[str, Any], target_file: str, tag_ids: Optional[List[int]] = None
 ) -> None:
-    """Writes calibrated tag positions directly to YAML using standard yaml.dump."""
+    """Serialize calibrated tag positions and orientations directly to YAML configuration.
+
+    Args:
+        res_data: Dictionary containing solved tag positions and planar yaw angles.
+        target_file: Destination filesystem path or package:// URI for the YAML output.
+        tag_ids: Optional list of tag IDs to filter and serialize.
+    """
     resolved = resolve_path(target_file)
     os.makedirs(os.path.dirname(resolved), exist_ok=True)
 
@@ -104,7 +110,7 @@ class ChessboardTagCalibSolver:
         nominal_dist: float = 0.39,
         z_height: float = 0.004,
     ):
-        """Initializes the calibration solver parameters."""
+        """Initialize calibration solver parameters with nominal tag dimensions."""
         self.tag_ids = list(tag_ids)
         self.tag_sz = tag_sz
         self.nominal_dist = nominal_dist
@@ -181,7 +187,14 @@ class ChessboardTagCalibSolver:
         return init_tags, (lb, ub)
 
     def build_3d_corners(self, tag_params: np.ndarray) -> Dict[int, np.ndarray]:
-        """Constructs 3D corner coordinates for all tags from state vector."""
+        """Construct 3D corner coordinates for all tags from state vector.
+
+        Args:
+            tag_params: Flattened 9-parameter array containing [x, y, yaw] for tags 1, 2, and 3.
+
+        Returns:
+            Dictionary mapping tag IDs to (4, 3) arrays of 3D corner coordinates in board frame.
+        """
         corners_3d = {
             self.tag_ids[0]: self._get_local_corners(
                 [0.0, 0.0, self.z_height], self.tag_sz, 0.0
@@ -203,7 +216,18 @@ class ChessboardTagCalibSolver:
         dist_coeffs: np.ndarray,
         max_frames: int = 50,
     ) -> Tuple[List[Dict[int, np.ndarray]], List[float]]:
-        """Initializes camera extrinsic poses via PnP on frames with sufficient tags."""
+        """Initialize camera extrinsic poses via PnP on frames with sufficient tags.
+
+        Args:
+            frames_dets: List of per-frame tag detection dictionaries.
+            init_3d: Initial nominal 3D corner positions per tag ID.
+            cam_mat: Intrinsic camera calibration matrix K (3x3).
+            dist_coeffs: Camera lens distortion coefficients D.
+            max_frames: Maximum number of frames to retain for bundle adjustment.
+
+        Returns:
+            Tuple of (retained_valid_frames, flattened_initial_camera_poses).
+        """
         cam_poses_init: List[float] = []
         valid_frames: List[Dict[int, np.ndarray]] = []
 
@@ -214,7 +238,8 @@ class ChessboardTagCalibSolver:
                     obj_pts.extend(init_3d[tag_id])
                     img_pts.extend(corners_2d)
 
-            if len(obj_pts) < 8:  # At least 2 tags needed for PnP
+            # At least 2 tags (8 correspondences) needed for robust PnP
+            if len(obj_pts) < 8:
                 continue
 
             success, rvec, tvec = cv2.solvePnP(
@@ -248,7 +273,16 @@ class ChessboardTagCalibSolver:
         cam_mat: np.ndarray,
         dist_coeffs: np.ndarray,
     ):
-        """Constructs reprojection residual callable for least_squares optimizer."""
+        """Construct reprojection residual callable for least_squares optimizer.
+
+        Args:
+            valid_frames: List of valid multi-tag detection frames.
+            cam_mat: Intrinsic camera matrix K.
+            dist_coeffs: Camera distortion coefficients D.
+
+        Returns:
+            Callable computing 1D residual vector given the optimization parameter vector.
+        """
 
         def reproj_residual_func(param_vec: np.ndarray) -> np.ndarray:
             current_3d = self.build_3d_corners(param_vec[:9])
@@ -272,7 +306,7 @@ class ChessboardTagCalibSolver:
     def _extract_raw_tag_results(
         self, opt_tags: np.ndarray
     ) -> Dict[int, Dict[str, Any]]:
-        """Extracts planar tag coordinates relative to A1 tag origin."""
+        """Extract planar tag coordinates relative to A1 tag origin."""
         tag_results = {
             self.tag_ids[0]: {
                 "name": "A1",
@@ -297,7 +331,14 @@ class ChessboardTagCalibSolver:
     def _shift_to_center(
         self, tags: Dict[int, Dict[str, Any]]
     ) -> Dict[int, Dict[str, Any]]:
-        """Translates tag coordinates so that origin is at the geometric center of the board."""
+        """Translate tag coordinates so that origin is at the geometric center of the board.
+
+        Args:
+            tags: Dictionary mapping tag IDs to coordinates relative to A1 tag.
+
+        Returns:
+            Dictionary mapping tag IDs to centered 3D coordinates and planar yaws.
+        """
         if not tags:
             return {}
 
@@ -321,7 +362,20 @@ class ChessboardTagCalibSolver:
         cam_mat: np.ndarray,
         dist_coeffs: np.ndarray,
     ) -> Dict[str, Any]:
-        """Runs non-linear least squares Bundle Adjustment over captured frames."""
+        """Run non-linear least squares Bundle Adjustment over captured camera frames.
+
+        Args:
+            frames_dets: List of captured tag detection dictionaries.
+            cam_mat: Intrinsic camera matrix K.
+            dist_coeffs: Camera distortion coefficients D.
+
+        Returns:
+            Dictionary containing optimized centered tag poses, mean reprojection error,
+            RMS error, and number of accepted frames.
+
+        Raises:
+            ValueError: If fewer than 3 valid frames with reliable PnP poses are supplied.
+        """
         if len(frames_dets) < 3:
             raise ValueError(f"Need at least 3 valid frames, got {len(frames_dets)}")
 
@@ -369,7 +423,15 @@ class ChessboardTagCalibSolver:
 
 
 def format_calibration_report(res: Dict[str, Any], tag_ids: List[int]) -> str:
-    """Formats planar Bundle Adjustment results into a readable terminal report."""
+    """Format planar Bundle Adjustment results into a readable terminal report.
+
+    Args:
+        res: Results dictionary output from `ChessboardTagCalibSolver.solve()`.
+        tag_ids: List of tag IDs included in calibration.
+
+    Returns:
+        Formatted ASCII report string with tag coordinates, angles, and inter-corner distances.
+    """
     lines = [
         "\n" + "=" * 64,
         "          CALIBRATION RESULTS REPORT (PLANAR)",

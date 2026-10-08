@@ -25,7 +25,10 @@ except ImportError:
 
 @dataclass(frozen=True)
 class ActionResult:
-    """Normalized outcome of an action execution step."""
+    """Normalized outcome of an action execution step.
+
+    Encapsulates completion status, execution duration, and diagnostic message.
+    """
 
     success: bool
     message: str = ""
@@ -33,7 +36,10 @@ class ActionResult:
 
 
 class ObservationIntent(str, Enum):
-    """Semantic observation goal for base relocation."""
+    """Semantic observation goal for robot base relocation.
+
+    Differentiates between post-move board state verification and EKF relocalization.
+    """
 
     POST_MOVE_VERIFY = "POST_MOVE_VERIFY"
     RELOCALIZE = "RELOCALIZE"
@@ -41,7 +47,10 @@ class ObservationIntent(str, Enum):
 
 @dataclass(frozen=True)
 class ChessMoveGoal:
-    """Lightweight mission-level move description."""
+    """Lightweight mission-level move description.
+
+    Holds parsed UCI coordinates, capture targets, and castling rook waypoints.
+    """
 
     uci: str
     from_square: str
@@ -58,7 +67,17 @@ class ChessMoveGoal:
         uci_move: str,
         move_details: ChessMoveDetails | None = None,
     ) -> ChessMoveGoal | None:
-        """Parse ChessMoveGoal from UCI string or rich ChessMoveDetails message."""
+        """Parse ChessMoveGoal from UCI string or rich ChessMoveDetails message.
+
+        Extracts source, target, promotion, and castling parameters into a uniform goal.
+
+        Args:
+            uci_move: Standard UCI move string (e.g., 'e2e4', 'e7e8q').
+            move_details: Optional ROS 2 message providing explicit capture/castling info.
+
+        Returns:
+            Populated ChessMoveGoal instance, or None if UCI string length is invalid (< 4).
+        """
         cleaned_move = uci_move.strip().lower()
         if len(cleaned_move) < 4:
             return None

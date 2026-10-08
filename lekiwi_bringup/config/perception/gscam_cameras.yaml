@@ -1,3 +1,7 @@
+# GStreamer (gscam) Camera Pipeline Configuration for LeKiwi Perception
+# Distro: ROS 2 Jazzy
+# Cameras: stereo_left (CSI0), stereo_right (CSI1), usb_wrist (V4L2), usb_side (V4L2)
+
 /**:
   ros__parameters:
     camera_info_url: ""

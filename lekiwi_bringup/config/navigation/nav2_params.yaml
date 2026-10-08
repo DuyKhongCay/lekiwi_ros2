@@ -42,42 +42,42 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.03
-      movement_time_allowance: 12.0
+      required_movement_radius: 0.04
+      movement_time_allowance: 20.0
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.04
-      yaw_goal_tolerance: 0.08
+      xy_goal_tolerance: 0.03
+      yaw_goal_tolerance: 0.12
       stateful: true
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      motion_model: "Omni"             # Khai báo mô hình động học đa hướng (Holonomic)
-      time_steps: 30                   # 30 bước dự phóng (1.5s horizon) - tối ưu cho Pi 5
-      model_dt: 0.05                   # Bước thời gian tích phân 50ms
-      batch_size: 500                  # 500 quỹ đạo Monte Carlo (vừa vặn CPU Cortex-A76)
-      iteration_count: 1
+      motion_model: "Omni"             # Holonomic omnidirectional kinematics
+      time_steps: 30                   # 30 projection steps (1.5s horizon) optimized for Pi 5
+      model_dt: 0.10                   # 100ms integration time step
+      batch_size: 500                  # 500 Monte Carlo trajectories matching Cortex-A76 CPU capacity
+      iteration_count: 2
       temperature: 0.3
       gamma: 0.015
       prune_distance: 1.5
       transform_tolerance: 0.2
-      visualize: false                 # Tắt visualize markers trên topic để tiết kiệm CPU
+      visualize: false                 # Disable marker publishing to conserve CPU
 
-      # --- Giới hạn động học (Kinematic Boundaries) ---
-      vx_max: 0.17                     # Dải thô tối đa theo đề xuất
-      vx_min: -0.17
-      vy_max: 0.17                     # Khả năng đi ngang (strafe)
-      vy_min: -0.17
-      wz_max: 0.70                     # Giới hạn xoay tối đa
-      wz_min: -0.70
+      # --- Kinematic Boundaries ---
+      vx_max: 1.00                    # Maximum forward speed (m/s)
+      vx_min: -1.00
+      vy_max: 1.00                     # Maximum strafe speed (m/s)
+      vy_min: -1.00
+      wz_max: 1.00                     # Maximum angular speed (rad/s)
+      wz_min: -1.00
 
-      # --- Độ lệch chuẩn phân phối lấy mẫu (Sampling Noise) ---
-      vx_std: 0.06                     # Bước nhảy mẫu mịn ~0.02 - 0.06 m/s
+      # --- Sampling Noise (Std Dev) ---
+      vx_std: 0.06                     # Linear sampling noise step ~0.02 - 0.06 m/s
       vy_std: 0.06
-      wz_std: 0.15
+      wz_std: 0.35
 
-      # --- Giới hạn gia tốc (Accelerations) ---
+      # --- Accelerations ---
       ax_max: 1.2
       ax_min: -1.5
       ay_max: 1.2
@@ -85,7 +85,7 @@ controller_server:
       az_max: 2.0
       az_min: -2.0
 
-      # --- Danh sách Critics chuyên biệt cho Omni ---
+      # --- MPPI Critics for Omni Base ---
       critics: [
         "ConstraintCritic",
         "CostCritic",
@@ -96,61 +96,61 @@ controller_server:
         "TwirlingCritic"
       ]
 
-      # 1. Ràng buộc vật lý (tốc độ, gia tốc)
+      # 1. Physical Constraints (Velocity & Acceleration)
       ConstraintCritic:
         enabled: true
         cost_power: 1
         cost_weight: 4.0
 
-      # 2. Chi phí vật cản từ Costmap (Né bàn cờ)
+      # 2. Obstacle Cost from Costmap
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 3.0
         near_collision_cost: 253
         critical_cost: 300.0
         collision_cost: 1000000.0
-        near_goal_distance: 0.15       # Cho phép áp sát đích gần bàn cờ mà không bị chặn sớm
-        consider_footprint: false      # Dùng robot_radius dạng tròn để tăng tốc độ tính toán
+        near_goal_distance: 0.25       # Allows close approach near board edge without premature blockage
+        consider_footprint: false      # Circular robot_radius simplifies collision checks for performance
 
-      # 3. Kéo về đích (Tự động giảm tốc khi d < 0.5m)
+      # 3. Goal Attraction (Deceleration when approaching goal)
       GoalCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 8.0
-        threshold_to_consider: 0.30    # Vùng chuyển tiếp từ dải thô sang dải mịn
+        cost_weight: 6.0
+        threshold_to_consider: 0.28    # Active within 40cm to smoothly hand over from PathFollowCritic
 
-      # 4. Xoay đúng góc yaw tại đích
+      # 4. Goal Orientation Alignment
       GoalAngleCritic:
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        threshold_to_consider: 0.25    # Chỉ xoay căn chỉnh khi đã cách đích < 25cm
+        threshold_to_consider: 0.25    # Aligns heading when within 25cm of target pose
 
-      # 5. Bám sát tim đường đi của Global Plan
+      # 5. Path Alignment to Global Plan
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 15.0
+        cost_weight: 5.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 3
-        threshold_to_consider: 0.50
+        threshold_to_consider: 0.30    # Active distance threshold allowing holonomic strafing
         offset_from_furthest: 15
-        use_path_orientations: false   # Omni tịnh tiến dọc path mà không cần xoay thân theo path
+        use_path_orientations: false   # Translates along path without turning base heading
 
-      # 6. Thúc đẩy robot tiến dọc theo đường đi
+      # 6. Path Progress Driving Force
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 6.0
+        cost_weight: 8.0
         offset_from_furthest: 5
-        threshold_to_consider: 0.20
+        threshold_to_consider: 0.20    # Maintains forward momentum until 25cm to goal
 
-      # 7. Triệt tiêu xoay thân xe không cần thiết (Giữ hướng cho cánh tay & camera)
+      # 7. Twirling Penalty (Suppresses unnecessary base rotations for camera stability)
       TwirlingCritic:
         enabled: true
         twirling_cost_power: 1
-        twirling_cost_weight: 12.0
+        twirling_cost_weight: 1.0
 
 planner_server:
   ros__parameters:
@@ -230,8 +230,8 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 12.0
-        inflation_radius: 0.16
+        cost_scaling_factor: 8.0
+        inflation_radius: 0.30
 
       always_send_full_costmap: true
 
@@ -257,8 +257,8 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 12.0
-        inflation_radius: 0.16
+        cost_scaling_factor: 8.0
+        inflation_radius: 0.30
 
       always_send_full_costmap: true
 

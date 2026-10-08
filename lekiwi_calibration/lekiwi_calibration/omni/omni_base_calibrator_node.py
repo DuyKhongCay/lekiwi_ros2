@@ -114,7 +114,14 @@ class OmniBaseCalibratorNode(Node):
             return self._imu_total_yaw
 
     def check_tf_tree(self) -> Tuple[bool, str]:
-        """Validates if required TF transforms are available in buffer."""
+        """Validate if required transforms are available in the TF2 buffer.
+
+        Checks both local odometry (odom -> base_frame) and global map localization
+        (map -> odom) if global localization tree is required.
+
+        Returns:
+            Tuple of (is_valid, status_or_error_message).
+        """
         # 1. Base odometry transform check: odom -> base_frame
         try:
             if not self.tf_buffer.can_transform(
@@ -149,12 +156,21 @@ class OmniBaseCalibratorNode(Node):
         return True, "TF tree complete"
 
     def is_ready(self) -> bool:
-        """Checks if initial odometry and IMU readings have been received."""
+        """Return True if initial odometry and IMU readings have been received."""
         with self._lock:
             return self._odom_init and self._imu_init
 
     def fetch_controller_parameters(self, timeout_sec: float = 45.0) -> bool:
-        """Fetch wheel_radius and robot_radius live from running omni_base_controller node."""
+        """Fetch active wheel_radius and robot_radius from the running controller node.
+
+        Queries the `/{controller_name}/get_parameters` service asynchronously with timeout.
+
+        Args:
+            timeout_sec: Maximum wait duration in seconds for service availability and response.
+
+        Returns:
+            True if valid non-zero parameters were successfully retrieved and cached, False otherwise.
+        """
         service_name = f"/{self._controller_name}/get_parameters"
         self.get_logger().info(f"Connecting to parameter service: {service_name}...")
         client = self.create_client(GetParameters, service_name)
@@ -266,7 +282,16 @@ class OmniBaseCalibratorNode(Node):
     def drive_distance(
         self, target_dist: float, speed: float = 0.15, tol_dist: float = 0.005
     ) -> float:
-        """Drives robot straight forward until target distance is accumulated with ramp-down."""
+        """Drive robot straight forward until target distance is accumulated with ramp-down.
+
+        Args:
+            target_dist: Desired travel distance in meters.
+            speed: Maximum linear driving speed in m/s.
+            tol_dist: Position tolerance threshold in meters.
+
+        Returns:
+            Actual total Euclidean distance traversed according to odometry in meters.
+        """
         start_x, start_y, _ = self.get_pose()
         last_log_time = time.time()
         kp_lin = 1.5
@@ -304,7 +329,13 @@ class OmniBaseCalibratorNode(Node):
     def rotate_to_heading(
         self, target_heading_rad: float, max_speed: float = 0.4, tol_rad: float = 0.015
     ):
-        """Rotates robot to absolute target heading with proportional slowdown eliminating overshoot."""
+        """Rotate robot to absolute target heading with proportional slowdown eliminating overshoot.
+
+        Args:
+            target_heading_rad: Desired absolute heading angle in radians [-pi, pi].
+            max_speed: Maximum angular rotation speed in rad/s.
+            tol_rad: Heading tolerance threshold in radians.
+        """
         last_log_time = time.time()
         kp_ang = 1.8
         min_speed = 0.06
@@ -340,7 +371,13 @@ class OmniBaseCalibratorNode(Node):
     def rotate_angle_odom(
         self, target_angle_rad: float, speed: float = 0.4, tol_rad: float = 0.015
     ):
-        """Rotates robot until target relative angle is traversed according to odometry."""
+        """Rotate robot until target relative angle is traversed according to odometry.
+
+        Args:
+            target_angle_rad: Target relative rotation angle in radians (signed).
+            speed: Commanded angular rotation speed in rad/s.
+            tol_rad: Angular tolerance threshold in radians.
+        """
         direction = 1.0 if target_angle_rad > 0 else -1.0
         total_rot = 0.0
         _, _, last_yaw = self.get_pose()
@@ -377,7 +414,11 @@ class OmniBaseCalibratorNode(Node):
         self.stop_robot()
 
     def run_spin_calib(self) -> float:
-        """Executes spin test comparing odometry rotation against integrated IMU gyro ground truth."""
+        """Execute spin test comparing odometry rotation against integrated IMU gyro ground truth.
+
+        Returns:
+            Calibrated robot_radius in meters.
+        """
         start_imu_yaw = self.get_imu_yaw()
         target_rot_rad = 2.0 * math.pi * self._rot_cnt
 
@@ -404,7 +445,11 @@ class OmniBaseCalibratorNode(Node):
         return new_robot_radius
 
     def run_rollout_calib(self) -> float:
-        """Executes linear rollout test comparing odometry translation with ground-truth distance."""
+        """Execute linear rollout test comparing odometry translation with ground-truth distance.
+
+        Returns:
+            Calibrated wheel_radius in meters.
+        """
         self.get_logger().info(
             f"Starting Rollout Test for distance: {self._test_dist:.2f} m..."
         )
@@ -460,9 +505,14 @@ class OmniBaseCalibratorNode(Node):
         return new_wheel_radius
 
     def run_square_calib(self) -> Dict[str, float]:
-        """Executes standard bidirectional UMBmark square path test."""
+        """Execute standard bidirectional UMBmark square path test.
+
+        Returns:
+            Dictionary containing error metrics and systematic correction factors (alpha_rad, beta_rad).
+        """
 
         def _exec_square(clockwise: bool) -> Tuple[float, float, float]:
+            """Execute a 4-edge square run in specified direction (CW or CCW)."""
             sign = -1.0 if clockwise else 1.0
             start_x, start_y, start_yaw = self.get_pose()
 
@@ -512,11 +562,15 @@ class OmniBaseCalibratorNode(Node):
 
 
 def main(args: Optional[List[str]] = None):
-    """Initializes ROS context, executes chosen calibration routine, and shuts down safely."""
+    """Initialize ROS context, execute chosen calibration routine, and shut down safely.
+
+    Args:
+        args: Command-line arguments passed to rclpy initialization.
+    """
     rclpy.init(args=args)
     node = OmniBaseCalibratorNode()
 
-    # Start multi-threaded executor in background daemon thread for realtime callback and service processing
+    # Start multi-threaded executor in background daemon thread for callbacks
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     executor_thread = threading.Thread(target=executor.spin, daemon=True)

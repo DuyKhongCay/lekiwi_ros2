@@ -1,6 +1,9 @@
 /**
  * @file chess_domain.cpp
- * @brief Pure domain logic implementation for chess move classification.
+ * @brief Implementation of pure C++ FIDE chess move classification domain logic.
+ *
+ * Translates geometric UCI moves into complete ChessMoveDetails ROS 2 message fields,
+ * computing capture coordinates, castling rook trajectories, and en-passant squares.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -16,6 +19,7 @@ namespace lekiwi_chess_master::domain
 
   std::string piece_type_to_string(chess::PieceType pt)
   {
+    // Map internal chess library enum to lowercase strings for downstream ROS messages
     switch (pt.internal())
     {
     case chess::PieceType::PAWN:
@@ -41,13 +45,13 @@ namespace lekiwi_chess_master::domain
   {
     lekiwi_interfaces::msg::ChessMoveDetails details;
 
-    // 1. Guard against empty, null move "(none)", or too short strings
+    // Guard against empty strings, engine null moves ("(none)"), or malformed short tokens
     if (uci_move.empty() || uci_move == "(none)" || uci_move.length() < 4)
     {
       return details;
     }
 
-    // 2. Validate square characters [a-h][1-8][a-h][1-8]
+    // Validate standard algebraic square characters: [a-h][1-8] for both from and to squares
     char f_col = static_cast<char>(std::tolower(static_cast<unsigned char>(uci_move[0])));
     char f_row = uci_move[1];
     char t_col = static_cast<char>(std::tolower(static_cast<unsigned char>(uci_move[2])));
@@ -67,7 +71,7 @@ namespace lekiwi_chess_master::domain
     chess::Move move = chess::uci::uciToMove(board, uci_move);
     if (move == chess::Move::NO_MOVE)
     {
-      // Fallback promotion piece parsing if move is not directly legal on this board
+      // Fallback promotion piece parsing if move is not legal or out-of-order on this board
       if (uci_move.length() >= 5)
       {
         char promo_ch = static_cast<char>(std::tolower(static_cast<unsigned char>(uci_move[4])));
@@ -84,11 +88,11 @@ namespace lekiwi_chess_master::domain
       return details;
     }
 
-    // Moving piece
+    // Identify the piece executing the move from the source square
     auto piece_at_from = board.at(move.from());
     details.piece_type = piece_type_to_string(piece_at_from.type());
 
-    // Capture handling
+    // Evaluate capture properties
     details.is_capture = board.isCapture(move);
     details.is_en_passant = (move.typeOf() == chess::Move::ENPASSANT);
 
@@ -105,7 +109,7 @@ namespace lekiwi_chess_master::domain
       details.captured_piece_type = piece_type_to_string(board.at(move.to()).type());
     }
 
-    // Castling handling
+    // Evaluate castling trajectories for arm motion planning
     details.is_castling = (move.typeOf() == chess::Move::CASTLING);
     if (details.is_castling)
     {
@@ -139,13 +143,13 @@ namespace lekiwi_chess_master::domain
       }
     }
 
-    // Promotion handling
+    // Evaluate promotion target piece type
     if (move.typeOf() == chess::Move::PROMOTION)
     {
       details.promotion_piece = piece_type_to_string(move.promotionType());
     }
 
-    // Standard Algebraic Notation (SAN)
+    // Generate Standard Algebraic Notation (SAN) for human-readable logs and visualizer
     try
     {
       details.san = chess::uci::moveToSan(board, move);

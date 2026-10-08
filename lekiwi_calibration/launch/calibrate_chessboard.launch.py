@@ -12,7 +12,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description() -> LaunchDescription:
-    """Configures launch arguments, starts perception container, and runs calibrator node."""
+    """Configure launch arguments, start perception container, and run calibrator node."""
     calib_share = FindPackageShare("lekiwi_calibration")
     bringup_share = FindPackageShare("lekiwi_bringup")
 

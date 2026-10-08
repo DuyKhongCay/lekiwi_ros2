@@ -22,12 +22,6 @@ from lekiwi_interfaces.srv import CheckMoveFeasibility
 from lekiwi_orchestrator.fsm import MotionExecutionState
 from lekiwi_orchestrator.mission_types import ChessMoveGoal
 
-try:
-    from lekiwi_interfaces.action import ExecuteChessMove
-except ImportError:
-    ExecuteChessMove = None  # type: ignore[assignment, misc]
-
-
 class StepKind(str, Enum):
     """Enumeration of atomic move execution step types."""
 
@@ -56,35 +50,7 @@ class MoveStep:
     place_point: Point
     motion_state: MotionExecutionState = MotionExecutionState.IDLE
     nav_motion_state: MotionExecutionState | None = None
-
-    def to_ros_goal(
-        self,
-        board_frame: str,
-        feasibility_resp: CheckMoveFeasibility.Response | None = None,
-    ) -> Any:
-        """Assemble ExecuteChessMove.Goal message with points and IK hints."""
-        if ExecuteChessMove is None:
-            raise RuntimeError("ExecuteChessMove action interface is unavailable")
-
-        goal = ExecuteChessMove.Goal()
-        goal.instruction = self.instruction
-        goal.from_square = self.from_square
-        goal.to_square = self.to_square
-        goal.is_capture = self.is_capture
-        goal.pick_point = self.pick_point
-        goal.place_point = self.place_point
-        goal.target_frame = board_frame
-
-        if feasibility_resp is not None:
-            if hasattr(feasibility_resp, "pick_ik_solution") and getattr(
-                feasibility_resp.pick_ik_solution, "name", None
-            ):
-                goal.pick_ik_hint = feasibility_resp.pick_ik_solution
-            if hasattr(feasibility_resp, "place_ik_solution") and getattr(
-                feasibility_resp.place_ik_solution, "name", None
-            ):
-                goal.place_ik_hint = feasibility_resp.place_ik_solution
-        return goal
+    requires_pre_grasp_gate: bool = True
 
 
 def _clear_step(
@@ -92,6 +58,7 @@ def _clear_step(
     pick_point: Point,
     target_pose: PoseStamped | None = None,
     nav_state: MotionExecutionState | None = None,
+    requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
     return MoveStep(
         name=StepKind.CLEAR,
@@ -104,6 +71,7 @@ def _clear_step(
         place_point=Point(),
         motion_state=MotionExecutionState.CLEARING_PIECE,
         nav_motion_state=nav_state,
+        requires_pre_grasp_gate=requires_pre_grasp_gate,
     )
 
 
@@ -112,6 +80,7 @@ def _pick_step(
     pick_point: Point,
     target_pose: PoseStamped | None = None,
     nav_state: MotionExecutionState | None = None,
+    requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
     return MoveStep(
         name=StepKind.PICK,
@@ -124,6 +93,7 @@ def _pick_step(
         place_point=Point(),
         motion_state=MotionExecutionState.PICKING_PIECE,
         nav_motion_state=nav_state,
+        requires_pre_grasp_gate=requires_pre_grasp_gate,
     )
 
 
@@ -132,6 +102,7 @@ def _place_step(
     place_point: Point,
     target_pose: PoseStamped | None = None,
     nav_state: MotionExecutionState | None = None,
+    requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
     return MoveStep(
         name=StepKind.PLACE,
@@ -144,6 +115,7 @@ def _place_step(
         place_point=place_point,
         motion_state=MotionExecutionState.PLACING_PIECE,
         nav_motion_state=nav_state,
+        requires_pre_grasp_gate=requires_pre_grasp_gate,
     )
 
 
@@ -155,6 +127,7 @@ def _move_step(
     target_pose: PoseStamped | None = None,
     is_capture: bool = False,
     nav_state: MotionExecutionState | None = None,
+    requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
     return MoveStep(
         name=StepKind.MOVE,
@@ -167,6 +140,7 @@ def _move_step(
         place_point=place_point,
         motion_state=MotionExecutionState.PICKING_PIECE,
         nav_motion_state=nav_state,
+        requires_pre_grasp_gate=requires_pre_grasp_gate,
     )
 
 
@@ -182,6 +156,7 @@ def _observation_step(observation_pose: PoseStamped) -> MoveStep:
         place_point=Point(),
         motion_state=MotionExecutionState.IDLE,
         nav_motion_state=MotionExecutionState.NAV_TO_OBS,
+        requires_pre_grasp_gate=False,
     )
 
 
@@ -207,15 +182,24 @@ class MovePlanBuilder:
         details: ChessMoveGoal,
         observation_pose: PoseStamped | None = None,
     ) -> list[MoveStep]:
-        """Entry point for building move steps across all feasibility plan types via Strategy Map."""
+        """Transform workspace feasibility calculation response into an ordered MoveStep pipeline.
+
+        Applies strategy pattern to decompose single-base, dual-base, or capture trajectories
+        and appends an optional final observation standoff retreat step.
+
+        Args:
+            resp: Feasibility service response containing plan type, target coordinates, and poses.
+            details: High-level chess move metadata including UCI squares and capture flags.
+            observation_pose: Optional final standoff retreat pose in map frame.
+
+        Returns:
+            List of sequential MoveStep objects ready for execution by MoveSequencer.
+        """
         builder = cls._BUILDERS.get(resp.plan_type, cls._build_fallback)
         steps = list(builder(resp, details))
         if observation_pose is not None:
             steps.append(_observation_step(observation_pose))
         return steps
-
-    # Backward compatibility alias
-    build_stages = build_steps
 
     @staticmethod
     def _build_zero_nav(
@@ -283,6 +267,7 @@ class MovePlanBuilder:
                 to_square=details.to_square,
                 pick_point=resp.pick_point,
                 place_point=resp.place_point,
+                requires_pre_grasp_gate=False,
             ),
         ]
 
@@ -304,6 +289,7 @@ class MovePlanBuilder:
                 to_square=details.to_square,
                 pick_point=resp.pick_point,
                 place_point=resp.place_point,
+                requires_pre_grasp_gate=False,
             ),
         ]
 
@@ -331,6 +317,7 @@ class MovePlanBuilder:
                 nav_state=(
                     None if clear_same_as_pick else MotionExecutionState.NAV_TO_PICK
                 ),
+                requires_pre_grasp_gate=not clear_same_as_pick,
             ),
             _place_step(
                 to_square=details.to_square,

@@ -1,37 +1,21 @@
-# ================= Goal =================
-# Human readable instruction, e.g. "Pick e2, place e4" or "Capture d5"
-string instruction
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
 
-# Piece designation, e.g. "pawn", "knight", "bishop", "rook", "queen", "king"
-string piece_type
-
-# Algebraic notation for source and destination squares
-string from_square
-string to_square
-
-# 3D coordinates in target_frame
-geometry_msgs/Point pick_point
-geometry_msgs/Point place_point
-
-# True if this move removes an opponent piece
-bool is_capture
-
-# Reference frame for pick_point and place_point (default: "chessboard_frame")
-string target_frame
-
-# Optional kinematic hints from workspace reachability checker
-sensor_msgs/JointState pick_ik_hint
-sensor_msgs/JointState place_ik_hint
-
+# Goal
+string instruction             # Task description (e.g., "Pick e2, place e4")
+string piece_type              # Piece type (e.g., "pawn", "knight")
+string from_square             # Source square (e.g., "e2")
+string to_square               # Target square (e.g., "e4")
+geometry_msgs/Point pick_point # Grasp point in target_frame [m]
+geometry_msgs/Point place_point# Placement point in target_frame [m]
+bool is_capture                # True if move captures opponent piece
+string target_frame            # TF frame for points (default: "chessboard_frame")
 ---
-# ================= Result =================
-bool success
-string message
-float32 execution_time_sec
-
+# Result
+bool success                   # True if physical execution succeeded
+string message                 # Result message or failure reason
+float32 execution_time_sec     # Trajectory duration [s]
 ---
-# ================= Feedback =================
-# Operational phase: "APPROACH_PICK", "GRASP", "LIFT", "APPROACH_PLACE", "RELEASE", "RETRACT"
-string current_phase
-float32 progress_percent
-
+# Feedback
+string current_phase           # Phase: "APPROACH_PICK", "GRASP", "LIFT", "APPROACH_PLACE", "RELEASE", "RETRACT"
+float32 progress_percent       # Execution progress [0.0..100.0%]

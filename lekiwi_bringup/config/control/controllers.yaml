@@ -32,27 +32,27 @@ arm_trajectory_controller:
     allow_partial_joints_goal: true
     state_publish_rate: 50.0
     action_monitor_rate: 20.0
-    constraints:
-      stopped_velocity_tolerance: 0.05
-      goal_time: 0.5
-      arm_shoulder_pan:
-        trajectory: 0.10
-        goal: 0.03
-      arm_shoulder_lift:
-        trajectory: 0.10
-        goal: 0.03
-      arm_elbow_flex:
-        trajectory: 0.10
-        goal: 0.03
-      arm_wrist_flex:
-        trajectory: 0.10
-        goal: 0.03
-      arm_wrist_roll:
-        trajectory: 0.10
-        goal: 0.03
-      arm_gripper:
-        trajectory: 0.15
-        goal: 0.05
+    # constraints:
+    #   stopped_velocity_tolerance: 0.05
+    #   goal_time: 0.5
+    #   arm_shoulder_pan:
+    #     trajectory: 0.10
+    #     goal: 0.03
+    #   arm_shoulder_lift:
+    #     trajectory: 0.10
+    #     goal: 0.03
+    #   arm_elbow_flex:
+    #     trajectory: 0.10
+    #     goal: 0.03
+    #   arm_wrist_flex:
+    #     trajectory: 0.10
+    #     goal: 0.03
+    #   arm_wrist_roll:
+    #     trajectory: 0.10
+    #     goal: 0.03
+    #   arm_gripper:
+    #     trajectory: 0.15
+    #     goal: 0.05
 
 
 

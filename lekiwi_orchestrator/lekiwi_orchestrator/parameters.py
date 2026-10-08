@@ -1,7 +1,10 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-"""Type-safe configuration container parsed from ROS 2 node parameters."""
+"""Type-safe configuration container parsed from ROS 2 node parameters.
+
+Encapsulates parameter declarations, default values, and runtime type coercion.
+"""
 
 from __future__ import annotations
 
@@ -13,9 +16,13 @@ if TYPE_CHECKING:
 
 
 class OrchestratorParameters:
-    """Type-safe configuration container parsed from ROS 2 node parameters."""
+    """Type-safe configuration container parsed from ROS 2 node parameters.
+
+    Provides early validation and cached immutable attribute access for mission settings.
+    """
 
     def __init__(self, node: Node) -> None:
+        """Declare and parse all orchestrator ROS 2 parameters from node handle."""
         node.declare_parameter("robot_color", "b")
         node.declare_parameter("board_frame", "chessboard_frame")
         node.declare_parameter("map_frame", "map")
@@ -50,7 +57,6 @@ class OrchestratorParameters:
         )
 
         node.declare_parameter("observation.standoff_distance", 0.65)
-        node.declare_parameter("observation.radius_tolerance", 0.04)
         node.declare_parameter("observation.scan_timeout_sec", 6.0)
         node.declare_parameter(
             "observation.angle_offsets.relocalize",
@@ -118,9 +124,6 @@ class OrchestratorParameters:
 
         self.observation_standoff_distance = float(
             node.get_parameter("observation.standoff_distance").value
-        )
-        self.observation_radius_tolerance = float(
-            node.get_parameter("observation.radius_tolerance").value
         )
         self.observation_scan_timeout_sec = float(
             node.get_parameter("observation.scan_timeout_sec").value

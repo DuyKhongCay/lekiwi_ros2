@@ -19,7 +19,7 @@ Use the installed launch descriptions to inspect the complete top-level interfac
 ros2 launch lekiwi_bringup robot.launch.py --show-args
 ```
 
-The top-level default hardware type is `real`; explicitly choose deployment arguments for your environment.
+The top-level default hardware type is `real`, and the default manipulation mode is `mock` (running `mock_policy_server` for safe bringup without accidental arm motion). Explicitly pass `manipulation:=kinematics` for full physical chess manipulation, or `manipulation:=policy` for LeRobot inference.
 
 ## Configuration
 

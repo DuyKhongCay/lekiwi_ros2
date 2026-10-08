@@ -1,3 +1,6 @@
+# Chess Master Configuration for LeKiwi Autonomous Play
+# Distro: ROS 2 Jazzy | Stockfish engine, FEN state tracker, and 2D visualizer
+
 /**:
   ros__parameters:
     # Stockfish Engine parameters
@@ -9,8 +12,8 @@
     raw_fen_topic: "/chess/raw_fen"
     game_status_topic: "/chess/game_status"
     debounce_frames: 3
-    auto_trigger_engine: true     # Bật để tự chơi trong giai đoạn dev; tắt khi dùng orchestrator
-    robot_color: "black"          # Màu quân cờ robot cầm ("black" hoặc "white")
+    auto_trigger_engine: true     # Enable self-play in dev phase; disable when orchestrator manages turns
+    robot_color: "black"          # Robot player piece color ("black" or "white")
 
 chessboard_2d_visualizer:
   ros__parameters:

@@ -1,150 +1,293 @@
-# `lekiwi_orchestrator`
+---
+post_title: 'lekiwi_orchestrator'
+author1: 'duykhongcay'
+post_slug: 'lekiwi-orchestrator'
+microsoft_alias: 'duykhongcay'
+featured_image: ''
+categories:
+  - robotics
+tags:
+  - ros2
+  - orchestrator
+  - state-machine
+  - active-perception
+  - mobile-manipulation
+  - clean-code
+ai_note: 'Documentation updated following technical writer standards'
+summary: 'High-level autonomous chess mission orchestrator, readiness-gated navigation startup, active observation, and perception state machine for LeKiwi robot'
+post_date: '2026-10-05'
+---
 
-High-level autonomous chess mission orchestrator, readiness-gated navigation startup, and camera operational mode state machine for LeKiwi mobile manipulation robot.
+## Overview
+
+The `lekiwi_orchestrator` package serves as the central mission coordinator and
+subsystem mediator for the LeKiwi Autonomous Chess Playing Robot. It orchestrates
+FIDE game referee signals, localization gating, camera perception contexts,
+active observation repositioning, and coordinated mobile manipulation.
+
+The package implements the **Mediator** and **Facade** design patterns within a
+strictly decoupled, acyclic, and high-cohesion architecture. All 12 domain
+modules are maintained strictly below 1,000 lines of code, adhering to Clean
+Code, SOLID principles, and ROS 2 asynchronous execution standards.
 
 ---
 
-## 🏛️ Architecture & Clean Code Design (GoF & SOLID)
+## System Architecture and Design Patterns
 
-`lekiwi_orchestrator` is structured as a completely flattened, high-cohesion ROS 2 package adhering strictly to Clean Code, SOLID principles, and ensuring **all modules remain strictly below 1000 lines of code**:
+`ChessMissionOrchestrator` coordinates six specialized domain subsystems via
+dependency injection without exposing internal module complexity:
 
 ```mermaid
 flowchart TD
-    subgraph Foundation
-        MODELS["mission_types.py<br/>(ChessMoveGoal, ActionResult, ObservationIntent)"]
-        FSM["fsm.py<br/>(Macro/Micro FSM & Transitions)"]
-        PARAMS["parameters.py<br/>(OrchestratorParameters, ROS Declarations)"]
+    subgraph Foundation ["1. Foundation Layer"]
+        MODELS["mission_types.py<br/>(Contracts & Goals)"]
+        FSM["fsm.py<br/>(3-Tier HFSM Matrix)"]
+        PARAMS["parameters.py<br/>(Type-safe Parameters)"]
     end
 
-    subgraph Geometry & Perception
-        GEOM["board_geometry.py<br/>(SE2, Standoff & Azimuth Viewpoints)"]
-        PERC["perception_context.py<br/>(PerceptionContextManager)"]
+    subgraph GeometryPerception ["2. Geometry & Perception"]
+        GEOM["board_geometry.py<br/>(SE2 Math & Standoff)"]
+        PERC["perception_context.py<br/>(Hardware Gating)"]
     end
 
-    subgraph Motion Gateways
-        MOTION["motion_client.py<br/>(Interfaces, RosMotionClient, FakeMotionClient)"]
-        OBS["obs_navigator.py<br/>(ObsNavigator)"]
+    subgraph MotionGateways ["3. Motion & Observation"]
+        MOTION["motion_client.py<br/>(Nav2 & Arm Action Clients)"]
+        OBS["obs_navigator.py<br/>(2-Phase Viewpoint Planner)"]
     end
 
-    subgraph Planning & Execution
-        PLAN["move_planner.py<br/>(MovePlanBuilder, MoveStep, StepKind)"]
-        SEQ["move_sequencer.py<br/>(MoveSequencer & Self-Healing)"]
+    subgraph PlanningExecution ["4. Planning & Execution"]
+        PLAN["move_planner.py<br/>(Atomic MoveStep Builder)"]
+        SEQ["move_sequencer.py<br/>(Pipeline Execution & Watchdogs)"]
     end
 
-    subgraph Application & Supervision
-        WORKFLOW["turn_workflow.py<br/>(GameStatusHandler, MoveWorkflow, PostMoveVerifier)"]
-        HEALTH["health_supervisor.py<br/>(HealthSupervisor, StatusMarkerBuilder)"]
-        NODE["orchestrator_node.py<br/>(ChessMissionOrchestrator Node)"]
+    subgraph ApplicationSupervision ["5. Coordination & Supervision"]
+        WORKFLOW["turn_workflow.py<br/>(Referee & Verification)"]
+        HEALTH["health_supervisor.py<br/>(Lease Monitor & 3D HUD)"]
+        NODE["orchestrator_node.py<br/>(ChessMissionOrchestrator Facade)"]
     end
 
-    MODELS --> GEOM
-    MODELS --> MOTION
-    MODELS --> OBS
-    MODELS --> PLAN
-    MODELS --> SEQ
-    MODELS --> WORKFLOW
-    MODELS --> NODE
-
-    FSM --> PLAN
-    FSM --> SEQ
-    FSM --> PERC
-    FSM --> HEALTH
-    FSM --> WORKFLOW
-    FSM --> NODE
-
+    MODELS --> GEOM & MOTION & OBS & PLAN & SEQ & WORKFLOW & NODE
+    FSM --> PLAN & SEQ & PERC & HEALTH & WORKFLOW & NODE
     GEOM --> OBS
-    MOTION --> OBS
+    MOTION --> OBS & SEQ
     PLAN --> SEQ
+    OBS --> WORKFLOW & SEQ
     SEQ --> WORKFLOW
-    OBS --> WORKFLOW
-    PERC --> NODE
+    PERC --> WORKFLOW & NODE
     HEALTH --> NODE
     WORKFLOW --> NODE
     PARAMS --> NODE
 ```
 
-### Dependency Rules & Layer Invariants
-1. **Foundation (`mission_types.py`, `fsm.py`, `parameters.py`)**: Pure contracts, zero dependencies on higher-level packages.
-2. **`board_geometry.py`**: Pure SE(2) mathematics, standoff calculation, azimuth viewpoint ranking, and TF board-to-map transformations with error logging.
-3. **`motion_client.py` & `obs_navigator.py`**: Motion interfaces (`MotionClient`, `FeasibilityClient`, `NavigationClient`, `ManipulationClient`) and concrete clients (`RosMotionClient`, `FakeMotionClient`, `ObsNavigator`).
-4. **`perception_context.py`**: Hardware-aware vision gating for GStreamer valves, Hailo-8 NPU, and LeRobot wrist cameras (`PerceptionContextManager`).
-5. **`move_planner.py` & `move_sequencer.py`**: Execution step plan builder (`MovePlanBuilder`, `MoveStep`, `StepKind`), sequential execution sequencer (`MoveSequencer`), and fast-path/monotonic-watchdog self-healing.
-6. **`health_supervisor.py`**: Node health supervision (`HealthSupervisor`), timer leak prevention, and RViz HUD markers (`StatusMarkerBuilder`).
-7. **`turn_workflow.py` & `orchestrator_node.py`**: Application composition, orchestrator node (`ChessMissionOrchestrator`), turn workflow coordination (`MoveWorkflow`), referee telemetry (`GameStatusHandler`), and active post-move verification (`PostMoveVerifier`).
+### Concurrency and Thread-Safety Model
+
+The orchestrator operates within a `MultiThreadedExecutor` with rigorous
+thread-safety guarantees:
+
+- **State Synchronization (`_state_lock`)**: All macro FSM transitions,
+  move goal caches, and recovery checkpoints are guarded by a reentrant mutex
+  (`threading.RLock`).
+- **Callback Group Partitioning**:
+  - `_cb_group_sub` (`MutuallyExclusiveCallbackGroup`): Serializes fast topic
+    callbacks (`/system/nav_ready`, `/system/grasp_ready`, `/chess/game_status`).
+  - `_cb_group_client` (`ReentrantCallbackGroup`): Drives asynchronous action
+    clients and service invocations concurrently, eliminating deadlock during
+    nested ROS 2 calls.
+- **Open Call Pattern**: State transitions release `_state_lock` before
+  invoking long-running side effects (such as `_move_sequencer.cancel()` or
+  recovery timer scheduling) to prevent lock contention with active ROS 2
+  action feedback threads.
 
 ---
 
-## 📦 Package Modules
+## Hierarchical Finite State Machine (HFSM)
 
-| Module | Key Components | Responsibility |
-|---|---|---|
-| `mission_types.py` | `ActionResult`, `ObservationIntent`, `ChessMoveGoal` | Pure data transfer models and execution contracts. |
-| `fsm.py` | `MacroMissionState`, `MotionExecutionState`, transitions | 2-level hierarchical FSM state definitions and transition validity matrix. |
-| `parameters.py` | `OrchestratorParameters` | Parameter declarations and config models for chess orchestrator. |
-| `board_geometry.py` | `RankedViewpoint`, `compute_radial_entry_pose`, TF transforms | Normalized SE(2) angle math, standoff pose validation, and azimuth ranking. |
-| `motion_client.py` | `MotionClient`, `RosMotionClient`, `FakeMotionClient` | ROS 2 Nav2 & LeRobot action clients, simulated execution doubles, and action watchdogs. |
-| `obs_navigator.py` | `ObsNavigator` | Autonomous active observation repositioning and viewpoint selection. |
-| `perception_context.py` | `PerceptionContextManager` | Hardware-aware vision gating for GStreamer valves, Hailo-8 NPU, and wrist cameras. |
-| `move_planner.py` | `MoveStep`, `MovePlanBuilder`, `StepKind` | Step generation (`CLEAR`, `PICK`, `PLACE`, `MOVE`). |
-| `move_sequencer.py` | `MoveSequencer` | Multi-stage pipeline execution and fast-path grasp self-healing. |
-| `health_supervisor.py` | `HealthSupervisor`, `StatusMarkerBuilder` | Heartbeat lease tracking, auto-recovery timer lifecycle, and RViz HUD markers. |
-| `turn_workflow.py` | `MoveWorkflow`, `GameStatusHandler`, `PostMoveVerifier` | Game referee processing, full turn sequencing, and post-move verification. |
-| `orchestrator_node.py` | `ChessMissionOrchestrator` | Top-level ROS 2 node, lifecycle integration, service handlers, and subsystem wiring. |
+The mission lifecycle is structured into a 3-tier hierarchical state machine
+coupled with hardware-aware camera perception gating:
 
----
-
-## 🧩 Nodes & Executables
-
-| Executable | Class | Entrypoint | Purpose |
-|---|---|---|---|
-| `chess_mission_orchestrator` | `ChessMissionOrchestrator` | `lekiwi_orchestrator.orchestrator_node:main` | Autonomous mission manager, readiness gating, perception coordination, and self-healing. |
-
----
-
-## 📡 Interfaces & Communication
-
-### Subscriptions
-- `/system/nav_ready` (`std_msgs/msg/Bool`): Base navigation readiness heartbeat from `lekiwi_motion`.
-- `/system/grasp_ready` (`std_msgs/msg/Bool`): Arm manipulation precision readiness heartbeat from `lekiwi_motion`.
-- `/chess/game_status` (`lekiwi_interfaces/msg/ChessGameStatus`): Match state, FIDE legality, and Stockfish `best_move`.
-
-### Services & Actions
-- `/workspace/check_move_feasibility` (`lekiwi_interfaces/srv/CheckMoveFeasibility`): Kinematics reachability & standoff pose query.
-- `/orchestrator/recover` (`std_srvs/srv/Trigger`): Manual self-healing recovery service resetting `ERROR_FALLBACK`.
-- `/orchestrator/set_perception_context` (`lekiwi_interfaces/srv/SetPerceptionContext`): Programmatic override of perception context.
-- `/navigate_to_pose` (`nav2_msgs/action/NavigateToPose`): Nav2 standoff docking via ActionDispatcher.
-- `/manipulation/execute_chess_move` (`lekiwi_interfaces/action/ExecuteChessMove`): Arm pick and place execution via ActionDispatcher.
-
-### Publications
-- `/perception_context` (`lekiwi_interfaces/msg/PerceptionContext`): Latched hardware-aware perception operational mode.
-- `/diagnostics` (`diagnostic_msgs/msg/DiagnosticArray`): Telemetry on mission state, Nav & Grasp readiness, and recovery attempts.
-- `~/status_markers` (`visualization_msgs/msg/MarkerArray`): 3D HUD billboard and mission status text in RViz.
-
----
-
-## 🚀 Launch & Usage
-
-The orchestration and readiness subsystem launch files and YAML configurations are centralized in `lekiwi_bringup`:
-
-```bash
-# Launch full orchestration layer from lekiwi_bringup
-ros2 launch lekiwi_bringup orchestrator.launch.py
-
-# Launch with autonomous mission execution enabled
-ros2 launch lekiwi_bringup orchestrator.launch.py start_mission:=true
+```text
++-------------------------------------------------------------------------+
+| Level 1: Macro Mission States (fsm.py)                                  |
+|                                                                         |
+|  [BOOT_INITIALIZING] --> [WAITING_FOR_TF_READY]                         |
+|                                |                                        |
+|                                v                                        |
+|  +-------------------> [WAITING_FOR_PLAYER_MOVE]                        |
+|  |                             |                                        |
+|  |                             v                                        |
+|  |                     [EVALUATING_BEST_MOVE]                           |
+|  |                             |                                        |
+|  |                             v                                        |
+|  |                     [EXECUTING_MOVE]                                 |
+|  |                             |                                        |
+|  |                             v                                        |
+|  |                     [POST_MOVE_VERIFYING]                            |
+|  |                             |                                        |
+|  +---------------------+-------+                                        |
+|  |                     |                                                |
+|  v                     v                                                |
+| [TURN_COMPLETED]   [GAME_OVER]          [ERROR_FALLBACK]                |
+|                                         (Auto-Recovery Escalation)      |
++-------------------------------------------------------------------------+
+| Level 2: Motion Execution States (move_sequencer.py)                    |
+|  - IDLE -> NAVIGATING_TO_STANDOFF -> MANIPULATING -> FAILED             |
++-------------------------------------------------------------------------+
+| Level 3: Micro Move Steps (move_planner.py)                             |
+|  - APPROACH -> CLEAR (Captured Piece) -> PICK -> PLACE -> RETREAT       |
++-------------------------------------------------------------------------+
+| Perception Context Gating (perception_context.py)                       |
+|  - Mode 1: TF_TRACKING_AND_NAV (Visual SLAM & Tag Tracking)             |
+|  - Mode 2: BOARD_STATE_SCAN (Overhead Board FEN Digitization)           |
+|  - Mode 3: WRIST_SERVO_ACTIVE (Gripper Close-Up Visual Servoing)        |
++-------------------------------------------------------------------------+
 ```
 
 ---
 
-## 🧪 Testing & Architectural Verification
+## Active Observation Repositioning Strategy
 
-`lekiwi_orchestrator` features extensive unit testing and strict architectural contract assertions:
+When visual occlusions or board state ambiguities occur, `ObsNavigator` executes
+a **2-Phase Repositioning Strategy** along the circular standoff boundary
+($S^1$):
+
+1. **Phase 1: Radial Standoff Guard**:
+   - Evaluates whether current planar base coordinates $(x, y)$ satisfy
+     $| \sqrt{x^2 + y^2} - R | \le \Delta R$ ($R = 0.65\text{ m}, \Delta R = 0.04\text{ m}$).
+   - If outside tolerance, dispatches a radial entry waypoint orienting the
+     mobile base inward toward the chessboard center.
+2. **Phase 2: Azimuth Cost Navigation**:
+   - Computes geodesic angular distances along the circle from candidate offsets
+     ($\Delta \theta \in [0^\circ, \pm 18^\circ]$ for relocalization;
+     $\Delta \theta \in [0^\circ, \pm 18^\circ, \pm 32^\circ]$ for post-move
+     verification).
+   - Ranks viewpoints by minimal transit arc cost and commands Nav2 to dock at
+     the nearest vantage point.
+
+---
+
+## Subsystem Modules
+
+| Module | Primary Classes | Architectural Responsibility |
+| :--- | :--- | :--- |
+| `mission_types.py` | `ChessMoveGoal`, `ActionResult`, `ObservationIntent` | Immutable data contracts, factory parsers, and execution results. |
+| `fsm.py` | `MacroMissionState`, `MotionExecutionState`, transitions | 3-tier state enums, state validation matrix, and illegal transition guards. |
+| `parameters.py` | `OrchestratorParameters` | Node parameter declaration, strict validation, and cached configuration. |
+| `board_geometry.py` | `RankedViewpoint`, `compute_radial_entry_pose` | Planar SE(2) mathematics, standoff projection, and azimuth ranking. |
+| `perception_context.py` | `PerceptionContextManager` | GStreamer valve & Hailo-8 camera operational context switching. |
+| `motion_client.py` | `RosMotionClient`, `MotionClient` | Nav2 & arm manipulation action clients with watchdog timeouts. |
+| `obs_navigator.py` | `ObsNavigator` | Autonomous multi-viewpoint active observation repositioning. |
+| `move_planner.py` | `MovePlanBuilder`, `MoveStep`, `StepKind` | Kinematic stage generation (`CLEAR`, `PICK`, `PLACE`, `MOVE`). |
+| `move_sequencer.py` | `MoveSequencer` | Sequential stage advancement, watchdog enforcement, and grasp self-healing. |
+| `health_supervisor.py` | `HealthSupervisor`, `StatusMarkerBuilder` | Readiness heartbeat lease tracking, auto-recovery timers, and 3D HUD. |
+| `turn_workflow.py` | `GameStatusHandler`, `MoveWorkflow`, `PostMoveVerifier` | Referee processing, turn lifecycle orchestration, and verification. |
+| `orchestrator_node.py` | `ChessMissionOrchestrator` | Top-level node facade, dependency wiring, and ROS 2 lifecycle coordination. |
+
+---
+
+## ROS 2 Interfaces
+
+### Subscribed Topics
+
+| Topic | Message Type | QoS | Semantic Purpose |
+| :--- | :--- | :--- | :--- |
+| `/system/nav_ready` | `std_msgs/msg/Bool` | Transient Local, Depth 1 | Navigation readiness heartbeat lease from `lekiwi_navigation`. |
+| `/system/grasp_ready` | `std_msgs/msg/Bool` | Transient Local, Depth 1 | Arm IK and visual grasp readiness lease from `lekiwi_arm_plan`. |
+| `/chess/game_status` | `lekiwi_interfaces/msg/ChessGameStatus` | Volatile, Depth 10 | Referee match status, active turn, checkmate flags, and best move. |
+
+### Published Topics
+
+| Topic | Message Type | QoS | Semantic Purpose |
+| :--- | :--- | :--- | :--- |
+| `/perception_context` | `lekiwi_interfaces/msg/PerceptionContext` | Transient Local, Depth 1 | Active vision pipeline mode (gating GStreamer / Hailo-8 streams). |
+| `/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Volatile, Depth 10 | Node health telemetry, readiness status, and recovery metrics. |
+| `~/status_markers` | `visualization_msgs/msg/MarkerArray` | Volatile, Depth 10 | RViz 3D text HUD billboard anchored above `base_footprint`. |
+
+### Services and Actions
+
+| Name | Interface Type | Role | Purpose |
+| :--- | :--- | :--- | :--- |
+| `/workspace/check_move_feasibility` | `lekiwi_interfaces/srv/CheckMoveFeasibility` | Client | Queries workspace reachability and IK feasibility before motion. |
+| `/orchestrator/recover` | `std_srvs/srv/Trigger` | Server | Manual recovery endpoint to clear `ERROR_FALLBACK` state. |
+| `/orchestrator/set_perception_context` | `lekiwi_interfaces/srv/SetPerceptionContext` | Server | Programmatic override of active perception operational context. |
+| `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | Client | Dispatches radial entry or azimuth repositioning goals to Nav2. |
+| `/manipulation/execute_chess_move` | `lekiwi_interfaces/action/ExecuteChessMove` | Client | Dispatches trajectory and gripper goals to arm manipulation server. |
+
+---
+
+## Node Parameters
+
+Parameters can be overridden via YAML configuration files or launch arguments:
+
+| Parameter | Type | Default | Unit / Description |
+| :--- | :--- | :--- | :--- |
+| `robot_color` | `string` | `"b"` | Robot player color (`"w"` for White, `"b"` for Black). |
+| `board_frame` | `string` | `"chessboard_frame"` | Coordinate frame ID of the chessboard origin. |
+| `map_frame` | `string` | `"map"` | Global map coordinate frame ID. |
+| `navigation` | `bool` | `true` | Enables real Nav2 action dispatching (false activates mock). |
+| `feasibility_timeout_sec` | `double` | `5.0` | Timeout in seconds for reachability service response. |
+| `action_timeout_sec` | `double` | `60.0` | Watchdog timeout for Nav2 and manipulation action completion. |
+| `readiness_timeout_sec` | `double` | `1.0` | Heartbeat expiration threshold for navigation and grasp readiness. |
+| `pre_grasp_settle_sec` | `double` | `2.0` | Stabilization pause duration between base docking and arm pick. |
+| `recovery.auto_recovery_enabled` | `bool` | `true` | Enables automatic recovery retry timer upon `ERROR_FALLBACK`. |
+| `recovery.auto_recovery_timeout_sec` | `double` | `5.0` | Delay before triggering auto-recovery transition. |
+| `recovery.max_recovery_attempts` | `int` | `3` | Maximum consecutive self-healing attempts before lockout. |
+| `observation.standoff_distance` | `double` | `0.65` | Target radial observation distance $R$ from board center (meters). |
+| `observation.scan_timeout_sec` | `double` | `6.0` | Timeout allowed for overhead board FEN confirmation. |
+| `observation.angle_offsets.relocalize` | `double[]` | `[0.0, -0.314, 0.314]` | Candidate azimuth offsets (rad) for visual relocalization. |
+| `observation.angle_offsets.post_move_verify` | `double[]` | `[0.0, -0.314, 0.314, -0.558, 0.558]` | Candidate azimuth offsets (rad) for post-move verification. |
+| `visualization.enabled` | `bool` | `true` | Enables RViz 3D status HUD billboard marker publishing. |
+| `visualization.topic` | `string` | `"~/status_markers"` | Topic name for visualization markers. |
+| `visualization.hud_z_offset` | `double` | `0.35` | Height offset (meters) of HUD billboard above `robot_frame`. |
+| `visualization.robot_frame` | `string` | `"base_footprint"` | Reference frame for status HUD anchoring. |
+
+---
+
+## Fault Tolerance and Self-Healing
+
+The orchestrator incorporates automated self-healing mechanisms:
+
+1. **TF Readiness Heartbeat Guard**: If TF tracking drops or `/system/nav_ready`
+   times out (> 1.0 s), the orchestrator immediately transitions to
+   `ERROR_FALLBACK` to halt mechanical motion.
+2. **Pending Move Preservation**: When transitioning into `ERROR_FALLBACK`, any
+   unfulfilled chess move is preserved in `_pending_recovery_move`. Once Nav2
+   readiness is re-confirmed, the orchestrator automatically resumes the pending
+   move without human intervention.
+3. **Escalated Auto-Recovery**: An asynchronous recovery timer triggers up to
+   `max_recovery_attempts` (3 cycles). Recovery resets action goals, clears
+   pipeline sequencers, sets perception to `TF_TRACKING_AND_NAV`, and returns to
+   `WAITING_FOR_TF_READY`.
+
+---
+
+## Build, Testing, and Execution
+
+### Build Package
 
 ```bash
-# Run architectural contract tests (verifies flat package, acyclic DAG, and line limits < 1000 lines)
-pytest lekiwi_orchestrator/test/test_architecture_contracts.py -v
+cd ~/docker_ws
+colcon build --packages-select lekiwi_orchestrator --symlink-install
+```
 
-# Run all colcon pytest suites
+### Architectural and Unit Verification
+
+```bash
+# Run strict architectural contract tests (verifies flat package & line counts < 1000)
+pytest lekiwi_ros2/lekiwi_orchestrator/test/test_architecture_contracts.py -v
+
+# Run entire test suite via colcon
 colcon test --packages-select lekiwi_orchestrator --event-handlers console_cohesion+
 colcon test-result --verbose
+```
+
+### Launch Subsystem
+
+The orchestration layer is launched via `lekiwi_bringup`:
+
+```bash
+# Launch orchestrator node with default parameters
+ros2 launch lekiwi_bringup orchestrator.launch.py
+
+# Launch with autonomous mission execution enabled for White player
+ros2 launch lekiwi_bringup orchestrator.launch.py robot_color:=w start_mission:=true
 ```

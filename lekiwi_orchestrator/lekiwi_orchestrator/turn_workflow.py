@@ -12,7 +12,6 @@ Encapsulates:
 
 from __future__ import annotations
 
-import math
 import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
@@ -24,10 +23,6 @@ from rclpy.callback_groups import CallbackGroup
 from rclpy.node import Node
 from rclpy.timer import Timer
 
-from lekiwi_orchestrator.board_geometry import (
-    compute_radial_entry_pose,
-    get_default_approach_yaw,
-)
 from lekiwi_orchestrator.fsm import MacroMissionState
 from lekiwi_orchestrator.mission_types import ActionResult, ChessMoveGoal, ObservationIntent
 from lekiwi_orchestrator.move_planner import MovePlanBuilder
@@ -147,7 +142,18 @@ class GameStatusHandler:
         msg: ChessGameStatus,
         clear_pending_recovery_cb: Callable[[], None] | None = None,
     ) -> None:
-        """Process game state updates from lekiwi_chess_master referee."""
+        """Process incoming referee status messages and gate robot turn eligibility.
+
+        Evaluates game termination conditions (mate/draw), verifies post-move stabilization,
+        checks turn ownership against robot color, and triggers move workflow dispatch.
+
+        Args:
+            msg: ChessGameStatus message received from chess referee engine.
+            clear_pending_recovery_cb: Optional callback to clear recovery goal upon fresh move.
+
+        Thread-safety:
+            Checks and updates `_last_processed_fen` under `_state_lock`.
+        """
         if self.handle_game_over_if_ended(msg):
             return
 
@@ -301,23 +307,13 @@ class MoveWorkflow:
         last_base_pose = self.extract_valid_base_pose(resp)
         self._host.set_last_interaction_pose(last_base_pose)
 
-        if self._config.navigation:
-            curr_bx, curr_by = self._obs_nav.get_current_board_position(
-                reference_pose=last_base_pose
-            )
-            fallback_yaw = get_default_approach_yaw(self._config.robot_color)
-            radial_pose_board = compute_radial_entry_pose(
-                curr_x=curr_bx,
-                curr_y=curr_by,
-                standoff_radius=self._config.observation_standoff_distance,
-                board_frame=self._config.board_frame,
-                fallback_yaw=fallback_yaw,
-            )
-            obs_pose = self._obs_nav.transform_board_pose_to_map(radial_pose_board)
-        else:
-            obs_pose = None
+        obs_pose = (
+            self._obs_nav.compute_observation_pose_for_base(last_base_pose)
+            if self._config.navigation
+            else None
+        )
 
-        stages = MovePlanBuilder.build_stages(
+        stages = MovePlanBuilder.build_steps(
             resp, details, observation_pose=obs_pose
         )
         if not self._host.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE):
@@ -410,7 +406,11 @@ class PostMoveVerifier:
             self._timer = None
 
     def on_timeout(self) -> None:
-        """Handle verification timeout: board is occluded or unconfirmed -> reposition viewpoint."""
+        """Handle post-move verification timeout by repositioning base to alternative vantage point.
+
+        Called when chessboard FEN cannot be confirmed stable/legal within observation timeout.
+        Selects next viewpoint along standoff circle and cycles back to BOARD_STATE_SCAN.
+        """
         self.stop()
         with self._state_lock:
             if self._get_mission_state() != MacroMissionState.POST_MOVE_VERIFYING:
@@ -457,10 +457,6 @@ class PostMoveVerifier:
 
         dispatched = self._observation_nav.reposition_to_next_viewpoint(
             intent=ObservationIntent.POST_MOVE_VERIFY,
-            reference_pose=self._get_last_interaction_pose(),
-            board_x=0.0,
-            board_y=0.0,
-            board_yaw=0.0,
             timeout_sec=self._config.action_timeout_sec,
             on_completed=_on_repositioned,
         )

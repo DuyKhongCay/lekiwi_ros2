@@ -1,7 +1,8 @@
 # Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
 
-PerceptionContext requested_context
+PerceptionContext requested_context  # Desired perception pipeline context
 ---
-bool success
-PerceptionContext applied_context
-string message
+bool success                         # True if pipeline gating succeeded
+PerceptionContext applied_context    # Active perception context after transition
+string message                       # Diagnostic status or failure cause

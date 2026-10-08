@@ -1,13 +1,13 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-uint8 TARGET_ALL=0
-uint8 TARGET_ARM=1
-uint8 TARGET_BASE=2
+uint8 TARGET_ALL=0             # All robot joints (arm + base)
+uint8 TARGET_ARM=1             # Arm servos only (IDs 1..6)
+uint8 TARGET_BASE=2            # Base wheel servos only (IDs 7..9)
 
-uint8 target       # TARGET_ALL (0), TARGET_ARM (1), or TARGET_BASE (2)
-bool enabled       # true to enable torque, false to disable torque
-bool toggle false  # true to toggle current state of target, false to respect enabled
+uint8 target                   # Target subsystem (TARGET_ALL, TARGET_ARM, TARGET_BASE)
+bool enabled                   # Target torque state: true=enable, false=disable (lead-through)
+bool toggle false              # If true, flips current torque state regardless of enabled
 ---
-bool success
-string message
+bool success                   # True if command acknowledged by servos
+string message                 # Diagnostic message or failure cause

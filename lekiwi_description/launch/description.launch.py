@@ -1,5 +1,22 @@
 # Copyright 2026 LeKiwi Labs
-# Licensed under the Apache License, Version 2.0.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Robot model description and state publisher launch configuration.
+
+Parses the LeKiwi URDF/Xacro kinematic description and launches
+robot_state_publisher to broadcast robot coordinate frames and TF tree.
+"""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -13,13 +30,15 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
-def generate_launch_description():
-    """Publish the robot model (URDF/xacro) and robot_state_publisher."""
+def generate_launch_description() -> LaunchDescription:
+    """Generate launch description for robot description and state publisher."""
+    # Resolve path to top-level robot Xacro description
     description_share = FindPackageShare("lekiwi_description")
     xacro_file = PathJoinSubstitution(
         [description_share, "urdf", "lekiwi_robot.urdf.xacro"]
     )
 
+    # Declare launch arguments for hardware backend and sim clock
     declared_arguments = [
         DeclareLaunchArgument(
             "hardware_type",
@@ -36,8 +55,22 @@ def generate_launch_description():
             default_value="robot_description",
             description="Topic name to publish the robot_description string.",
         ),
+        DeclareLaunchArgument(
+            "arm_control_mode",
+            default_value="kinematics",
+            choices=["kinematics", "policy"],
+            description="Arm control paradigm: 'kinematics' (accel=0) or 'policy' (accel=50)",
+        ),
+        DeclareLaunchArgument(
+            "servo_calib_file",
+            default_value=PathJoinSubstitution(
+                [description_share, "config", "calibration", "DuyKhongCay.json"]
+            ),
+            description="Path to STS3215 bus servo calibration JSON file",
+        ),
     ]
 
+    # Evaluate Xacro into URDF XML string parameter
     robot_description_content = ParameterValue(
         Command(
             [
@@ -45,12 +78,17 @@ def generate_launch_description():
                 xacro_file,
                 " hardware_type:=",
                 LaunchConfiguration("hardware_type"),
+                " arm_control_mode:=",
+                LaunchConfiguration("arm_control_mode"),
+                " servo_calib_file:=",
+                LaunchConfiguration("servo_calib_file"),
             ]
         ),
         value_type=str,
     )
     robot_description = {"robot_description": robot_description_content}
 
+    # Broadcast static transforms and joint states across the TF tree
     rsp_node = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",

@@ -5,11 +5,8 @@
 
 from lekiwi_orchestrator.board_geometry import (
     RankedViewpoint,
-    compute_radial_entry_pose,
-    is_on_standoff_circle,
     normalize_angle,
     rank_by_azimuth,
-    transform_board_pose_to_map,
     yaw_to_quaternion,
 )
 from lekiwi_orchestrator.fsm import (
@@ -82,11 +79,8 @@ __all__ = [
     "is_perception_transition_allowed",
     # Geometry
     "RankedViewpoint",
-    "compute_radial_entry_pose",
-    "is_on_standoff_circle",
     "normalize_angle",
     "rank_by_azimuth",
-    "transform_board_pose_to_map",
     "yaw_to_quaternion",
     # Mission Types
     "ActionResult",

@@ -14,6 +14,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    """Generate launch description for hand-eye calibration with camera and arm bringup."""
     pkg_share = FindPackageShare("lekiwi_calibration")
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")
@@ -75,7 +76,6 @@ def generate_launch_description():
             PathJoinSubstitution([bringup_share, "launch", "controllers.launch.py"])
         ),
         launch_arguments={
-            "hardware_type": LaunchConfiguration("hardware_type"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "arm_controller": "true",
             "base_controller": "false",

@@ -1,6 +1,12 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""Multi-camera GStreamer streaming and Hailo NPU perception bringup launch file.
+
+Loads 4 camera streamer components (stereo pair, wrist, side) and Hailo-8
+neural inference components into a single multi-threaded intra-process container.
+"""
+
 from launch import LaunchDescription
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer
@@ -9,7 +15,15 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def _camera_streamer_component(namespace, params_file):
-    """Build a CameraStreamerComponent that loads pipeline and camera config from YAML."""
+    """Build ComposableNode description for a GStreamer camera streamer instance.
+
+    Args:
+        namespace: ROS namespace prefix for camera topics (e.g. 'cameras/stereo_left').
+        params_file: Path substitution to gscam_cameras.yaml parameter file.
+
+    Returns:
+        ComposableNode configured with intra-process communication.
+    """
     return ComposableNode(
         package="lekiwi_perception",
         plugin="lekiwi_perception::CameraStreamerComponent",
@@ -26,7 +40,12 @@ def _camera_streamer_component(namespace, params_file):
 
 
 def generate_launch_description():
-    """Launch CameraStreamerComponent drivers and Hailo chess perception component as composed nodes."""
+    """Configure intra-process container holding 4 camera drivers and Hailo chess perception.
+
+    Returns:
+        LaunchDescription containing the multi-threaded perception container.
+    """
+    # 1. Resolve perception configuration parameter files
     bringup_share = FindPackageShare("lekiwi_bringup")
 
     gscam_params_file = PathJoinSubstitution(
@@ -36,6 +55,7 @@ def generate_launch_description():
         [bringup_share, "config", "perception", "perception_config.yaml"]
     )
 
+    # 2. Configure 4 GStreamer camera streaming components
     camera_namespaces = [
         "cameras/stereo_left",
         "cameras/stereo_right",
@@ -47,6 +67,7 @@ def generate_launch_description():
         _camera_streamer_component(ns, gscam_params_file) for ns in camera_namespaces
     ]
 
+    # 3. Configure Hailo NPU chess inference and chessboard pose estimators
     inference_component = ComposableNode(
         package="lekiwi_perception",
         plugin="lekiwi_perception::HailoChessInferenceComponent",
@@ -84,6 +105,7 @@ def generate_launch_description():
         chessboard_estimator_component,
     ]
 
+    # 4. Assemble multi-threaded composable component container
     container = ComposableNodeContainer(
         name="lekiwi_perception_container",
         namespace="",

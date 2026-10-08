@@ -150,19 +150,29 @@ class StatusMarkerBuilder:
         robot_color: str,
         stamp: Time,
     ) -> MarkerArray:
-        """
-        Assemble MarkerArray with DELETEALL hygiene followed by a 3D text billboard.
+        """Assemble standardized MarkerArray for 3D Robot Status HUD visualization in RViz2.
+
+        Uses DELETEALL hygiene to prevent ghost markers across mission state transitions.
+
+        Args:
+            snapshot: Immutable state snapshot containing mission, motion, and perception state.
+            nav_ready: Boolean indicating if navigation lease is valid.
+            robot_color: Robot player color ('w' or 'b') to format HUD display text.
+            stamp: Timestamp applied to generated marker headers.
+
+        Returns:
+            MarkerArray containing clear marker and updated view-facing 3D text billboard.
         """
         markers = MarkerArray()
 
-        # 0. Always start with DELETEALL to prevent stale remnants across state changes
+        # Always start with DELETEALL to prevent stale remnants across state changes
         clear_marker = Marker()
         clear_marker.action = Marker.DELETEALL
         clear_marker.header.frame_id = self._config.robot_frame
         clear_marker.header.stamp = stamp
         markers.markers.append(clear_marker)
 
-        # 1. Layer 1: Robot 3D Status HUD Billboard
+        # Layer 1: Robot 3D Status HUD Billboard
         hud = Marker()
         hud.header.frame_id = self._config.robot_frame
         hud.header.stamp = stamp
@@ -184,10 +194,6 @@ class StatusMarkerBuilder:
 
         markers.markers.append(hud)
         return markers
-
-
-# Backward compatibility alias
-MissionStatusMarkerBuilder = StatusMarkerBuilder
 
 
 # ==============================================================================

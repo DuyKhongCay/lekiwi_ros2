@@ -1,16 +1,30 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""Nav2 autonomous mobile robot navigation bringup launch file.
+
+Configures map_server, SmacPlanner2D, DWB/MPPI local controller, behavior
+server, and BT navigator inside an isolated composable container, coordinated
+by automated TF-gated lifecycle management.
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import UnlessCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    """Configure Composed Nav2 stack container and TF-gated lifecycle manager node.
+
+    Returns:
+        LaunchDescription containing Nav2 composable container and lifecycle coordinators.
+    """
+    # 1. Resolve map and navigation parameter configuration files
     bringup_share = FindPackageShare("lekiwi_bringup")
 
     default_map = PathJoinSubstitution([bringup_share, "maps", "chessboard_arena.yaml"])
@@ -18,7 +32,7 @@ def generate_launch_description():
         [bringup_share, "config", "navigation", "nav2_params.yaml"]
     )
 
-    # Launch arguments
+    # 2. Declare launch arguments
     declare_map_yaml = DeclareLaunchArgument(
         "map",
         default_value=default_map,
@@ -29,12 +43,6 @@ def generate_launch_description():
         "use_sim_time",
         default_value="false",
         description="Use simulation (Gazebo) clock if true",
-    )
-
-    declare_autostart = DeclareLaunchArgument(
-        "autostart",
-        default_value="false",
-        description="Automatically startup the Nav2 stack via lifecycle_manager (false enables TF-gated startup)",
     )
 
     # Lifecycle node names for Nav2
@@ -48,60 +56,66 @@ def generate_launch_description():
 
     use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
     map_yaml_file = LaunchConfiguration("map")
-    autostart = ParameterValue(LaunchConfiguration("autostart"), value_type=bool)
 
-    # 1. Map Server
-    map_server_node = Node(
+    # 3. Define Composable Nav2 servers
+    map_server_component = ComposableNode(
         package="nav2_map_server",
-        executable="map_server",
+        plugin="nav2_map_server::MapServer",
         name="map_server",
-        output="screen",
         parameters=[
             nav2_params,
             {"yaml_filename": map_yaml_file, "use_sim_time": use_sim_time},
         ],
     )
 
-    # 2. Planner Server (SmacPlanner2D)
-    planner_server_node = Node(
+    planner_server_component = ComposableNode(
         package="nav2_planner",
-        executable="planner_server",
+        plugin="nav2_planner::PlannerServer",
         name="planner_server",
-        output="screen",
         parameters=[nav2_params, {"use_sim_time": use_sim_time}],
     )
 
-    # 3. Controller Server (DWB Local Planner)
-    controller_server_node = Node(
+    controller_server_component = ComposableNode(
         package="nav2_controller",
-        executable="controller_server",
+        plugin="nav2_controller::ControllerServer",
         name="controller_server",
-        output="screen",
         parameters=[nav2_params, {"use_sim_time": use_sim_time}],
         remappings=[
             ("cmd_vel", "/cmd_vel_nav"),
         ],
     )
 
-    # 4. Behavior Server (Safe Wait / Costmap Clear)
-    behavior_server_node = Node(
+    behavior_server_component = ComposableNode(
         package="nav2_behaviors",
-        executable="behavior_server",
+        plugin="behavior_server::BehaviorServer",
         name="behavior_server",
-        output="screen",
         parameters=[nav2_params, {"use_sim_time": use_sim_time}],
     )
 
-    # 5. BT Navigator
-    bt_navigator_node = Node(
+    bt_navigator_component = ComposableNode(
         package="nav2_bt_navigator",
-        executable="bt_navigator",
+        plugin="nav2_bt_navigator::BtNavigator",
         name="bt_navigator",
-        output="screen",
         parameters=[nav2_params, {"use_sim_time": use_sim_time}],
     )
 
-    # 6. Lifecycle Manager for Nav2
+    # 4. Define ComposableNodeContainer for Nav2 stack
+    nav2_container = ComposableNodeContainer(
+        name="nav2_container",
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_isolated",
+        composable_node_descriptions=[
+            map_server_component,
+            planner_server_component,
+            controller_server_component,
+            behavior_server_component,
+            bt_navigator_component,
+        ],
+        output="screen",
+    )
+
+    # 5. Lifecycle Manager for Nav2
     lifecycle_manager_node = Node(
         package="nav2_lifecycle_manager",
         executable="lifecycle_manager",
@@ -111,13 +125,12 @@ def generate_launch_description():
             nav2_params,
             {
                 "use_sim_time": use_sim_time,
-                "autostart": autostart,
                 "node_names": lifecycle_nodes,
             },
         ],
     )
 
-    # 7. Nav2 TF-Gated Startup Node (automatically manages startup when autostart is false)
+    # 6. Nav2 TF-Gated Startup Node (automatically manages startup when autostart is false)
     nav2_startup_gate_node = Node(
         package="lekiwi_motion",
         executable="nav2_startup_gate_node",
@@ -133,19 +146,14 @@ def generate_launch_description():
                 "lifecycle_service": "/lifecycle_manager_navigation/manage_nodes",
             }
         ],
-        condition=UnlessCondition(LaunchConfiguration("autostart")),
     )
 
+    # 7. Assemble LaunchDescription
     return LaunchDescription(
         [
             declare_map_yaml,
             declare_use_sim_time,
-            declare_autostart,
-            map_server_node,
-            planner_server_node,
-            controller_server_node,
-            behavior_server_node,
-            bt_navigator_node,
+            nav2_container,
             lifecycle_manager_node,
             nav2_startup_gate_node,
         ]

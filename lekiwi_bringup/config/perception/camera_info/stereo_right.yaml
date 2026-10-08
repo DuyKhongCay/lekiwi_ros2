@@ -1,3 +1,6 @@
+# Camera Calibration (CameraInfo) for stereo_right (CSI1 IMX219)
+# Distro: ROS 2 Jazzy | Resolution: 1640x1232
+
 image_width: 1640
 image_height: 1232
 camera_name: stereo_right

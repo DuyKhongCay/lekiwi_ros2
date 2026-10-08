@@ -1,4 +1,9 @@
 <?xml version="1.0"?>
+<!--
+  LeKiwi Sensor Calibration Transforms
+  Loads extrinsic calibration parameters from YAML or falls back to nominal
+  calibrated default offsets to attach stereo optical frames to base_footprint.
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
   <!-- Macro to apply hand-eye extrinsics calibration from YAML or calibrated defaults -->
   <xacro:macro name="stereo_camera_calibration" params="calib_file:=''">

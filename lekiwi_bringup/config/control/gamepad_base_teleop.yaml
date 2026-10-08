@@ -7,6 +7,7 @@
 # Button 4: LB (Turbo modifier)
 # Button 5: RB (Deadman switch)
 # Button 6: Back / Select (Emergency Stop)
+# Button 7: Start (Save Observation Calibration to YAML)
 
 joy_linux_node:
   ros__parameters:
@@ -91,3 +92,11 @@ joy_teleop:
       interface_type: std_srvs/srv/Empty
       service_name: /ekf_filter_node_map/reset
       buttons: [1]
+
+    # 8. Button Start (Index 7): Save Observation Calibration to YAML (Call /manual_obs_calibrator/save_to_yaml)
+    lekiwi_save_obs_calib:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+      service_name: /manual_obs_calibrator/save_to_yaml
+      buttons: [7]
+

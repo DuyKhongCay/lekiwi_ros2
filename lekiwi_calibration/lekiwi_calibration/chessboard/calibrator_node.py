@@ -226,7 +226,14 @@ class ChessboardTagCalibratorNode(Node):
             )
 
     def _tag_dets_cb(self, msg: AprilTagDetectionArray) -> None:
-        """Callback to parse incoming AprilTag 2D detections and trigger auto-cap."""
+        """Parse incoming AprilTag 2D detections and manage automatic capture scheduling.
+
+        Extracts tag corner pixel coordinates, updates shared detection state under lock,
+        and triggers periodic auto-capture when sufficient target tags are visible.
+
+        Args:
+            msg: AprilTagDetectionArray message from perception detector.
+        """
         tag_map = {
             det.id: np.array([[pt.x, pt.y] for pt in det.corners], dtype=np.float64)
             for det in msg.detections
@@ -259,7 +266,14 @@ class ChessboardTagCalibratorNode(Node):
             self.capture_current_frame()
 
     def capture_current_frame(self) -> bool:
-        """Captures valid chessboard tag detections from the current frame."""
+        """Capture valid chessboard tag detections from the current camera frame.
+
+        Enforces min_tags_cnt constraint, snapshots raw image, and dumps frame artifacts
+        if dataset recording is enabled.
+
+        Returns:
+            True if frame met minimum tag criteria and was appended to buffer, False otherwise.
+        """
         curr_raw = None
         with self._data_lock:
             valid = {
@@ -298,7 +312,13 @@ class ChessboardTagCalibratorNode(Node):
         detections: Dict[int, np.ndarray],
         raw_bgr: Optional[np.ndarray],
     ) -> None:
-        """Saves raw image, rendered overlay image, and tag detections JSON."""
+        """Serialize captured raw image, annotated overlay image, and detections JSON to disk.
+
+        Args:
+            frame_idx: 1-indexed sequential frame identification number.
+            detections: Dictionary mapping tag IDs to (4, 2) corner pixel coordinates.
+            raw_bgr: Raw input BGR image array corresponding to the detection instant.
+        """
         prefix = f"frame_{frame_idx:03d}"
 
         # 1. Save detections JSON
@@ -391,7 +411,7 @@ class ChessboardTagCalibratorNode(Node):
         return None
 
     def run_calibration_async(self) -> None:
-        """Spawns non-blocking worker thread to run Bundle Adjustment solver."""
+        """Spawn a non-blocking background worker thread to run Bundle Adjustment optimization."""
         err_msg: Optional[Tuple[str, bool]] = None
         frames_snapshot = None
         cam_mat_snapshot = None
@@ -445,7 +465,17 @@ class ChessboardTagCalibratorNode(Node):
         dist_coeffs: np.ndarray,
         epoch: int,
     ) -> None:
-        """Worker thread executing Bundle Adjustment without blocking ROS or GUI."""
+        """Execute non-linear Bundle Adjustment in background daemon thread.
+
+        Args:
+            frames: Captured tag detection dictionaries snapshot.
+            cam_mat: Intrinsic camera calibration matrix snapshot (3x3).
+            dist_coeffs: Lens distortion coefficients snapshot.
+            epoch: Identification epoch number guarding against race conditions from reset calls.
+
+        Thread-safety:
+            Runs outside ROS executor thread; locks `_data_lock` when writing results or state.
+        """
         try:
             res = self.solver.solve(frames, cam_mat, dist_coeffs)
             with self._data_lock:
@@ -473,7 +503,7 @@ class ChessboardTagCalibratorNode(Node):
             )
 
     def save_calibration(self) -> None:
-        """Saves active calibration parameters to the target YAML file."""
+        """Serialize active solved calibration results to YAML output file."""
         with self._data_lock:
             res_snapshot = self.calib_res
 
@@ -522,7 +552,7 @@ class ChessboardTagCalibratorNode(Node):
         self._handle_key_event(key)
 
     def _reset_captured_samples(self) -> None:
-        """Resets all captured frames and calibration state."""
+        """Reset all captured frames and calibration state."""
         with self._data_lock:
             self.captured_frames.clear()
             self.calib_res = None
@@ -533,7 +563,7 @@ class ChessboardTagCalibratorNode(Node):
         self.get_logger().info("Reset all captured frames.")
 
     def _toggle_auto_capture(self) -> None:
-        """Toggles periodic auto-capture mode."""
+        """Toggle periodic automatic frame capture mode."""
         with self._data_lock:
             self.auto_cap_enabled = not self.auto_cap_enabled
             enabled = self.auto_cap_enabled
@@ -544,7 +574,7 @@ class ChessboardTagCalibratorNode(Node):
         self.get_logger().info(f"Auto-capture toggled: {enabled}")
 
     def _handle_key_event(self, key: int) -> None:
-        """Dispatches actions corresponding to keyboard inputs in visualizer."""
+        """Dispatch calibration actions corresponding to interactive keyboard keycodes."""
         if key == 32:  # SPACE
             self.capture_current_frame()
         elif key in (ord("c"), ord("C")):

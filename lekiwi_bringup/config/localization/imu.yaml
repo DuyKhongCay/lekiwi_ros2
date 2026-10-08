@@ -1,0 +1,37 @@
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
+
+# Configuration for IMU Pre-processing & State Estimation Pipeline
+# Subsystems: imu_filter_madgwick, imu_transformer, and magnetometer calibration
+
+/**:
+  ros__parameters:
+    use_sim_time: false
+
+imu_filter:
+  ros__parameters:
+    stateless: false
+    use_mag: false               # Enabled: 9-DoF mode (Gyro + Accel + Magnetometer) for drift-free orientation in odom frame
+    publish_tf: false          # Do not publish TF directly from filter; handled by robot_state_publisher & EKF
+    reverse_tf: false
+    fixed_frame: "odom"
+    constant_dt: 0.0            # 0.0 = calculate dt dynamically from message header timestamps
+    publish_debug_topics: false
+    world_frame: "enu"          # REP-103 standard: East-North-Up
+    gain: 0.1                   # Filter gain (beta) for attitude and heading correction
+    zeta: 0.0                   # 0.0 because static gyro bias is auto-calibrated at hardware layer on startup
+    mag_bias_x: 0.0
+    mag_bias_y: 0.0
+    mag_bias_z: 0.0
+    orientation_stddev: 0.01
+
+imu_transformer:
+  ros__parameters:
+    target_frame: "base_footprint"  # Transform IMU kinematic tensor to robot base frame
+
+mag_bias_observer:
+  ros__parameters:
+    magnetometer_bias_x: -1.7474999999999998e-05
+    magnetometer_bias_y: 5.6249999999999995e-06
+    magnetometer_bias_z: 2.9625e-05
+

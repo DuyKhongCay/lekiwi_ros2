@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from geometry_msgs.msg import PoseStamped
+from lekiwi_interfaces.action import ExecuteChessMove
 from lekiwi_interfaces.msg import PerceptionContext
 from lekiwi_interfaces.srv import CheckMoveFeasibility
 from rclpy.callback_groups import CallbackGroup
@@ -74,7 +75,6 @@ class MoveSequencer:
         self._motion_state = MotionExecutionState.IDLE
         self._stages: list[MoveStep] = []
         self._current_stage: MoveStep | None = None
-        self._feasibility_resp: CheckMoveFeasibility.Response | None = None
         self._last_nav_pose: PoseStamped | None = None
 
         # Self-healing & grasp readiness parameters
@@ -129,13 +129,23 @@ class MoveSequencer:
     def start_pipeline(
         self,
         stages: list[MoveStep],
-        feasibility_resp: CheckMoveFeasibility.Response,
+        feasibility_resp: CheckMoveFeasibility.Response | None = None,
     ) -> None:
-        """Begin execution of a newly built list of MoveSteps."""
+        """Begin execution of a newly built sequential move pipeline.
+
+        Resets cancellation flags and recovery counters before triggering the first atomic stage.
+
+        Args:
+            stages: Ordered list of MoveStep primitives (approach, clear, pick, place, verify).
+            feasibility_resp: Optional kinematic response (kept for caller signature compatibility).
+
+        Thread-safety:
+            Pipeline initialization is synchronized using `_lock`. Stage execution is advanced
+            asynchronously across action client callback threads.
+        """
         self._cancel_event.clear()
         with self._lock:
             self._stages = list(stages)
-            self._feasibility_resp = feasibility_resp
             self._current_stage = None
             self._last_nav_pose = None
             self._reset_recovery_state()
@@ -155,7 +165,6 @@ class MoveSequencer:
         with self._lock:
             if not self._stages:
                 self._current_stage = None
-                self._feasibility_resp = None
                 self.transition_motion_to(MotionExecutionState.IDLE)
                 completed_cb = self._on_pipeline_completed
             else:
@@ -170,10 +179,16 @@ class MoveSequencer:
         if stage.target_pose is not None:
             self._execute_nav_stage(stage)
         else:
-            if not self._wait_for_grasp_readiness(self._pre_grasp_settle_sec):
-                if not self._cancel_event.is_set():
-                    self._handle_grasp_unready(stage)
-                return
+            if getattr(stage, "requires_pre_grasp_gate", True):
+                if not self._wait_for_grasp_readiness(self._pre_grasp_settle_sec):
+                    if not self._cancel_event.is_set():
+                        self._handle_grasp_unready(stage)
+                    return
+            else:
+                self._node.get_logger().info(
+                    f"Stage '{stage.name}' is an in-place continuation. "
+                    "Bypassing pre-grasp readiness check."
+                )
             if not self._cancel_event.is_set():
                 self._execute_manip_stage(stage)
 
@@ -416,6 +431,18 @@ class MoveSequencer:
         if not self._cancel_event.is_set():
             self._execute_manip_stage(stage)
 
+    def _build_manipulation_goal(self, stage: MoveStep) -> ExecuteChessMove.Goal:
+        """Build ExecuteChessMove.Goal message from a MoveStep domain object."""
+        goal = ExecuteChessMove.Goal()
+        goal.instruction = stage.instruction
+        goal.from_square = stage.from_square
+        goal.to_square = stage.to_square
+        goal.is_capture = stage.is_capture
+        goal.pick_point = stage.pick_point
+        goal.place_point = stage.place_point
+        goal.target_frame = self._board_frame
+        return goal
+
     def _execute_manip_stage(self, stage: MoveStep) -> None:
         if self._cancel_event.is_set():
             return
@@ -423,9 +450,7 @@ class MoveSequencer:
         self.transition_motion_to(stage.motion_state)
         self._perception.set_context(PerceptionContext.MANIPULATION_ACTOR)
 
-        with self._lock:
-            f_resp = self._feasibility_resp
-        goal = stage.to_ros_goal(self._board_frame, f_resp)
+        goal = self._build_manipulation_goal(stage)
 
         self._node.get_logger().info(
             f"Sending ExecuteChessMove goal: '{goal.instruction}' (capture={goal.is_capture})..."
@@ -469,7 +494,6 @@ class MoveSequencer:
         with self._lock:
             self._stages.clear()
             self._current_stage = None
-            self._feasibility_resp = None
             self.transition_motion_to(MotionExecutionState.IDLE)
         if self._on_pipeline_failed:
             self._on_pipeline_failed(error_msg)
@@ -481,7 +505,6 @@ class MoveSequencer:
         with self._lock:
             self._stages.clear()
             self._current_stage = None
-            self._feasibility_resp = None
             self._last_nav_pose = None
             self._reset_recovery_state()
             self.transition_motion_to(MotionExecutionState.IDLE)

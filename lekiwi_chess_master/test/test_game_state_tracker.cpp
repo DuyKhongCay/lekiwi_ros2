@@ -1,6 +1,10 @@
 /**
  * @file test_game_state_tracker.cpp
- * @brief Unit tests for ChessGameStateTrackerComponent.
+ * @brief Unit tests for ChessGameStateTrackerComponent and BoardDisplayContext.
+ *
+ * Validates board state tracking, FEN string ingress validation, legal/illegal move
+ * transitions, game reset service behavior, ROS 2 parameter bindings, and visualizer
+ * display context transformation.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -14,20 +18,30 @@
 
 using namespace lekiwi_chess_master;
 
+/**
+ * @brief GoogleTest fixture managing ROS 2 context lifecycle for tracker component tests.
+ */
 class ChessGameStateTrackerTestFixture : public ::testing::Test
 {
 protected:
+  /**
+   * @brief Initializes global ROS 2 context before executing each test case.
+   */
   void SetUp() override
   {
     rclcpp::init(0, nullptr);
   }
 
+  /**
+   * @brief Shuts down global ROS 2 context after each test case completes.
+   */
   void TearDown() override
   {
     rclcpp::shutdown();
   }
 };
 
+// Verifies newly initialized tracker starts with standard FIDE starting FEN
 TEST_F(ChessGameStateTrackerTestFixture, InitialStateStartingPlacement)
 {
   rclcpp::NodeOptions options;
@@ -37,6 +51,7 @@ TEST_F(ChessGameStateTrackerTestFixture, InitialStateStartingPlacement)
   EXPECT_EQ(node->get_board().getFen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 }
 
+// Verifies explicit reset_game restores standard starting position and turn indicator
 TEST_F(ChessGameStateTrackerTestFixture, ResetBoardGame)
 {
   rclcpp::NodeOptions options;
@@ -46,6 +61,7 @@ TEST_F(ChessGameStateTrackerTestFixture, ResetBoardGame)
   EXPECT_EQ(node->get_board().getFen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 }
 
+// Verifies incoming perception raw FEN matching a legal move updates internal board state
 TEST_F(ChessGameStateTrackerTestFixture, LegalMoveProcessing)
 {
   rclcpp::NodeOptions options;
@@ -63,6 +79,7 @@ TEST_F(ChessGameStateTrackerTestFixture, LegalMoveProcessing)
   EXPECT_EQ(node->get_board().getFen(), "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
 }
 
+// Verifies incoming perception raw FEN representing an illegal transition is rejected without mutating state
 TEST_F(ChessGameStateTrackerTestFixture, RejectIllegalMove)
 {
   rclcpp::NodeOptions options;
@@ -81,6 +98,7 @@ TEST_F(ChessGameStateTrackerTestFixture, RejectIllegalMove)
   EXPECT_EQ(node->get_board().getFen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 }
 
+// Verifies corrupted/malformed FEN strings are safely discarded without throwing or crashing
 TEST_F(ChessGameStateTrackerTestFixture, RejectCorruptedPlacement)
 {
   rclcpp::NodeOptions options;
@@ -99,6 +117,7 @@ TEST_F(ChessGameStateTrackerTestFixture, RejectCorruptedPlacement)
   EXPECT_EQ(node->get_board().getFen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 }
 
+// Verifies dynamic ROS 2 parameter declarations and overrides for engine automation
 TEST_F(ChessGameStateTrackerTestFixture, AutoTriggerParameters)
 {
   // Test default parameter values
@@ -124,6 +143,7 @@ TEST_F(ChessGameStateTrackerTestFixture, AutoTriggerParameters)
   }
 }
 
+// Verifies default game status phase and engine recommendation fields upon initial node creation
 TEST_F(ChessGameStateTrackerTestFixture, InitialGameStatusProperties)
 {
   rclcpp::NodeOptions options;
@@ -133,6 +153,7 @@ TEST_F(ChessGameStateTrackerTestFixture, InitialGameStatusProperties)
   EXPECT_TRUE(node->get_best_move().empty());
 }
 
+// Verifies default struct field initialization in BoardDisplayContext
 TEST(BoardDisplayContextTest, DefaultInitialization)
 {
   BoardDisplayContext ctx;
@@ -147,6 +168,7 @@ TEST(BoardDisplayContextTest, DefaultInitialization)
   EXPECT_FALSE(ctx.is_raw_view);
 }
 
+// Verifies factory helper correctly converts ChessGameStatus ROS message into BoardDisplayContext
 TEST(BoardDisplayContextTest, FromGameStatusFactory)
 {
   lekiwi_interfaces::msg::ChessGameStatus status;
@@ -170,3 +192,4 @@ TEST(BoardDisplayContextTest, FromGameStatusFactory)
   EXPECT_FALSE(ctx.is_draw);
   EXPECT_FALSE(ctx.is_raw_view);
 }
+

@@ -2,6 +2,9 @@
  * @file chessboard_2d_visualizer.cpp
  * @brief Implementation of Chessboard2DVisualizer 2D panel renderer.
  *
+ * Implements pixel geometric layout calculations, sprite cache management,
+ * transparent alpha blending, vector move arrows, and JPEG compression for ROS 2.
+ *
  * @author DuyKhongCay
  * @copyright Apache-2.0
  */
@@ -24,6 +27,7 @@ namespace lekiwi_chess_master
 
   namespace
   {
+    // Mapping from FEN piece characters to asset PNG filenames
     const std::map<std::string, std::string> kPiecePngNames = {
         {"P", "w-pawn.png"}, {"N", "w-knight.png"}, {"B", "w-bishop.png"}, {"R", "w-rook.png"}, {"Q", "w-queen.png"}, {"K", "w-king.png"}, {"p", "b-pawn.png"}, {"n", "b-knight.png"}, {"b", "b-bishop.png"}, {"r", "b-rook.png"}, {"q", "b-queen.png"}, {"k", "b-king.png"}};
   }
@@ -31,6 +35,7 @@ namespace lekiwi_chess_master
   Chessboard2DVisualizer::Chessboard2DVisualizer(const rclcpp::NodeOptions &options)
       : Node("chessboard_2d_visualizer", options)
   {
+    // Declare and initialize rendering parameters
     game_status_topic_ = declare_parameter<std::string>("game_status_topic", "/chess/game_status");
     raw_fen_topic_ = declare_parameter<std::string>("raw_fen_topic", "/chess/raw_fen");
     board_2d_topic_ = declare_parameter<std::string>("board_2d_topic", "/chess/board_2d/compressed");
@@ -39,6 +44,7 @@ namespace lekiwi_chess_master
     debug_ = declare_parameter<bool>("debug", false);
     render_rate_hz_ = declare_parameter<double>("render_rate_hz", 5.0);
 
+    // Locate package share directory hosting piece sprite PNG assets
     try
     {
       std::string share_dir = ament_index_cpp::get_package_share_directory("lekiwi_chess_master");
@@ -53,6 +59,7 @@ namespace lekiwi_chess_master
                 "Starting Chessboard2DVisualizer (Status: %s, RawFEN: %s, 2D Topic: %s, Rate: %.1f Hz)",
                 game_status_topic_.c_str(), raw_fen_topic_.c_str(), board_2d_topic_.c_str(), render_rate_hz_);
 
+    // Output publisher emits compressed images with SensorDataQoS
     board_2d_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
         board_2d_topic_, rclcpp::SensorDataQoS());
 
@@ -64,6 +71,7 @@ namespace lekiwi_chess_master
         raw_fen_topic_, rclcpp::SensorDataQoS(),
         std::bind(&Chessboard2DVisualizer::rawFenCallback, this, std::placeholders::_1));
 
+    // Optional wall timer regulating maximum rendering rate when state changes occur
     if (render_rate_hz_ > 0.0)
     {
       auto period = std::chrono::duration<double>(1.0 / render_rate_hz_);
@@ -133,15 +141,18 @@ namespace lekiwi_chess_master
     BoardLayout layout;
     layout.panel_w = width;
     layout.panel_h = height;
+    // Allocate proportional vertical header and footer margins clamped between 30 and 50 px
     layout.header_h = std::clamp(static_cast<int>(height * 0.08), 30, 50);
     layout.footer_h = std::clamp(static_cast<int>(height * 0.08), 30, 50);
 
+    // Maximize 8x8 board size within remaining available canvas area
     int board_avail_h = height - layout.header_h - layout.footer_h;
     int board_avail_w = width - 40;
     int board_box = std::min(board_avail_h, board_avail_w);
     layout.cell_size = std::max(board_box / 8, 10);
     layout.board_size = layout.cell_size * 8;
 
+    // Center board horizontally and vertically between header and footer
     layout.start_x = (width - layout.board_size) / 2;
     layout.start_y = layout.header_h + (board_avail_h - layout.board_size) / 2;
     return layout;
@@ -153,7 +164,7 @@ namespace lekiwi_chess_master
     board.fill('\0');
     std::stringstream ss(fen);
     std::string placement;
-    ss >> placement;
+    ss >> placement; // Extract piece placement token preceding whitespace
 
     int r = 0;
     int c = 0;
@@ -161,15 +172,17 @@ namespace lekiwi_chess_master
     {
       if (ch == '/')
       {
-        r++;
+        r++; // Advance to next board rank
         c = 0;
       }
       else if (std::isdigit(static_cast<unsigned char>(ch)))
       {
+        // Consecutive empty square count
         c += (ch - '0');
       }
       else if (c < 8 && r < 8)
       {
+        // Store piece character in row-major index
         board[r * 8 + c] = ch;
         c++;
       }
@@ -186,12 +199,13 @@ namespace lekiwi_chess_master
     }
     char fc = static_cast<char>(std::tolower(static_cast<unsigned char>(sq[0])));
     char rc = sq[1];
+    // Validate algebraic square boundary constraints
     if (fc < 'a' || fc > 'h' || rc < '1' || rc > '8')
     {
       return false;
     }
     int c = fc - 'a';
-    int r = 8 - (rc - '0');
+    int r = 8 - (rc - '0'); // Rank 8 maps to row index 0
     out_center.x = layout.start_x + c * layout.cell_size + layout.cell_size / 2;
     out_center.y = layout.start_y + r * layout.cell_size + layout.cell_size / 2;
     return true;
@@ -207,6 +221,7 @@ namespace lekiwi_chess_master
     }
     int x = center.x - layout.cell_size / 2;
     int y = center.y - layout.cell_size / 2;
+    // Ensure square ROI falls strictly within image canvas boundary
     if (x >= 0 && y >= 0 && x + layout.cell_size <= panel.cols && y + layout.cell_size <= panel.rows)
     {
       cv::Mat roi = panel(cv::Rect(x, y, layout.cell_size, layout.cell_size));
@@ -224,6 +239,7 @@ namespace lekiwi_chess_master
     }
     int sw = sprite.cols;
     int sh = sprite.rows;
+    // Guard against out-of-bounds sprite placement
     if (ox < 0 || oy < 0 || ox + sw > dst.cols || oy + sh > dst.rows)
     {
       return;
@@ -239,10 +255,12 @@ namespace lekiwi_chess_master
         uchar alpha = s_ptr[x][3];
         if (alpha == 255)
         {
+          // Fully opaque sprite pixel
           d_ptr[x] = cv::Vec3b(s_ptr[x][0], s_ptr[x][1], s_ptr[x][2]);
         }
         else if (alpha > 0)
         {
+          // Blend partially translucent pixel channels
           d_ptr[x][0] = (s_ptr[x][0] * alpha + d_ptr[x][0] * (255 - alpha)) / 255;
           d_ptr[x][1] = (s_ptr[x][1] * alpha + d_ptr[x][1] * (255 - alpha)) / 255;
           d_ptr[x][2] = (s_ptr[x][2] * alpha + d_ptr[x][2] * (255 - alpha)) / 255;
@@ -265,6 +283,7 @@ namespace lekiwi_chess_master
       return;
     }
 
+    // Compute normalized direction vector between square center points
     cv::Point2f dir(static_cast<float>(p_to.x - p_from.x), static_cast<float>(p_to.y - p_from.y));
     float len = std::hypot(dir.x, dir.y);
     if (len <= 1.0f)
@@ -273,6 +292,7 @@ namespace lekiwi_chess_master
     }
 
     cv::Point2f norm_dir(dir.x / len, dir.y / len);
+    // Inset start and end points slightly so arrow heads do not fully overlap piece icons
     float offset_start = static_cast<float>(layout.cell_size) * 0.15f;
     float offset_end = static_cast<float>(layout.cell_size) * 0.20f;
 
@@ -285,17 +305,18 @@ namespace lekiwi_chess_master
 
     int thickness = std::max(3, static_cast<int>(layout.cell_size * 0.08));
 
-    // Shadow
+    // Render underlying dark drop-shadow for visual contrast across light and dark tiles
     cv::arrowedLine(panel, pt_start, pt_end, cv::Scalar(15, 15, 15), thickness + 2, cv::LINE_AA, 0, 0.30);
     cv::circle(panel, pt_start, thickness + 2, cv::Scalar(15, 15, 15), -1, cv::LINE_AA);
 
-    // Colored Arrow
+    // Render primary colored arrow and origin dot
     cv::arrowedLine(panel, pt_start, pt_end, color, thickness, cv::LINE_AA, 0, 0.30);
     cv::circle(panel, pt_start, thickness, color, -1, cv::LINE_AA);
   }
 
   void Chessboard2DVisualizer::loadPieceSprites(int cell_size, const std::string &pieces_dir)
   {
+    // Clear and rebuild scaled sprite cache on board dimension resize
     sprite_cache_.clear();
     cached_cell_size_ = cell_size;
     int icon_size = std::max(static_cast<int>(cell_size * 0.84), 8);
@@ -321,6 +342,7 @@ namespace lekiwi_chess_master
     const cv::Scalar light_tile(240, 217, 181); // #F0D9B5 (BGR)
     const cv::Scalar dark_tile(181, 136, 99);   // #B58863 (BGR)
 
+    // Render alternating light and dark checkered board matrix
     for (int r = 0; r < 8; ++r)
     {
       for (int c = 0; c < 8; ++c)
@@ -418,7 +440,7 @@ namespace lekiwi_chess_master
   void Chessboard2DVisualizer::drawHeaderAndFooter(
       cv::Mat &panel, const BoardDisplayContext &ctx, int piece_count, const BoardLayout &layout) const
   {
-    // Header status
+    // Derive UI banner text and accent highlight color from active game phase
     std::string phase_str = "IDLE";
     cv::Scalar header_color(255, 220, 0);
 
@@ -447,21 +469,22 @@ namespace lekiwi_chess_master
         break;
       case ChessGameStatus::PHASE_ROBOT_READY:
         phase_str = "ROBOT READY";
-        header_color = cv::Scalar(80, 220, 80);
+        header_color = cv::Scalar(80, 220, 80); // Green
         break;
       case ChessGameStatus::PHASE_ROBOT_EXECUTING:
         phase_str = "ROBOT MOVING";
-        header_color = cv::Scalar(0, 200, 255);
+        header_color = cv::Scalar(0, 200, 255); // Yellow
         break;
       case ChessGameStatus::PHASE_WAITING_PLAYER:
         phase_str = "PLAYER TURN";
-        header_color = cv::Scalar(240, 240, 240);
+        header_color = cv::Scalar(240, 240, 240); // White
         break;
       default:
         break;
       }
     }
 
+    // Assemble header telemetry string including move annotations and piece counts
     std::string header_text = (ctx.is_raw_view ? "[RAW VISION] " : "") +
                               phase_str + " (" + std::to_string(piece_count) + " pcs)";
     if (!ctx.last_move.empty())
@@ -476,7 +499,7 @@ namespace lekiwi_chess_master
     cv::putText(panel, header_text, cv::Point(20, static_cast<int>(layout.header_h * 0.65)),
                 cv::FONT_HERSHEY_SIMPLEX, 0.50, header_color, 1, cv::LINE_AA);
 
-    // Footer FEN
+    // Render footer banner containing standard 6-field FEN representation with truncation
     std::string fen_display = ctx.fen.length() <= 52 ? ctx.fen : ctx.fen.substr(0, 49) + "...";
     cv::putText(panel, "FEN: " + fen_display,
                 cv::Point(20, layout.panel_h - static_cast<int>(layout.footer_h * 0.35)),
@@ -486,14 +509,17 @@ namespace lekiwi_chess_master
   void Chessboard2DVisualizer::render2DBoardPanel(
       cv::Mat &panel, const BoardDisplayContext &ctx)
   {
+    // Compute pixel geometry and initialize dark background canvas
     BoardLayout layout = calculateLayout(board_panel_size_, board_panel_size_);
     panel = cv::Mat(layout.panel_h, layout.panel_w, CV_8UC3, cv::Scalar(26, 30, 35));
 
+    // Ensure sprite cache is loaded with matching pixel dimensions
     if (cached_cell_size_ != layout.cell_size || sprite_cache_.empty())
     {
       loadPieceSprites(layout.cell_size, pieces_dir_);
     }
 
+    // Compose visual layers in z-order: tiles -> highlights -> sprites -> arrows -> text
     drawBoardTiles(panel, layout);
     drawMoveHighlights(panel, ctx.last_move, ctx.best_move, layout);
 
@@ -524,13 +550,16 @@ namespace lekiwi_chess_master
   {
     BoardDisplayContext ctx;
     {
+      // Extract snapshot under lock to minimize critical section latency
       std::lock_guard<std::mutex> lock(state_mutex_);
       ctx = buildDisplayContext();
     }
 
+    // Render full graphic canvas outside lock
     cv::Mat panel;
     render2DBoardPanel(panel, ctx);
 
+    // Compress BGR matrix into JPEG byte buffer using configured compression factor
     std::vector<uchar> buf;
     const std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
     if (cv::imencode(".jpg", panel, buf, encode_params))

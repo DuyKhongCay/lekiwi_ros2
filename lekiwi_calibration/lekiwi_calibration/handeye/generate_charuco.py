@@ -22,7 +22,14 @@ DICT_MAP = {
 }
 
 
-def create_charuco_board(squares_x, squares_y, square_len_m, marker_len_m, dict_type):
+def create_charuco_board(
+    squares_x: int,
+    squares_y: int,
+    square_len_m: float,
+    marker_len_m: float,
+    dict_type: int,
+):
+    """Instantiate OpenCV CharucoBoard across version APIs."""
     aruco_dict = aruco.getPredefinedDictionary(dict_type)
     if hasattr(aruco, "CharucoBoard_create"):
         board = aruco.CharucoBoard_create(
@@ -35,13 +42,19 @@ def create_charuco_board(squares_x, squares_y, square_len_m, marker_len_m, dict_
     return aruco_dict, board
 
 
-def draw_charuco_image(board, width_px, height_px):
+def draw_charuco_image(board, width_px: int, height_px: int):
+    """Render raster image of CharucoBoard at given pixel resolution."""
     if hasattr(board, "draw"):
         return board.draw((width_px, height_px), 0, 1)
     return board.generateImage((width_px, height_px), marginSize=0, borderBits=1)
 
 
-def generate_single_board(args):
+def generate_single_board(args: argparse.Namespace) -> None:
+    """Generate high-resolution printable PNG and PDF for a single ChArUco calibration board.
+
+    Args:
+        args: Parsed CLI namespace containing board dimensions, margins, and DPI resolution.
+    """
     dpi = args.dpi
     mm2px = dpi / 25.4
     dict_type = DICT_MAP.get(args.dict, aruco.DICT_4X4_50)
@@ -103,7 +116,12 @@ def generate_single_board(args):
     print(f"   - PDF: {out_pdf}")
 
 
-def generate_multi_board(args):
+def generate_multi_board(args: argparse.Namespace) -> None:
+    """Generate multi-board test sheet with varying grid sizes and print labels.
+
+    Args:
+        args: Parsed CLI namespace containing paper size, DPI resolution, and target path.
+    """
     dpi = args.dpi
     mm2px = dpi / 25.4
     dict_type = DICT_MAP.get(args.dict, aruco.DICT_4X4_50)
@@ -177,7 +195,8 @@ def generate_multi_board(args):
     print(f"   - PDF: {out_pdf}")
 
 
-def main():
+def main() -> None:
+    """Parse CLI arguments and dispatch ChArUco board sheet generator."""
     parser = argparse.ArgumentParser(description="ChArUco Board Generator for Hand-Eye Calibration")
     parser.add_argument(
         "--mode", choices=["single", "multi"], default="single", help="Generation mode: single board or multi A4 sheet"

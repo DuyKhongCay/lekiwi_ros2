@@ -1,29 +1,27 @@
-# ================= Request =================
-# Micro Move Entity from lekiwi_chess_master
-lekiwi_interfaces/ChessMoveDetails move
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
 
+lekiwi_interfaces/ChessMoveDetails move  # Target chess move entity
 ---
-# ================= Response =================
-# Kiểu kế hoạch thực thi cho Task Orchestrator
-uint8 PLAN_ZERO_NAV            = 0   # 0 Nav2: Robot đứng yên, tay gắp đặt luôn (Quiet move)
-uint8 PLAN_SINGLE_BASE         = 1   # 1 Nav2: Di chuyển tới vị trí chung (Quiet move)
-uint8 PLAN_DUAL_BASE           = 2   # 2 Nav2: B_pick -> Pick -> B_place -> Place (Quiet move)
-uint8 PLAN_CAPTURE_ZERO_NAV    = 3   # 0 Nav2: Clear -> Pick -> Place
-uint8 PLAN_CAPTURE_SINGLE_BASE = 4   # 1 Nav2: Tới vị trí chung -> Clear -> Pick -> Place
-uint8 PLAN_CAPTURE_DUAL_BASE   = 5   # 2 Nav2: (Vd Clear tại chỗ, hoặc B_clear/B_pick chung vị trí)
-uint8 PLAN_CAPTURE_TRIPLE_BASE = 6   # 3 Nav2: B_clear -> Clear -> B_pick -> Pick -> B_place -> Place
+# Navigation & manipulation plan strategies
+uint8 PLAN_ZERO_NAV            = 0  # 0 Nav2: Stationary pick & place (Quiet move)
+uint8 PLAN_SINGLE_BASE         = 1  # 1 Nav2: Move to shared base pose -> Pick & Place
+uint8 PLAN_DUAL_BASE           = 2  # 2 Nav2: B_pick -> Pick -> B_place -> Place
+uint8 PLAN_CAPTURE_ZERO_NAV    = 3  # 0 Nav2: Clear -> Pick -> Place
+uint8 PLAN_CAPTURE_SINGLE_BASE = 4  # 1 Nav2: Move to shared pose -> Clear -> Pick -> Place
+uint8 PLAN_CAPTURE_DUAL_BASE   = 5  # 2 Nav2: Two intermediate base poses for capture
+uint8 PLAN_CAPTURE_TRIPLE_BASE = 6  # 3 Nav2: B_clear -> Clear -> B_pick -> Pick -> B_place -> Place
 
-uint8 plan_type
-bool feasible
+uint8 plan_type                     # Selected strategy (PLAN_*)
+bool feasible                       # True if inverse kinematics & path exist
 
-# Pose đế robot cần di chuyển tới (map frame)
-geometry_msgs/PoseStamped clear_base_pose
-geometry_msgs/PoseStamped pick_base_pose
-geometry_msgs/PoseStamped place_base_pose
+# Mobile base target poses in map frame
+geometry_msgs/PoseStamped clear_base_pose  # Base pose to clear captured piece
+geometry_msgs/PoseStamped pick_base_pose   # Base pose to pick moving piece
+geometry_msgs/PoseStamped place_base_pose  # Base pose to place moving piece
+# 3D grasp/place coordinates in chessboard_frame [m]
+geometry_msgs/Point clear_point            # Grasp point for captured piece
+geometry_msgs/Point pick_point             # Grasp point for moving piece
+geometry_msgs/Point place_point            # Release point for moving piece
 
-# Tọa độ 3D trong target_frame (chessboard_frame)
-geometry_msgs/Point clear_point
-geometry_msgs/Point pick_point
-geometry_msgs/Point place_point
-
-string message
+string message                             # Feasibility assessment details

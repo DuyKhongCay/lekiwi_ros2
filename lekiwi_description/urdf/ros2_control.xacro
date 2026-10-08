@@ -1,6 +1,11 @@
 <?xml version="1.0"?>
+<!--
+  LeKiwi ros2_control Hardware Interface Macros
+  Configures transmission metadata, joint command/state interfaces for STS3215 servos
+  (arm position control, base wheel velocity control), and ICM20948 IMU sensor interfaces.
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <!-- Adds standard transmission metadata when a downstream consumer requires it. -->
+  <!-- Adds standard transmission metadata when a downstream simulator requires it. -->
   <xacro:macro name="simple_transmission" params="joint_name">
     <transmission name="${joint_name}_transmission">
       <type>transmission_interface/SimpleTransmission</type>
@@ -13,25 +18,78 @@
     </transmission>
   </xacro:macro>
 
-  <!-- Declares interfaces once so real and mock hardware expose the same contract. -->
-  <xacro:macro name="lekiwi_control_joint" params="joint_name servo_id command_interface acceleration:='50' velocity_scale:='' velocity_direction:='1' max_velocity:='5.0'">
+  <!-- SO-ARM100 STS3215 Servo Control Profile Constants (Position Mode) -->
+  <xacro:property name="arm_p_coefficient" value="16"/>
+  <xacro:property name="arm_i_coefficient" value="0"/>
+  <xacro:property name="arm_d_coefficient" value="32"/>
+  <xacro:property name="arm_return_delay_time" value="0"/>
+
+  <!-- 3-Wheel Omnidirectional Base Dynamics & Kinematics Constants (Velocity Mode) -->
+  <xacro:property name="wheel_velocity_scale" value="0.0015339807878856412"/>
+  <xacro:property name="wheel_velocity_direction" value="-1"/>
+  <xacro:property name="wheel_max_velocity" value="5.0"/>
+
+  <!-- Declares joint command/state interfaces and limits from calibration data matching the hardware contract. -->
+  <xacro:macro name="lekiwi_control_joint" params="joint_name cfg command_interface acceleration:=''">
+    <!-- Use override acceleration if provided (e.g. from arm_control_mode), otherwise default to 50 -->
+    <xacro:property name="accel" value="${acceleration if acceleration != '' else '50'}"/>
     <joint name="${joint_name}">
-      <param name="id">${servo_id}</param>
-      <param name="acceleration">${acceleration}</param>
-      <xacro:if value="${command_interface == 'velocity'}">
-        <param name="velocity_radians_per_second_per_tick">${velocity_scale}</param>
-        <param name="velocity_direction">${velocity_direction}</param>
-        <param name="max_velocity_radians_per_second">${max_velocity}</param>
+      <param name="id">${cfg['id']}</param>
+      <param name="acceleration">${accel}</param>
+
+      <!-- Position Mode (Arm joints) -->
+      <xacro:if value="${command_interface == 'position'}">
+        <xacro:property name="min_pos" value="${(cfg['range_min'] - 2048) * 2.0 * pi / 4096.0}"/>
+        <xacro:property name="max_pos" value="${(cfg['range_max'] - 2048) * 2.0 * pi / 4096.0}"/>
+        <param name="range_min">${cfg['range_min']}</param>
+        <param name="range_max">${cfg['range_max']}</param>
+        <param name="homing_offset">${cfg['homing_offset']}</param>
+
+        <!-- Hardware servo profile constants -->
+        <param name="p_coefficient">${arm_p_coefficient}</param>
+        <param name="i_coefficient">${arm_i_coefficient}</param>
+        <param name="d_coefficient">${arm_d_coefficient}</param>
+        <param name="return_delay_time">${arm_return_delay_time}</param>
+
+        <command_interface name="position">
+          <param name="min">${min_pos}</param>
+          <param name="max">${max_pos}</param>
+        </command_interface>
+        <state_interface name="position">
+          <param name="min">${min_pos}</param>
+          <param name="max">${max_pos}</param>
+        </state_interface>
       </xacro:if>
-      <command_interface name="${command_interface}"/>
+
+      <!-- Velocity Mode (Base omni wheels) -->
+      <xacro:if value="${command_interface == 'velocity'}">
+        <param name="velocity_radians_per_second_per_tick">${wheel_velocity_scale}</param>
+        <param name="velocity_direction">${wheel_velocity_direction}</param>
+        <param name="max_velocity_radians_per_second">${wheel_max_velocity}</param>
+
+        <command_interface name="velocity">
+          <param name="min">-${wheel_max_velocity}</param>
+          <param name="max">${wheel_max_velocity}</param>
+        </command_interface>
+        <state_interface name="position"/>
+      </xacro:if>
+
       <command_interface name="torque_enable"/>
-      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
   </xacro:macro>
 
   <!-- Selects hardware at launch time while retaining a non-actuating mock default. -->
-  <xacro:macro name="lekiwi_ros2_control" params="hardware_type usb_port">
+  <xacro:macro name="lekiwi_ros2_control" params="hardware_type usb_port arm_control_mode:='kinematics' servo_calib_file:='$(find lekiwi_description)/config/calibration/DuyKhongCay.json'">
+    <!-- Load servo calibration dictionary (SSOT for IDs, tick limits, and homing offsets) -->
+    <xacro:property name="jcfg" value="${xacro.load_yaml(servo_calib_file)}"/>
+
+    <!--
+      Resolve arm acceleration profile based on active control paradigm:
+      - 'kinematics': accel=0 (Host QuinticTrajectoryPlanner handles C² profiling, avoids phase lag and path tolerance aborts)
+      - 'policy': accel=50 (MCU hardware ramp filters high-frequency jitter from neural network policy predictions)
+    -->
+    <xacro:property name="arm_accel" value="${'50' if arm_control_mode == 'policy' else '0'}"/>
     <ros2_control name="LeKiwiSystem" type="system">
       <hardware>
         <xacro:if value="${hardware_type == 'mock'}">
@@ -42,15 +100,19 @@
           <param name="usb_port">${usb_port}</param>
         </xacro:if>
       </hardware>
-      <xacro:lekiwi_control_joint joint_name="arm_shoulder_pan" servo_id="1" command_interface="position" acceleration="50"/>
-      <xacro:lekiwi_control_joint joint_name="arm_shoulder_lift" servo_id="2" command_interface="position" acceleration="50"/>
-      <xacro:lekiwi_control_joint joint_name="arm_elbow_flex" servo_id="3" command_interface="position" acceleration="50"/>
-      <xacro:lekiwi_control_joint joint_name="arm_wrist_flex" servo_id="4" command_interface="position" acceleration="50"/>
-      <xacro:lekiwi_control_joint joint_name="arm_wrist_roll" servo_id="5" command_interface="position" acceleration="50"/>
-      <xacro:lekiwi_control_joint joint_name="arm_gripper" servo_id="6" command_interface="position" acceleration="50"/>
-      <xacro:lekiwi_control_joint joint_name="base_left_wheel" servo_id="7" command_interface="velocity" acceleration="0" velocity_scale="0.0015339807878856412" velocity_direction="-1" max_velocity="5.0"/>
-      <xacro:lekiwi_control_joint joint_name="base_back_wheel" servo_id="8" command_interface="velocity" acceleration="0" velocity_scale="0.0015339807878856412" velocity_direction="-1" max_velocity="5.0"/>
-      <xacro:lekiwi_control_joint joint_name="base_right_wheel" servo_id="9" command_interface="velocity" acceleration="0" velocity_scale="0.0015339807878856412" velocity_direction="-1" max_velocity="5.0"/>
+
+      <!-- Arm joints: dynamic limits computed from range_min / range_max -->
+      <xacro:lekiwi_control_joint joint_name="arm_shoulder_pan"  cfg="${jcfg['arm_shoulder_pan']}"  command_interface="position" acceleration="${arm_accel}"/>
+      <xacro:lekiwi_control_joint joint_name="arm_shoulder_lift" cfg="${jcfg['arm_shoulder_lift']}" command_interface="position" acceleration="${arm_accel}"/>
+      <xacro:lekiwi_control_joint joint_name="arm_elbow_flex"    cfg="${jcfg['arm_elbow_flex']}"    command_interface="position" acceleration="${arm_accel}"/>
+      <xacro:lekiwi_control_joint joint_name="arm_wrist_flex"    cfg="${jcfg['arm_wrist_flex']}"    command_interface="position" acceleration="${arm_accel}"/>
+      <xacro:lekiwi_control_joint joint_name="arm_wrist_roll"    cfg="${jcfg['arm_wrist_roll']}"    command_interface="position" acceleration="${arm_accel}"/>
+      <xacro:lekiwi_control_joint joint_name="arm_gripper"       cfg="${jcfg['arm_gripper']}"       command_interface="position" acceleration="${arm_accel}"/>
+
+      <!-- Wheel joints: velocity limits & tick scaling configured from mechanical constants -->
+      <xacro:lekiwi_control_joint joint_name="base_left_wheel"   cfg="${jcfg['base_left_wheel']}"   command_interface="velocity" acceleration="0"/>
+      <xacro:lekiwi_control_joint joint_name="base_back_wheel"   cfg="${jcfg['base_back_wheel']}"   command_interface="velocity" acceleration="0"/>
+      <xacro:lekiwi_control_joint joint_name="base_right_wheel"  cfg="${jcfg['base_right_wheel']}"  command_interface="velocity" acceleration="0"/>
     </ros2_control>
   </xacro:macro>
 

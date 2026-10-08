@@ -1,37 +1,45 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
+"""Top-level system bringup launch file for the LeKiwi robot.
+
+Composes all hardware, control, perception, navigation, manipulation,
+and orchestration subsystems into a unified runtime tree.
+"""
+
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    SetEnvironmentVariable,
+)
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Top-level Bringup: Compose LeKiwi robot subsystems with streamlined configuration."""
+    """Compose and launch all LeKiwi robot subsystems with configurable arguments.
+
+    Returns:
+        LaunchDescription containing all declared arguments and subsystem includes.
+    """
+    # 1. Locate dependent package shares
     bringup_share = FindPackageShare("lekiwi_bringup")
     description_share = FindPackageShare("lekiwi_description")
-    manipulation_share = FindPackageShare("lekiwi_manipulation")
 
-    # Global and Subsystem Arguments
+    # 2. Declare global and subsystem launch arguments
     declared_arguments = [
         DeclareLaunchArgument(
-            "enable_orchestrator",
+            "orchestrator",
             default_value="true",
             description="Start LeKiwi orchestration and readiness subsystem",
-        ),
-        DeclareLaunchArgument(
-            "enable_readiness_checks",
-            default_value="true",
-            description="Start both TF and workspace readiness checks",
-        ),
-        DeclareLaunchArgument(
-            "start_mission",
-            default_value="true",
-            description="Start autonomous chess mission orchestrator",
         ),
         DeclareLaunchArgument(
             "cameras",
@@ -90,17 +98,31 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "manipulation",
-            default_value="true",
-            description="Start LeKiwi manipulation subsystem (cartesian service and action server)",
+            default_value="kinematics",
+            choices=["kinematics", "policy", "false"],
+            description="Manipulation subsystem mode: "
+            "'kinematics' (mock/real action server + cartesian service, accel=0), "
+            "'policy' (LeRobot ACT/SmolVLA, accel=50), or 'false' (disabled)",
         ),
         DeclareLaunchArgument(
-            "use_mock_manipulation",
-            default_value="true",
-            description="Use mock_policy_server instead of real hardware manipulation action server",
+            "log_level",
+            default_value="WARN",
+            choices=["DEBUG", "INFO", "WARN", "ERROR", "FATAL"],
+            description="Global logging severity threshold for all nodes and containers",
         ),
     ]
 
-    # Subsystem Includes
+    # 3. Configure global logging severity threshold and colorized console
+    set_log_level_env = SetEnvironmentVariable(
+        name="RCUTILS_LOG_SEVERITY_THRESHOLD",
+        value=LaunchConfiguration("log_level"),
+    )
+    set_color_env = SetEnvironmentVariable(
+        name="RCUTILS_COLORIZED_OUTPUT",
+        value="1",
+    )
+
+    # 4. Define subsystem launch includes
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([description_share, "launch", "description.launch.py"])
@@ -108,6 +130,11 @@ def generate_launch_description():
         launch_arguments={
             "hardware_type": LaunchConfiguration("hardware_type"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "arm_control_mode": PythonExpression(
+                [
+                    "'policy' if '",LaunchConfiguration("manipulation"),"' == 'policy' else 'kinematics'",
+                ]
+            ),
         }.items(),
     )
 
@@ -116,24 +143,12 @@ def generate_launch_description():
             PathJoinSubstitution([bringup_share, "launch", "controllers.launch.py"])
         ),
         launch_arguments={
-            "hardware_type": LaunchConfiguration("hardware_type"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "arm_controller": LaunchConfiguration("arm_controller"),
             "base_controller": LaunchConfiguration("base_controller"),
             "imu_broadcaster": LaunchConfiguration("imu_broadcaster"),
             "use_mag": "false",
         }.items(),
-    )
-
-    imu = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([bringup_share, "launch", "imu.launch.py"])
-        ),
-        launch_arguments={
-            "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "use_mag": "false",
-        }.items(),
-        condition=IfCondition(LaunchConfiguration("imu_broadcaster")),
     )
 
     cameras = IncludeLaunchDescription(
@@ -152,11 +167,10 @@ def generate_launch_description():
                 [bringup_share, "config", "control", "orchestrator.yaml"]
             ),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "start_mission": LaunchConfiguration("start_mission"),
-            "start_readiness_manager": LaunchConfiguration("enable_readiness_checks"),
             "navigation": LaunchConfiguration("navigation"),
+            "manipulation": LaunchConfiguration("manipulation"),
         }.items(),
-        condition=IfCondition(LaunchConfiguration("enable_orchestrator")),
+        condition=IfCondition(LaunchConfiguration("orchestrator")),
     )
 
     diagnostics = IncludeLaunchDescription(
@@ -204,6 +218,7 @@ def generate_launch_description():
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "enable_ekf": LaunchConfiguration("enable_ekf"),
+            "use_mag": "false",
         }.items(),
         condition=IfCondition(LaunchConfiguration("enable_ekf")),
     )
@@ -218,25 +233,14 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("chess_master")),
     )
 
-    manipulation = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution(
-                [manipulation_share, "launch", "manipulation.launch.py"]
-            )
-        ),
-        launch_arguments={
-            "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "use_mock": LaunchConfiguration("use_mock_manipulation"),
-        }.items(),
-        condition=IfCondition(LaunchConfiguration("manipulation")),
-    )
-
+    # 5. Assemble LaunchDescription
     return LaunchDescription(
         [
             *declared_arguments,
+            set_log_level_env,
+            set_color_env,
             description,
             controllers,
-            imu,
             localization,
             cameras,
             diagnostics,
@@ -245,6 +249,5 @@ def generate_launch_description():
             teleop_uarm,
             navigation,
             chess_master,
-            manipulation,
         ]
     )

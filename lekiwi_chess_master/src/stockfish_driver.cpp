@@ -1,6 +1,9 @@
 /**
  * @file stockfish_driver.cpp
- * @brief Implementation of Non-blocking POSIX pipe Stockfish UCI engine driver.
+ * @brief Implementation of non-blocking POSIX pipe Stockfish UCI engine driver.
+ *
+ * Manages child process lifecycle, IPC via redirected file descriptors, non-blocking
+ * polling I/O, and line-oriented UCI stream parsing.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -41,7 +44,7 @@ namespace lekiwi_chess_master
     std::lock_guard<std::mutex> lock(process_mutex_);
     if (engine_pid_ > 0)
     {
-      return true; // Already running
+      return true; // Subprocess is already spawned and active
     }
 
     std::string exec_path = executable_path;
@@ -72,20 +75,22 @@ namespace lekiwi_chess_master
 
     if (pid == 0)
     {
-      // Child process: Redirect stdin and stdout
+      // Child process: Redirect child stdin from in_pipe[0] and stdout to out_pipe[1]
       dup2(in_pipe[0], STDIN_FILENO);
       dup2(out_pipe[1], STDOUT_FILENO);
 
+      // Close all inherited pipe descriptors in child
       close(in_pipe[0]);
       close(in_pipe[1]);
       close(out_pipe[0]);
       close(out_pipe[1]);
 
+      // Replace child address space with Stockfish binary
       execl(exec_path.c_str(), exec_path.c_str(), nullptr);
-      _exit(127);
+      _exit(127); // Exit if execl fails
     }
 
-    // Parent process
+    // Parent process: retain write descriptor for in_pipe and read descriptor for out_pipe
     engine_pid_ = pid;
     in_pipe_fd_ = in_pipe[1];
     out_pipe_fd_ = out_pipe[0];
@@ -93,7 +98,7 @@ namespace lekiwi_chess_master
     close(in_pipe[0]);
     close(out_pipe[1]);
 
-    // Set out_pipe_fd_ to non-blocking mode
+    // Configure stdout pipe to non-blocking mode to prevent polling reads from hanging
     int flags = fcntl(out_pipe_fd_, F_GETFL, 0);
     if (flags >= 0)
     {
@@ -102,7 +107,7 @@ namespace lekiwi_chess_master
 
     line_buffer_.clear();
 
-    // Perform UCI Handshake: "uci\nisready\n"
+    // Perform UCI Handshake: initiate identification and readiness probe
     const char *init_cmds = "uci\nisready\n";
     if (write(in_pipe_fd_, init_cmds, strlen(init_cmds)) < 0)
     {
@@ -111,7 +116,7 @@ namespace lekiwi_chess_master
       return false;
     }
 
-    // Wait for "readyok" with timeout
+    // Await "readyok" token acknowledging engine initialization with 5-second deadline
     auto start_time = std::chrono::steady_clock::now();
     bool ready = false;
     while (std::chrono::duration_cast<std::chrono::seconds>(
@@ -141,6 +146,7 @@ namespace lekiwi_chess_master
     std::lock_guard<std::mutex> lock(process_mutex_);
     if (engine_pid_ > 0)
     {
+      // Gracefully signal engine shutdown over stdin pipe
       if (in_pipe_fd_ >= 0)
       {
         const char *quit_cmd = "quit\n";
@@ -155,7 +161,7 @@ namespace lekiwi_chess_master
       }
 
       int status = 0;
-      // Wait briefly for graceful exit
+      // Wait for child termination to prevent zombie processes
       waitpid(engine_pid_, &status, 0);
       engine_pid_ = -1;
     }
@@ -169,6 +175,7 @@ namespace lekiwi_chess_master
       return false;
     }
     int status = 0;
+    // Non-blocking query to inspect child termination status
     pid_t res = waitpid(engine_pid_, &status, WNOHANG);
     return (res == 0);
   }
@@ -196,12 +203,13 @@ namespace lekiwi_chess_master
       return "";
     }
 
-    // Check if buffer already contains a full line
+    // Inspect buffer for a newline already cached from a previous chunk read
     auto nl_pos = line_buffer_.find('\n');
     if (nl_pos != std::string::npos)
     {
       std::string line = line_buffer_.substr(0, nl_pos);
       line_buffer_.erase(0, nl_pos + 1);
+      // Strip carriage return for CRLF compatibility
       if (!line.empty() && line.back() == '\r')
       {
         line.pop_back();
@@ -209,7 +217,7 @@ namespace lekiwi_chess_master
       return line;
     }
 
-    // Poll for data with timeout
+    // Poll child stdout descriptor for readable data until timeout expires
     struct pollfd pfd;
     pfd.fd = out_pipe_fd_;
     pfd.events = POLLIN;
@@ -225,6 +233,7 @@ namespace lekiwi_chess_master
         chunk[n] = '\0';
         line_buffer_.append(chunk, n);
 
+        // Check if the freshly appended chunk completes a line
         nl_pos = line_buffer_.find('\n');
         if (nl_pos != std::string::npos)
         {
@@ -244,6 +253,7 @@ namespace lekiwi_chess_master
 
   bool StockfishDriver::parse_info_line(const std::string &line, EngineInfoFeedback &feedback)
   {
+    // UCI info lines always begin with the "info " token prefix
     if (line.rfind("info ", 0) != 0)
     {
       return false;
@@ -280,15 +290,16 @@ namespace lekiwi_chess_master
       }
       else if (token == "pv")
       {
+        // Principal variation occupies the remainder of the line
         std::string pv_tail;
         std::getline(iss, pv_tail);
-        // Trim leading space
+        // Trim leading space if present
         if (!pv_tail.empty() && pv_tail.front() == ' ')
         {
           pv_tail.erase(0, 1);
         }
         feedback.pv = pv_tail;
-        break; // pv is the last token on the info line
+        break; // pv is strictly the final token in UCI specification
       }
     }
     return true;
@@ -296,6 +307,7 @@ namespace lekiwi_chess_master
 
   bool StockfishDriver::parse_bestmove_line(const std::string &line, BestMoveResult &result)
   {
+    // UCI bestmove lines begin with "bestmove "
     if (line.rfind("bestmove ", 0) != 0)
     {
       return false;
@@ -304,6 +316,8 @@ namespace lekiwi_chess_master
     std::istringstream iss(line);
     std::string tag, move, ponder_tag, ponder_move;
     iss >> tag >> move;
+
+    // Detect terminal positions where engine cannot move (checkmate or stalemate)
     if (move.empty() || move == "(none)")
     {
       result.success = false;
@@ -314,6 +328,7 @@ namespace lekiwi_chess_master
     result.success = true;
     result.best_move = move;
 
+    // Optional opponent ponder move prediction
     if (iss >> ponder_tag && ponder_tag == "ponder" && iss >> ponder_move)
     {
       result.ponder = ponder_move;
@@ -338,17 +353,17 @@ namespace lekiwi_chess_master
       return result;
     }
 
-    // Clear pending buffer
+    // Flush any leftover tokens or lines in the read accumulator buffer
     line_buffer_.clear();
 
-    // Send position command
+    // Instruct engine to configure internal board representation to target FEN
     if (!send_command("position fen " + fen + "\n"))
     {
       result.message = "Failed to write position command to Stockfish.";
       return result;
     }
 
-    // Build go command
+    // Assemble search constraint command ("go movetime <ms> depth <d>")
     std::string go_cmd = "go";
     if (think_time_ms > 0)
     {
@@ -367,13 +382,14 @@ namespace lekiwi_chess_master
     }
 
     auto start_time = std::chrono::steady_clock::now();
+    // Allow engine think_time plus generous 10s buffer for process overhead before timing out
     int timeout_sec = (think_time_ms / 1000) + 10;
     bool stop_sent = false;
     EngineInfoFeedback latest_feedback;
 
     while (true)
     {
-      // Check if cancellation requested
+      // Check if external client requested goal cancellation
       if (is_canceled && is_canceled() && !stop_sent)
       {
         send_command("stop\n");
@@ -396,6 +412,7 @@ namespace lekiwi_chess_master
         continue;
       }
 
+      // Stream intermediate evaluation progression metrics to feedback callback
       if (line.rfind("info ", 0) == 0)
       {
         if (parse_info_line(line, latest_feedback))
@@ -406,6 +423,7 @@ namespace lekiwi_chess_master
           }
         }
       }
+      // "bestmove " denotes completion of search
       else if (line.rfind("bestmove ", 0) == 0)
       {
         parse_bestmove_line(line, result);
