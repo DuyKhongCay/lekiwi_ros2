@@ -232,7 +232,6 @@ Parameters can be overridden via YAML configuration files or launch arguments:
 | `recovery.auto_recovery_timeout_sec` | `double` | `5.0` | Delay before triggering auto-recovery transition. |
 | `recovery.max_recovery_attempts` | `int` | `3` | Maximum consecutive self-healing attempts before lockout. |
 | `observation.standoff_distance` | `double` | `0.65` | Target radial observation distance $R$ from board center (meters). |
-| `observation.radius_tolerance` | `double` | `0.04` | Permissible radial tolerance band $\Delta R$ on standoff circle (meters). |
 | `observation.scan_timeout_sec` | `double` | `6.0` | Timeout allowed for overhead board FEN confirmation. |
 | `observation.angle_offsets.relocalize` | `double[]` | `[0.0, -0.314, 0.314]` | Candidate azimuth offsets (rad) for visual relocalization. |
 | `observation.angle_offsets.post_move_verify` | `double[]` | `[0.0, -0.314, 0.314, -0.558, 0.558]` | Candidate azimuth offsets (rad) for post-move verification. |

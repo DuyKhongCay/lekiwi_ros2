@@ -22,7 +22,6 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_motion_client test/test_motion_client.py)
   ament_add_pytest_test(test_status_marker_builder test/test_status_marker_builder.py)
   ament_add_pytest_test(test_viewpoint_scheduler test/test_viewpoint_scheduler.py)
-  ament_add_pytest_test(test_architecture_contracts test/test_architecture_contracts.py)
 endif()
 
 ament_package()

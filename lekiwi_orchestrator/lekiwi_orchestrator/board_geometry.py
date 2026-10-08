@@ -52,61 +52,6 @@ def _create_standoff_pose(
 
 
 # ==============================================================================
-# Radial Standoff Guard
-# ==============================================================================
-
-
-def is_on_standoff_circle(
-    x: float,
-    y: float,
-    standoff_radius: float,
-    tolerance: float = 0.04,
-) -> bool:
-    """Evaluate whether planar coordinates (x, y) lie on the standoff circle.
-
-    Prevents redundant base navigation if the robot is already within viewing tolerance.
-    """
-    r = math.hypot(x, y)
-    return abs(r - standoff_radius) <= tolerance
-
-
-def compute_radial_entry_pose(
-    curr_x: float,
-    curr_y: float,
-    standoff_radius: float,
-    board_frame: str = "chessboard_frame",
-    fallback_yaw: float = 0.0,
-) -> PoseStamped:
-    """Generate target entry pose on standoff circle along the radial vector.
-
-    Orients robot heading inward facing the board center to re-acquire visual markers.
-
-    Args:
-        curr_x: Current X position in `board_frame` (meters).
-        curr_y: Current Y position in `board_frame` (meters).
-        standoff_radius: Target observation circle radius R from board origin (meters).
-        board_frame: Coordinate frame ID of the chessboard.
-        fallback_yaw: Fallback radial direction if current position is exactly at origin.
-
-    Returns:
-        PoseStamped representing the radial entry waypoint facing board center.
-    """
-    dist = math.hypot(curr_x, curr_y)
-    azimuth = math.atan2(curr_y, curr_x) if dist > 1e-4 else fallback_yaw
-
-    target_x = standoff_radius * math.cos(azimuth)
-    target_y = standoff_radius * math.sin(azimuth)
-    facing_yaw = math.atan2(-target_y, -target_x)
-
-    return _create_standoff_pose(
-        target_x=target_x,
-        target_y=target_y,
-        facing_yaw=facing_yaw,
-        frame_id=board_frame,
-    )
-
-
-# ==============================================================================
 # Azimuth Viewpoint Scheduler
 # ==============================================================================
 

@@ -50,6 +50,7 @@ class MoveStep:
     place_point: Point
     motion_state: MotionExecutionState = MotionExecutionState.IDLE
     nav_motion_state: MotionExecutionState | None = None
+    requires_pre_grasp_gate: bool = True
 
 
 def _clear_step(
@@ -57,6 +58,7 @@ def _clear_step(
     pick_point: Point,
     target_pose: PoseStamped | None = None,
     nav_state: MotionExecutionState | None = None,
+    requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
     return MoveStep(
         name=StepKind.CLEAR,
@@ -69,6 +71,7 @@ def _clear_step(
         place_point=Point(),
         motion_state=MotionExecutionState.CLEARING_PIECE,
         nav_motion_state=nav_state,
+        requires_pre_grasp_gate=requires_pre_grasp_gate,
     )
 
 
@@ -77,6 +80,7 @@ def _pick_step(
     pick_point: Point,
     target_pose: PoseStamped | None = None,
     nav_state: MotionExecutionState | None = None,
+    requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
     return MoveStep(
         name=StepKind.PICK,
@@ -89,6 +93,7 @@ def _pick_step(
         place_point=Point(),
         motion_state=MotionExecutionState.PICKING_PIECE,
         nav_motion_state=nav_state,
+        requires_pre_grasp_gate=requires_pre_grasp_gate,
     )
 
 
@@ -97,6 +102,7 @@ def _place_step(
     place_point: Point,
     target_pose: PoseStamped | None = None,
     nav_state: MotionExecutionState | None = None,
+    requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
     return MoveStep(
         name=StepKind.PLACE,
@@ -109,6 +115,7 @@ def _place_step(
         place_point=place_point,
         motion_state=MotionExecutionState.PLACING_PIECE,
         nav_motion_state=nav_state,
+        requires_pre_grasp_gate=requires_pre_grasp_gate,
     )
 
 
@@ -120,6 +127,7 @@ def _move_step(
     target_pose: PoseStamped | None = None,
     is_capture: bool = False,
     nav_state: MotionExecutionState | None = None,
+    requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
     return MoveStep(
         name=StepKind.MOVE,
@@ -132,6 +140,7 @@ def _move_step(
         place_point=place_point,
         motion_state=MotionExecutionState.PICKING_PIECE,
         nav_motion_state=nav_state,
+        requires_pre_grasp_gate=requires_pre_grasp_gate,
     )
 
 
@@ -147,6 +156,7 @@ def _observation_step(observation_pose: PoseStamped) -> MoveStep:
         place_point=Point(),
         motion_state=MotionExecutionState.IDLE,
         nav_motion_state=MotionExecutionState.NAV_TO_OBS,
+        requires_pre_grasp_gate=False,
     )
 
 
@@ -257,6 +267,7 @@ class MovePlanBuilder:
                 to_square=details.to_square,
                 pick_point=resp.pick_point,
                 place_point=resp.place_point,
+                requires_pre_grasp_gate=False,
             ),
         ]
 
@@ -278,6 +289,7 @@ class MovePlanBuilder:
                 to_square=details.to_square,
                 pick_point=resp.pick_point,
                 place_point=resp.place_point,
+                requires_pre_grasp_gate=False,
             ),
         ]
 
@@ -305,6 +317,7 @@ class MovePlanBuilder:
                 nav_state=(
                     None if clear_same_as_pick else MotionExecutionState.NAV_TO_PICK
                 ),
+                requires_pre_grasp_gate=not clear_same_as_pick,
             ),
             _place_step(
                 to_square=details.to_square,

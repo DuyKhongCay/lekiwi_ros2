@@ -57,7 +57,6 @@ class OrchestratorParameters:
         )
 
         node.declare_parameter("observation.standoff_distance", 0.65)
-        node.declare_parameter("observation.radius_tolerance", 0.04)
         node.declare_parameter("observation.scan_timeout_sec", 6.0)
         node.declare_parameter(
             "observation.angle_offsets.relocalize",
@@ -125,9 +124,6 @@ class OrchestratorParameters:
 
         self.observation_standoff_distance = float(
             node.get_parameter("observation.standoff_distance").value
-        )
-        self.observation_radius_tolerance = float(
-            node.get_parameter("observation.radius_tolerance").value
         )
         self.observation_scan_timeout_sec = float(
             node.get_parameter("observation.scan_timeout_sec").value

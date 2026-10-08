@@ -179,10 +179,16 @@ class MoveSequencer:
         if stage.target_pose is not None:
             self._execute_nav_stage(stage)
         else:
-            if not self._wait_for_grasp_readiness(self._pre_grasp_settle_sec):
-                if not self._cancel_event.is_set():
-                    self._handle_grasp_unready(stage)
-                return
+            if getattr(stage, "requires_pre_grasp_gate", True):
+                if not self._wait_for_grasp_readiness(self._pre_grasp_settle_sec):
+                    if not self._cancel_event.is_set():
+                        self._handle_grasp_unready(stage)
+                    return
+            else:
+                self._node.get_logger().info(
+                    f"Stage '{stage.name}' is an in-place continuation. "
+                    "Bypassing pre-grasp readiness check."
+                )
             if not self._cancel_event.is_set():
                 self._execute_manip_stage(stage)
 

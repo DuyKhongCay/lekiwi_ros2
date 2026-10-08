@@ -219,7 +219,6 @@ class ChessMissionOrchestrator(Node):
             map_frame=config.map_frame,
             board_frame=config.board_frame,
             standoff_distance=config.observation_standoff_distance,
-            radius_tolerance=config.observation_radius_tolerance,
             angle_offsets_map=angle_offsets_map,
             tf_buffer=getattr(self, "_tf_buffer", None),
         )

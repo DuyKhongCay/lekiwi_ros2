@@ -5,8 +5,6 @@
 
 from lekiwi_orchestrator.board_geometry import (
     RankedViewpoint,
-    compute_radial_entry_pose,
-    is_on_standoff_circle,
     normalize_angle,
     rank_by_azimuth,
     yaw_to_quaternion,
@@ -81,8 +79,6 @@ __all__ = [
     "is_perception_transition_allowed",
     # Geometry
     "RankedViewpoint",
-    "compute_radial_entry_pose",
-    "is_on_standoff_circle",
     "normalize_angle",
     "rank_by_azimuth",
     "yaw_to_quaternion",

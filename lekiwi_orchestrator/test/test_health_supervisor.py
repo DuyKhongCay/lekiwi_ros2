@@ -253,3 +253,26 @@ def test_diagnostics_and_visualizer_emission(mock_node, dummy_snapshot):
         assert diag_pub.publish.call_args[0][0].status[0].level == DiagnosticStatus.WARN
     finally:
         monitor.destroy()
+
+
+def test_parameters_invalid_readiness_timeout():
+    """Verify that non-positive readiness_timeout_sec raises ValueError."""
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.parameter import Parameter
+    from lekiwi_orchestrator.parameters import OrchestratorParameters
+
+    if not rclpy.ok():
+        rclpy.init()
+    test_node = Node(
+        "test_params_node",
+        parameter_overrides=[Parameter("readiness_timeout_sec", value=-1.0)],
+    )
+    try:
+        with pytest.raises(
+            ValueError, match="readiness_timeout_sec must be finite and positive"
+        ):
+            OrchestratorParameters(test_node)
+    finally:
+        test_node.destroy_node()
+
