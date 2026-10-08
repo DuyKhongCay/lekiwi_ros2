@@ -98,7 +98,7 @@ std::unordered_map<std::string, std::vector<double>> ArmMotionPlanner::build_pha
     {"APPROACH_PLACE", with_gripper(place_approach, closed_g)},
     {"DESCEND_PLACE",  with_gripper(place_descend, closed_g)},
     {"RELEASE",        with_gripper(place_descend, open_g)},
-    {"RETRACT",        with_gripper(place_approach, open_g)},
+    {"RETRACT",        with_gripper(get_stow_pose_internal(), open_g)},
   };
 }
 
@@ -120,7 +120,7 @@ std::unordered_map<std::string, std::vector<double>> ArmMotionPlanner::build_cle
     {"LIFT",           with_gripper(pick_approach, closed_g)},
     {"DROP_CLEAR",     with_gripper(bin_pose, closed_g)},
     {"RELEASE_CLEAR",  with_gripper(bin_pose, open_g)},
-    {"RETRACT_CLEAR",  with_gripper(pick_approach, open_g)},
+    {"RETRACT_CLEAR",  with_gripper(get_stow_pose_internal(), open_g)},
   };
 }
 

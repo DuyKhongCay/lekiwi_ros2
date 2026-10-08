@@ -231,7 +231,7 @@ public:
     const std::vector<double> & start_positions,
     const std::vector<double> & target_positions,
     double max_velocity_rad_s,
-    double min_duration_sec = 0.1) const;
+    double min_duration_sec = 1.0) const;
 
   /**
    * @brief Plans a quintic joint trajectory from start positions to target positions bounded by max joint velocity.

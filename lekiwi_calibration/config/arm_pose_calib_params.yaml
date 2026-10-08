@@ -22,7 +22,7 @@ arm_pose_calibrator:
       - "arm_gripper"
 
     # Destination YAML file path for exported calibrated poses
-    output_yaml: "lekiwi_ros2/lekiwi_calibration/calib_results/arm_named_poses.yaml"
+    output_yaml: "/root/docker_ws/lekiwi_ros2/lekiwi_calibration/calib_results/arm_named_poses.yaml"
 
     # ROS Topics
     joint_states_topic: "/joint_states"

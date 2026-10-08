@@ -41,7 +41,7 @@ def generate_launch_description() -> LaunchDescription:
             PathJoinSubstitution([bringup_share, "launch", "robot.launch.py"])
         ),
         launch_arguments={
-            "hardware_type": "true",
+            "hardware_type": "real",
             "use_sim_time": "false",
             "arm_controller": "true",
             "teleop_gamepad": "true",
