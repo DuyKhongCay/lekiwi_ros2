@@ -12,6 +12,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -41,24 +42,42 @@ namespace teleop_zhongli_servo_hw
     ZhongliProtocol &operator=(ZhongliProtocol &&) = delete;
 
     /**
-     * @brief Open serial port to communication bus.
+     * @brief Open serial port to communication bus at 1 Mbps.
      *
      * @param[in] port_name Device path (e.g. "/dev/ttyUSB0").
-     * @param[in] baudrate Baud rate (typically 115200).
+     * @param[in] baudrate Baud rate (strictly 1000000).
      * @param[in] timeout_ms Per-transaction read/write timeout in milliseconds.
+     * @param[in] command_delay_us Inter-command spacing in microseconds.
      * @param[out] error Optional output string for failure details.
      * @return true if successfully opened and configured.
      */
     bool open(
         const std::string &port_name,
-        int baudrate = 115200,
-        int timeout_ms = 50,
+        int baudrate = default_config::kBaudRate,
+        int timeout_ms = default_config::kTimeoutMs,
+        int command_delay_us = default_config::kCommandDelayUs,
+        std::string *error = nullptr);
+
+    /**
+     * @brief Auto-negotiate baud rate: probes 1 Mbps, falls back to 115200, sends #000PBD5! to upgrade.
+     */
+    bool auto_negotiate_and_open(
+        const std::string &port_name,
+        int target_baudrate,
+        int *negotiated_baudrate,
+        int timeout_ms = default_config::kTimeoutMs,
+        int command_delay_us = default_config::kCommandDelayUs,
         std::string *error = nullptr);
 
     /**
      * @brief Close the serial bus.
      */
     void close() noexcept;
+
+    /**
+     * @brief Flush pending input buffer on the bus.
+     */
+    void flush_input() noexcept;
 
     /**
      * @brief Check if serial port is currently open.
@@ -165,6 +184,7 @@ namespace teleop_zhongli_servo_hw
         double *voltage_v);
 
     static bool parse_ok_response(std::string_view response);
+    static bool parse_version_response(std::string_view response);
 
     // --- Static Kinematic Conversion Math ---
 
@@ -199,9 +219,10 @@ namespace teleop_zhongli_servo_hw
   private:
     static bool baudrate_to_libserial(int baudrate, LibSerial::BaudRate *out);
 
+    mutable std::mutex serial_mutex_;
     LibSerial::SerialPort serial_port_;
-    int timeout_ms_{50};
-    int command_delay_us_{3000}; // Inter-command microsecond delay
+    int timeout_ms_{default_config::kTimeoutMs};
+    int command_delay_us_{default_config::kCommandDelayUs}; // Inter-command microsecond delay
   };
 
 } // namespace teleop_zhongli_servo_hw

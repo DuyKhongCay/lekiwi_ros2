@@ -27,6 +27,17 @@ namespace teleop_zhongli_servo_hw
     joint_pub_ = create_publisher<sensor_msgs::msg::JointState>(
         leader_topic_, rclcpp::SensorDataQoS());
 
+    // Pre-allocate joint_state_msg_ and scratch vectors (zero heap allocations in 50 Hz loop)
+    joint_state_msg_.header.frame_id = "";
+    joint_state_msg_.name.clear();
+    joint_state_msg_.name.reserve(joint_configs_.size());
+    for (const auto &jcfg : joint_configs_)
+    {
+      joint_state_msg_.name.push_back(jcfg.joint_name);
+    }
+    joint_state_msg_.position.assign(joint_configs_.size(), 0.0);
+    leader_positions_scratch_.assign(follower_arm_joints_.size(), 0.0);
+
     // Setup diagnostic updater
     diagnostic_updater_.setHardwareID("uarm_leader_zhongli");
     diagnostic_updater_.add("Serial Connection", this, &TeleopUarmNode::produce_connection_diagnostics);
@@ -36,20 +47,14 @@ namespace teleop_zhongli_servo_hw
     RCLCPP_INFO(get_logger(), "Initializing uArm Leader Teleop Node on %s (%d baud)",
                 port_.c_str(), baudrate_);
 
-    // Initial connection attempt
+    // Initial connection attempt via async bus worker
     connect_hardware();
 
-    // 50 Hz main kinematic polling loop
+    // 50 Hz main kinematic polling loop (wait-free read from RealtimeBuffer)
     const auto loop_period = std::chrono::duration<double>(1.0 / publish_rate_hz_);
     loop_timer_ = create_wall_timer(
         std::chrono::duration_cast<std::chrono::nanoseconds>(loop_period),
         std::bind(&TeleopUarmNode::loop_callback, this));
-
-    // 1 Hz telemetry & diagnostics polling loop
-    const auto diag_period = std::chrono::duration<double>(1.0 / diagnostics_rate_hz_);
-    telemetry_timer_ = create_wall_timer(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(diag_period),
-        std::bind(&TeleopUarmNode::telemetry_diagnostics_callback, this));
 
     RCLCPP_INFO(get_logger(), "uArm Leader Node started. Publishing %zu joints to %s at %.1f Hz",
                 joint_configs_.size(), leader_topic_.c_str(), publish_rate_hz_);
@@ -244,12 +249,11 @@ namespace teleop_zhongli_servo_hw
   void TeleopUarmNode::declare_and_load_parameters()
   {
     port_ = declare_parameter<std::string>("port", "/dev/uarm_leader");
-    baudrate_ = declare_parameter<int>("baudrate", 115200);
-    timeout_ms_ = declare_parameter<int>("timeout_ms", 50);
-    publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 50.0);
-    command_delay_us_ = declare_parameter<int>("command_delay_us", 3000);
+    baudrate_ = declare_parameter<int>("baudrate", default_config::kBaudRate);
+    timeout_ms_ = declare_parameter<int>("timeout_ms", default_config::kTimeoutMs);
+    publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", default_config::kPublishRateHz);
+    command_delay_us_ = declare_parameter<int>("command_delay_us", default_config::kCommandDelayUs);
     leader_topic_ = declare_parameter<std::string>("leader_topic", "/leader/joint_states");
-    diagnostics_rate_hz_ = declare_parameter<double>("diagnostics_rate_hz", 1.0);
     calibration_file_ = declare_parameter<std::string>("calibration_file", "");
 
     // Follower Controller & Dispatch Parameters
@@ -310,48 +314,50 @@ namespace teleop_zhongli_servo_hw
 
     disconnect_hardware();
 
+    bus_worker_ = std::make_unique<ZhongliBusWorker>();
     std::string err;
-    if (!protocol_.open(port_, baudrate_, timeout_ms_, &err))
+
+    if (!bus_worker_->init(servo_ids_, joint_configs_, servo_configs_, &err))
+    {
+      RCLCPP_ERROR(get_logger(), "Failed to initialize bus worker: %s", err.c_str());
+      connected_ = false;
+      return false;
+    }
+
+    if (!bus_worker_->configure(port_, baudrate_, timeout_ms_, command_delay_us_, &err))
     {
       RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 5000,
-          "Cannot open serial port '%s': %s (Check udev rules or permissions)",
+          "Cannot open 1 Mbps serial port '%s': %s (Check udev rules or permissions)",
           port_.c_str(), err.c_str());
       connected_ = false;
       return false;
     }
 
-    if (!protocol_.handshake(3, &err))
+    if (!bus_worker_->activate(&err))
     {
       RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 5000,
-          "Board handshake failed on '%s': %s", port_.c_str(), err.c_str());
-      protocol_.close();
+          "Failed to activate async bus worker on '%s': %s", port_.c_str(), err.c_str());
+      bus_worker_->cleanup();
+      bus_worker_.reset();
       connected_ = false;
       return false;
     }
 
-    // Release torque for all servos (#000PULK!) to enable back-drivable manual teleoperation
-    if (!protocol_.disable_torque(0, &err))
-    {
-      RCLCPP_DEBUG(get_logger(), "Global torque release returned: %s. Releasing individually...", err.c_str());
-      for (auto id : servo_ids_)
-      {
-        protocol_.disable_torque(id);
-      }
-    }
-
     connected_ = true;
-    consecutive_read_failures_ = 0;
-    RCLCPP_INFO(get_logger(), "Successfully connected to uArm Leader Arm on '%s'", port_.c_str());
+    RCLCPP_INFO(get_logger(), "Successfully connected to uArm Leader Arm on '%s' at %d baud",
+                port_.c_str(), baudrate_);
     return true;
   }
 
   void TeleopUarmNode::disconnect_hardware()
   {
-    if (protocol_.is_open())
+    if (bus_worker_)
     {
-      protocol_.close();
+      bus_worker_->deactivate();
+      bus_worker_->cleanup();
+      bus_worker_.reset();
     }
     connected_ = false;
     dispatcher_.reset();
@@ -359,9 +365,7 @@ namespace teleop_zhongli_servo_hw
 
   void TeleopUarmNode::loop_callback()
   {
-    total_cycles_++;
-
-    if (!connected_)
+    if (!connected_ || !bus_worker_ || !bus_worker_->is_running())
     {
       // Attempt reconnect every 2 seconds
       if ((now() - last_reconnect_attempt_).seconds() >= 2.0)
@@ -371,46 +375,30 @@ namespace teleop_zhongli_servo_hw
       return;
     }
 
-    // Poll all configured servos
-    std::unordered_map<uint8_t, ServoFeedback> feedbacks;
-    const size_t successful_reads = protocol_.poll_servos_position(servo_ids_, &feedbacks);
+    // Wait-free read (< 50 ns) from RealtimeBuffer populated by async worker
+    const auto *snapshot = bus_worker_->read_state_rt();
 
-    if (successful_reads == servo_ids_.size())
+    if (snapshot != nullptr && snapshot->valid)
     {
-      consecutive_read_failures_ = 0;
-      successful_cycles_++;
+      // Build and publish JointState
+      joint_state_msg_.header.stamp = now();
+      joint_state_msg_.position = snapshot->joint_positions_rad;
 
-      std::unordered_map<uint8_t, int> servo_pwms;
-      for (const auto &[id, fb] : feedbacks)
-      {
-        servo_pwms[id] = fb.raw_pwm;
-        servo_feedbacks_[id].raw_pwm = fb.raw_pwm;
-        servo_feedbacks_[id].valid = true;
-      }
-
-      // Compute joint kinematics in SI Radians
-      const auto joint_data = ZhongliProtocol::compute_all_joints(
-          joint_configs_, servo_configs_, servo_pwms);
-
-      // Build and publish JointState (frame_id is empty string per standard JointState convention)
-      sensor_msgs::msg::JointState msg;
-      msg.header.stamp = now();
-      msg.header.frame_id = "";
-      msg.name.reserve(joint_data.size());
-      msg.position.reserve(joint_data.size());
-
-      for (const auto &jd : joint_data)
-      {
-        msg.name.push_back(jd.name);
-        msg.position.push_back(jd.position_rad);
-      }
-
-      joint_pub_->publish(msg);
+      joint_pub_->publish(joint_state_msg_);
 
       // Dispatch real-time commands to follower arm
-      publish_follower_command(joint_data, msg.header.stamp);
+      if (dispatcher_.get_mode() != DispatchMode::JOINT_STATES_ONLY)
+      {
+        const size_t num_joints = follower_arm_joints_.size();
+        for (size_t i = 0; i < num_joints; ++i)
+        {
+          leader_positions_scratch_[i] = snapshot->joint_positions_rad[follower_to_leader_idx_[i]];
+        }
+        const auto follower_positions = remapper_.remap_all(leader_positions_scratch_);
+        dispatcher_.dispatch(follower_positions, joint_state_msg_.header.stamp);
+      }
 
-      // Update measured rate
+      // Update measured publish rate
       const auto current_time = now();
       if (last_publish_time_.nanoseconds() > 0)
       {
@@ -426,20 +414,6 @@ namespace teleop_zhongli_servo_hw
         measured_rate_hz_ = publish_rate_hz_;
       }
       last_publish_time_ = current_time;
-    }
-    else
-    {
-      consecutive_read_failures_++;
-
-      // If we experience prolonged consecutive failures (e.g. 25 ticks = 0.5s at 50Hz)
-      if (consecutive_read_failures_ > 25)
-      {
-        RCLCPP_WARN_THROTTLE(
-            get_logger(), *get_clock(), 3000,
-            "Leader arm communication lost (%zu consecutive errors). Reconnecting...",
-            consecutive_read_failures_);
-        disconnect_hardware();
-      }
     }
   }
 
@@ -477,81 +451,53 @@ namespace teleop_zhongli_servo_hw
         follower_arm_joints_.size());
   }
 
-  void TeleopUarmNode::publish_follower_command(
-      const std::vector<JointStateData> &joint_data,
-      const rclcpp::Time &stamp)
-  {
-    if (dispatcher_.get_mode() == DispatchMode::JOINT_STATES_ONLY)
-    {
-      return;
-    }
-
-    const size_t num_joints = follower_arm_joints_.size();
-    std::vector<double> leader_positions(num_joints, 0.0);
-    for (size_t i = 0; i < num_joints; ++i)
-    {
-      leader_positions[i] = joint_data[follower_to_leader_idx_[i]].position_rad;
-    }
-
-    const auto follower_positions = remapper_.remap_all(leader_positions);
-    dispatcher_.dispatch(follower_positions, stamp);
-  }
-
-  void TeleopUarmNode::telemetry_diagnostics_callback()
-  {
-    if (connected_)
-    {
-      // Read temperature and voltage for each servo
-      for (auto id : servo_ids_)
-      {
-        double temp = 0.0;
-        double volt = 0.0;
-        if (protocol_.read_servo_telemetry(id, &temp, &volt))
-        {
-          servo_feedbacks_[id].temperature_c = temp;
-          servo_feedbacks_[id].voltage_v = volt;
-        }
-      }
-    }
-
-    // Publish /diagnostics update
-    diagnostic_updater_.force_update();
-  }
-
   void TeleopUarmNode::produce_connection_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat)
   {
-    if (!connected_)
+    const bool is_active = (bus_worker_ && bus_worker_->is_running());
+    const uint64_t err_count = bus_worker_ ? bus_worker_->consecutive_errors() : 0;
+    const uint64_t total = bus_worker_ ? bus_worker_->total_cycles() : 0;
+    const uint64_t success = bus_worker_ ? bus_worker_->successful_cycles() : 0;
+
+    if (!is_active)
     {
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Serial port disconnected");
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Serial worker disconnected");
     }
-    else if (consecutive_read_failures_ > 0)
+    else if (err_count > 0)
     {
       stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Intermittent serial timeout errors");
     }
     else
     {
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Serial connection active");
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Serial connection active (1 Mbps)");
     }
 
     stat.add("Serial Port", port_);
     stat.add("Baudrate", baudrate_);
-    stat.add("Is Connected", connected_ ? "true" : "false");
-    stat.add("Consecutive Read Errors", consecutive_read_failures_);
+    stat.add("Is Connected", is_active ? "true" : "false");
+    stat.add("Consecutive Read Errors", err_count);
     stat.add("Reconnect Attempts", reconnect_attempts_);
-    stat.add("Total Cycles", total_cycles_);
-    stat.add("Successful Cycles", successful_cycles_);
+    stat.add("Total Cycles", total);
+    stat.add("Successful Cycles", success);
 
-    const double success_ratio = (total_cycles_ > 0)
-                                     ? (100.0 * static_cast<double>(successful_cycles_) / static_cast<double>(total_cycles_))
+    const double success_ratio = (total > 0)
+                                     ? (100.0 * static_cast<double>(success) / static_cast<double>(total))
                                      : 0.0;
     stat.add("Success Rate (%)", success_ratio);
   }
 
   void TeleopUarmNode::produce_telemetry_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat)
   {
-    if (!connected_)
+    if (!bus_worker_ || !bus_worker_->is_running())
     {
       stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Disconnected; telemetry unavailable");
+      return;
+    }
+
+    // Read cached telemetry snapshot without touching serial bus
+    const auto *snapshot = bus_worker_->read_state_non_rt();
+    if (snapshot == nullptr || snapshot->servo_feedbacks.empty())
+    {
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Telemetry snapshot pending");
       return;
     }
 
@@ -559,9 +505,8 @@ namespace teleop_zhongli_servo_hw
     double min_volt = 999.0;
     double max_volt = 0.0;
 
-    for (auto id : servo_ids_)
+    for (const auto &fb : snapshot->servo_feedbacks)
     {
-      const auto &fb = servo_feedbacks_[id];
       if (fb.temperature_c > max_temp)
       {
         max_temp = fb.temperature_c;
@@ -574,7 +519,7 @@ namespace teleop_zhongli_servo_hw
           max_volt = fb.voltage_v;
       }
 
-      const std::string s_id = std::to_string(id);
+      const std::string s_id = std::to_string(fb.id);
       stat.add("Servo " + s_id + " Temp (C)", fb.temperature_c);
       stat.add("Servo " + s_id + " Voltage (V)", fb.voltage_v);
       stat.add("Servo " + s_id + " Raw PWM", fb.raw_pwm);
@@ -608,7 +553,7 @@ namespace teleop_zhongli_servo_hw
     stat.add("Target Publish Rate (Hz)", publish_rate_hz_);
     stat.add("Measured Publish Rate (Hz)", measured_rate_hz_);
 
-    if (!connected_)
+    if (!connected_ || !bus_worker_ || !bus_worker_->is_running())
     {
       stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Not publishing (disconnected)");
       return;

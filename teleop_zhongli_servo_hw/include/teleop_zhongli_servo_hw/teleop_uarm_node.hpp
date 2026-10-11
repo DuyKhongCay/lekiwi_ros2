@@ -27,6 +27,7 @@
 
 #include "teleop_zhongli_servo_hw/follower_dispatcher.hpp"
 #include "teleop_zhongli_servo_hw/kinematic_remapper.hpp"
+#include "teleop_zhongli_servo_hw/zhongli_bus_worker.hpp"
 #include "teleop_zhongli_servo_hw/zhongli_protocol.hpp"
 #include "teleop_zhongli_servo_hw/zhongli_types.hpp"
 
@@ -48,7 +49,6 @@ namespace teleop_zhongli_servo_hw
     void disconnect_hardware();
 
     void loop_callback();
-    void telemetry_diagnostics_callback();
 
     void produce_connection_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
     void produce_telemetry_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
@@ -59,14 +59,13 @@ namespace teleop_zhongli_servo_hw
         const rclcpp::Time &stamp);
     void setup_joint_mapping();
 
-    // Runtime Parameter Configurations
+    // Runtime Parameter Configurations (1 Mbps high-rate defaults)
     std::string port_{"/dev/uarm_leader"};
-    int baudrate_{115200};
-    int timeout_ms_{50};
-    double publish_rate_hz_{50.0};
-    int command_delay_us_{3000};
+    int baudrate_{default_config::kBaudRate};
+    int timeout_ms_{default_config::kTimeoutMs};
+    double publish_rate_hz_{default_config::kPublishRateHz};
+    int command_delay_us_{default_config::kCommandDelayUs};
     std::string leader_topic_{"/leader/joint_states"};
-    double diagnostics_rate_hz_{1.0};
     std::string calibration_file_{""};
 
     // Follower Dispatcher & Remapping Components
@@ -80,24 +79,24 @@ namespace teleop_zhongli_servo_hw
     std::unordered_map<uint8_t, ServoConfig> servo_configs_;
     std::vector<JointKinematicConfig> joint_configs_;
 
-    // Driver & Connection State
-    ZhongliProtocol protocol_;
+    // Async Background Bus Worker Engine
+    std::unique_ptr<ZhongliBusWorker> bus_worker_;
     bool connected_{false};
     size_t reconnect_attempts_{0};
-    size_t consecutive_read_failures_{0};
-    size_t total_cycles_{0};
-    size_t successful_cycles_{0};
     rclcpp::Time last_reconnect_attempt_{0, 0, RCL_ROS_TIME};
 
-    // Telemetry Cache & Timing
-    std::unordered_map<uint8_t, ServoFeedback> servo_feedbacks_;
+    // Pre-allocated cache buffers (Zero heap allocation in 50 Hz loop)
+    sensor_msgs::msg::JointState joint_state_msg_;
+    std::vector<JointStateData> joint_data_scratch_;
+    std::vector<double> leader_positions_scratch_;
+
+    // Timing & Metrics
     rclcpp::Time last_publish_time_{0, 0, RCL_ROS_TIME};
     double measured_rate_hz_{0.0};
 
     // ROS 2 Entities
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_pub_;
     rclcpp::TimerBase::SharedPtr loop_timer_;
-    rclcpp::TimerBase::SharedPtr telemetry_timer_;
     diagnostic_updater::Updater diagnostic_updater_;
   };
 

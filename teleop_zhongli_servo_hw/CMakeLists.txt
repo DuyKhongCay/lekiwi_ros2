@@ -19,6 +19,7 @@ pkg_check_modules(SERIAL REQUIRED libserial)
 
 add_library(teleop_zhongli_protocol SHARED
   src/zhongli_protocol.cpp
+  src/zhongli_bus_worker.cpp
   src/kinematic_remapper.cpp
   src/follower_dispatcher.cpp
 )
@@ -117,6 +118,11 @@ if(BUILD_TESTING)
   target_compile_features(test_kinematic_remapping PUBLIC cxx_std_20)
   target_include_directories(test_kinematic_remapping PRIVATE include)
   target_link_libraries(test_kinematic_remapping teleop_zhongli_protocol)
+
+  ament_add_gtest(test_bus_worker test/test_bus_worker.cpp)
+  target_compile_features(test_bus_worker PUBLIC cxx_std_20)
+  target_include_directories(test_bus_worker PRIVATE include)
+  target_link_libraries(test_bus_worker teleop_zhongli_protocol)
 endif()
 
 ament_export_targets(teleop_zhongli_servo_hwTargets HAS_LIBRARY_TARGET)

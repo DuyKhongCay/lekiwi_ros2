@@ -84,7 +84,7 @@ namespace
 int main(int argc, char **argv)
 {
   std::string port = "/dev/uarm_leader";
-  int baudrate = 115200;
+  int baudrate = teleop_zhongli_servo_hw::default_config::kBaudRate;
   std::string output_file = "uarm_teleop_calib.yaml";
   std::string follower_joints_file = "";
   std::string output_mapping_file = "";
@@ -133,7 +133,7 @@ int main(int argc, char **argv)
     {
       std::cout << "Usage: calibrate_uarm_node [options]\n"
                 << "  --port <device>            Serial port (default: /dev/uarm_leader)\n"
-                << "  --baud <rate>              Baudrate (default: 115200)\n"
+                << "  --baud <rate>              Baudrate (default: 1000000)\n"
                 << "  --out <filename>           Output unified calibration YAML (default: uarm_teleop_calib.yaml)\n"
                 << "  --follower-joints <file>   Follower joints config (e.g. lekiwi_arm_calib.yaml)\n"
                 << "  --mode <joint>=<mode>      Remap mode (direct, min_max, scale_offset, centered_scale)\n"
@@ -157,23 +157,16 @@ int main(int argc, char **argv)
 
   teleop_zhongli_servo_hw::ZhongliProtocol protocol;
   std::string error;
+  int negotiated_baud = baudrate;
 
-  std::cout << "[Connecting] Opening serial port " << port << "... ";
-  if (!protocol.open(port, baudrate, 50, &error))
+  std::cout << "[Connecting] Auto-negotiating serial link on " << port << " (target: " << baudrate << ")... ";
+  if (!protocol.auto_negotiate_and_open(port, baudrate, &negotiated_baud, 20, 300, &error))
   {
-    std::cerr << "\n[ERROR] Failed to open port: " << error << "\n";
+    std::cerr << "\n[ERROR] Connection and handshake failed: " << error << "\n";
     std::cerr << "Tip: Ensure device is connected and user has permission (dialout group).\n";
     return 1;
   }
-  std::cout << "OK\n";
-
-  std::cout << "[Handshake] Checking communication with leader arm board... ";
-  if (!protocol.handshake(5, &error))
-  {
-    std::cerr << "\n[ERROR] Handshake failed: " << error << "\n";
-    return 1;
-  }
-  std::cout << "OK\n";
+  std::cout << "OK (Connected at " << negotiated_baud << " baud)\n";
 
   std::cout << "[Torque] Releasing servo torques (#000PULK!) for free hand motion... ";
   protocol.disable_torque(0);
@@ -248,6 +241,8 @@ int main(int argc, char **argv)
     int max_pwm{1500};
     int current_pwm{1500};
     bool observed{false};
+    bool last_read_success{false};
+    uint32_t consecutive_timeouts{0};
   };
   std::unordered_map<uint8_t, RangeStats> stats;
   for (auto id : servo_ids)
@@ -260,6 +255,8 @@ int main(int argc, char **argv)
 
   auto last_print_time = std::chrono::steady_clock::now();
   const double deg_per_pwm = 270.0 / 2000.0;
+  const auto calib_period = std::chrono::duration<double>(1.0 / teleop_zhongli_servo_hw::default_config::kCalibPublishRateHz); // 20 Hz (50 ms)
+  auto next_cycle = std::chrono::steady_clock::now();
 
   // Clear screen once for dashboard
   std::cout << "\033[2J\033[H" << std::flush;
@@ -273,14 +270,16 @@ int main(int argc, char **argv)
       break;
     }
 
-    // Read all servos
+    // Read all configured servos
     for (auto id : servo_ids)
     {
       int pwm = 0;
+      auto &s = stats[id];
       if (protocol.read_servo_position(id, &pwm))
       {
-        auto &s = stats[id];
         s.current_pwm = pwm;
+        s.last_read_success = true;
+        s.consecutive_timeouts = 0;
         if (!s.observed)
         {
           s.min_pwm = pwm;
@@ -295,7 +294,12 @@ int main(int argc, char **argv)
             s.max_pwm = pwm;
         }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(3));
+      else
+      {
+        s.last_read_success = false;
+        s.consecutive_timeouts++;
+      }
+      std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 
     auto now = std::chrono::steady_clock::now();
@@ -305,38 +309,82 @@ int main(int argc, char **argv)
       std::ostringstream ss;
       ss << "\033[H";
       ss << "========================================================================================\n";
-      ss << "  uArm Leader Arm Calibration: Range of Motion Recording (LIVE DASHBOARD)               \n";
+      ss << "  uArm Leader Arm Calibration: Range of Motion Recording (LIVE DASHBOARD @ 20 Hz)       \n";
       ss << "========================================================================================\n";
-      ss << " ID | Joint Name      | Min PWM | Live PWM | Max PWM | Span PWM | Measured Angle Range  \n";
-      ss << "----+-----------------+---------+----------+---------+----------+-----------------------\n";
+      ss << " ID | Joint Name      | Min PWM | Live PWM   | Max PWM | Span PWM | Measured Angle Range\n";
+      ss << "----+-----------------+---------+------------+---------+----------+---------------------\n";
 
       for (auto id : servo_ids)
       {
         const auto &s = stats[id];
-        int span = s.max_pwm - s.min_pwm;
-        double min_deg = (s.min_pwm - 1500) * deg_per_pwm;
-        double max_deg = (s.max_pwm - 1500) * deg_per_pwm;
-        double live_deg = (s.current_pwm - 1500) * deg_per_pwm;
-
         ss << "  " << static_cast<int>(id) << " | "
-           << std::left << std::setw(15) << get_joint_label(id) << " | "
-           << std::right << std::setw(7) << s.min_pwm << " | "
-           << std::setw(8) << s.current_pwm << " | "
-           << std::setw(7) << s.max_pwm << " | "
-           << std::setw(8) << span << " | ["
-           << std::fixed << std::setprecision(1)
-           << std::setw(5) << min_deg << "°.."
-           << std::setw(5) << max_deg << "°] ("
-           << std::setw(5) << live_deg << "°)\n";
+           << std::left << std::setw(15) << get_joint_label(id) << " | ";
+
+        if (s.observed)
+        {
+          ss << std::right << std::setw(7) << s.min_pwm << " | ";
+        }
+        else
+        {
+          ss << std::right << std::setw(7) << "---" << " | ";
+        }
+
+        if (s.last_read_success)
+        {
+          ss << std::right << std::setw(10) << s.current_pwm << " | ";
+        }
+        else
+        {
+          ss << "\033[31m" << std::setw(10) << "[TIMEOUT]" << "\033[0m | ";
+        }
+
+        if (s.observed)
+        {
+          int span = s.max_pwm - s.min_pwm;
+          double min_deg = (s.min_pwm - 1500) * deg_per_pwm;
+          double max_deg = (s.max_pwm - 1500) * deg_per_pwm;
+          double live_deg = (s.current_pwm - 1500) * deg_per_pwm;
+
+          ss << std::right << std::setw(7) << s.max_pwm << " | "
+             << std::setw(8) << span << " | ["
+             << std::fixed << std::setprecision(1)
+             << std::setw(5) << min_deg << "°.."
+             << std::setw(5) << max_deg << "°]";
+
+          if (s.last_read_success)
+          {
+            ss << " (" << std::setw(5) << live_deg << "°)\n";
+          }
+          else
+          {
+            ss << " \033[31m(OFFLINE)\033[0m\n";
+          }
+        }
+        else
+        {
+          ss << std::right << std::setw(7) << "---" << " | "
+             << std::setw(8) << "---" << " | [  NO SIGNAL  ]\n";
+        }
       }
 
       ss << "========================================================================================\n";
-      ss << " Status: RECORDING ACTIVE... Move all arm joints freely!                                \n";
+      ss << " Status: RECORDING ACTIVE (20 Hz)... Move arm through its full physical range of motion \n";
       ss << " Instructions: Press [ENTER] when finished.                                             \n";
       ss << "\033[0J"; // Clear remainder of screen below
 
       std::cout << ss.str() << std::flush;
       last_print_time = now;
+    }
+
+    // Drift-free 20 Hz pacing (50 ms period)
+    next_cycle += std::chrono::duration_cast<std::chrono::nanoseconds>(calib_period);
+    if (std::chrono::steady_clock::now() < next_cycle && !g_stop_recording)
+    {
+      std::this_thread::sleep_until(next_cycle);
+    }
+    else
+    {
+      next_cycle = std::chrono::steady_clock::now();
     }
   }
 

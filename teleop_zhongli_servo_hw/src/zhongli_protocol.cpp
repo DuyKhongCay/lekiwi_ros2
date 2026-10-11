@@ -46,41 +46,31 @@ namespace teleop_zhongli_servo_hw
     {
       return false;
     }
-    switch (baudrate)
+    if (baudrate == 1000000)
     {
-    case 9600:
-      *out = LibSerial::BaudRate::BAUD_9600;
-      return true;
-    case 19200:
-      *out = LibSerial::BaudRate::BAUD_19200;
-      return true;
-    case 38400:
-      *out = LibSerial::BaudRate::BAUD_38400;
-      return true;
-    case 57600:
-      *out = LibSerial::BaudRate::BAUD_57600;
-      return true;
-    case 115200:
-      *out = LibSerial::BaudRate::BAUD_115200;
-      return true;
-    case 1000000:
       *out = LibSerial::BaudRate::BAUD_1000000;
       return true;
-    default:
-      return false;
     }
+    if (baudrate == 115200)
+    {
+      *out = LibSerial::BaudRate::BAUD_115200;
+      return true;
+    }
+    return false;
   }
 
   bool ZhongliProtocol::open(
       const std::string &port_name,
       const int baudrate,
       const int timeout_ms,
+      const int command_delay_us,
       std::string *error)
   {
+    std::lock_guard<std::mutex> lock(serial_mutex_);
     LibSerial::BaudRate serial_baud{};
-    if (!baudrate_to_libserial(baudrate, &serial_baud) || timeout_ms <= 0)
+    if (!baudrate_to_libserial(baudrate, &serial_baud) || timeout_ms <= 0 || command_delay_us < 0)
     {
-      set_error(error, "Unsupported baudrate or invalid timeout_ms");
+      set_error(error, "Unsupported baudrate (must be 1000000 or 115200) or invalid timeout/delay parameters");
       return false;
     }
 
@@ -105,9 +95,17 @@ namespace teleop_zhongli_servo_hw
       serial_port_.SetCharacterSize(LibSerial::CharacterSize::CHAR_SIZE_8);
       serial_port_.SetParity(LibSerial::Parity::PARITY_NONE);
       serial_port_.SetStopBits(LibSerial::StopBits::STOP_BITS_1);
+      serial_port_.SetFlowControl(LibSerial::FlowControl::FLOW_CONTROL_NONE);
+
+      // Hardware Settling Time:
+      // USB-Serial bridges (PL2303, CH340, CP2102) toggle DTR on open(), causing an MCU reset.
+      // Allow 1200 ms for bootloader / board firmware to finish boot sequence before bus I/O.
+      std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+
       serial_port_.FlushInputBuffer();
       serial_port_.FlushOutputBuffer();
       timeout_ms_ = timeout_ms;
+      command_delay_us_ = command_delay_us;
       return true;
     }
     catch (const std::exception &e)
@@ -127,8 +125,98 @@ namespace teleop_zhongli_servo_hw
     }
   }
 
+  bool ZhongliProtocol::auto_negotiate_and_open(
+      const std::string &port_name,
+      int target_baudrate,
+      int *negotiated_baudrate,
+      int timeout_ms,
+      int command_delay_us,
+      std::string *error)
+  {
+    if (negotiated_baudrate == nullptr)
+    {
+      set_error(error, "negotiated_baudrate pointer is null");
+      return false;
+    }
+
+    // Step 1: Probe target baudrate (e.g. 1 Mbps)
+    const int probe_1m_timeout = (target_baudrate == 1000000) ? default_config::kTimeoutMs1M : timeout_ms;
+    if (open(port_name, target_baudrate, probe_1m_timeout, command_delay_us, error))
+    {
+      if (handshake(2, nullptr))
+      {
+        *negotiated_baudrate = target_baudrate;
+        timeout_ms_ = default_config::kTimeoutMs1M;
+        command_delay_us_ = default_config::kCommandDelayUs1M;
+        return true;
+      }
+      close();
+    }
+
+    // Step 2: Fallback probe at 115200 baud with safe margin timeout (70 ms)
+    const int fallback_timeout = default_config::kTimeoutMs115200;
+    const int fallback_delay_us = default_config::kCommandDelayUs115200;
+    if (!open(port_name, 115200, fallback_timeout, fallback_delay_us, error))
+    {
+      return false;
+    }
+
+    if (!handshake(3, error))
+    {
+      close();
+      set_error(error, "Handshake failed at both target rate and 115200 fallback");
+      return false;
+    }
+
+    // If target was 115200 or not 1000000, we are done
+    if (target_baudrate != 1000000)
+    {
+      *negotiated_baudrate = 115200;
+      timeout_ms_ = fallback_timeout;
+      command_delay_us_ = fallback_delay_us;
+      return true;
+    }
+
+    // Step 3: Attempt to upgrade board to 1 Mbps via #000PBD5!
+    std::string rx;
+    std::string upgrade_err;
+    (void)send_and_receive("#000PBD5!", &rx, &upgrade_err);
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    close();
+
+    // Re-open at target baudrate (1000000)
+    if (open(port_name, target_baudrate, default_config::kTimeoutMs1M, default_config::kCommandDelayUs1M, error))
+    {
+      if (handshake(2, nullptr))
+      {
+        *negotiated_baudrate = target_baudrate;
+        timeout_ms_ = default_config::kTimeoutMs1M;
+        command_delay_us_ = default_config::kCommandDelayUs1M;
+        return true;
+      }
+      close();
+    }
+
+    // If 1 Mbps re-handshake fails, reconnect reliably at 115200 with adaptive timeout (70 ms)
+    if (open(port_name, 115200, fallback_timeout, fallback_delay_us, error))
+    {
+      if (handshake(3, error))
+      {
+        *negotiated_baudrate = 115200;
+        timeout_ms_ = fallback_timeout;
+        command_delay_us_ = fallback_delay_us;
+        return true;
+      }
+      close();
+    }
+
+    set_error(error, "Auto-negotiation failed to establish stable communication");
+    return false;
+  }
+
   void ZhongliProtocol::close() noexcept
   {
+    std::lock_guard<std::mutex> lock(serial_mutex_);
     try
     {
       if (serial_port_.IsOpen())
@@ -141,8 +229,24 @@ namespace teleop_zhongli_servo_hw
     }
   }
 
+  void ZhongliProtocol::flush_input() noexcept
+  {
+    std::lock_guard<std::mutex> lock(serial_mutex_);
+    try
+    {
+      if (serial_port_.IsOpen())
+      {
+        serial_port_.FlushInputBuffer();
+      }
+    }
+    catch (...)
+    {
+    }
+  }
+
   bool ZhongliProtocol::is_open() const noexcept
   {
+    std::lock_guard<std::mutex> lock(serial_mutex_);
     return serial_port_.IsOpen();
   }
 
@@ -151,7 +255,8 @@ namespace teleop_zhongli_servo_hw
       std::string *response,
       std::string *error)
   {
-    if (!is_open())
+    std::lock_guard<std::mutex> lock(serial_mutex_);
+    if (!serial_port_.IsOpen())
     {
       set_error(error, "Serial port is not open");
       return false;
@@ -169,7 +274,6 @@ namespace teleop_zhongli_servo_hw
       }
 
       response->clear();
-      std::string rx_chunk;
       const auto start = std::chrono::steady_clock::now();
 
       while (true)
@@ -184,21 +288,27 @@ namespace teleop_zhongli_servo_hw
         }
 
         const size_t remaining_ms = static_cast<size_t>(timeout_ms_ - elapsed_ms);
+        uint8_t byte = 0;
         try
         {
-          serial_port_.Read(rx_chunk, 1, remaining_ms);
-          if (!rx_chunk.empty())
+          serial_port_.ReadByte(byte, remaining_ms);
+
+          // Discard leading noise bytes (0xFF, line-floating artifacts, nulls) before header '#'
+          if (response->empty() && byte != '#')
           {
-            *response += rx_chunk;
-            if (response->back() == '!')
-            {
-              return true;
-            }
+            continue;
+          }
+
+          response->push_back(static_cast<char>(byte));
+          if (byte == '!')
+          {
+            return true;
           }
         }
         catch (const LibSerial::ReadTimeout &)
         {
-          // Loop will exit on deadline expiration
+          set_error(error, "Serial transaction read timed out");
+          return false;
         }
       }
     }
@@ -217,12 +327,12 @@ namespace teleop_zhongli_servo_hw
     {
       if (send_and_receive("#000PVER!", &rx, &err))
       {
-        if (rx.find("PV") != std::string::npos || rx.find("!") != std::string::npos)
+        if (parse_version_response(rx))
         {
           return true;
         }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     set_error(error, "Handshake failed after " + std::to_string(max_retries) + " attempts: " + err);
     return false;
@@ -247,18 +357,24 @@ namespace teleop_zhongli_servo_hw
     {
       return false;
     }
-    // Give servo firmware EEPROM time to commit midpoint
-    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    // Give servo firmware EEPROM time to commit midpoint into non-volatile Flash
+    std::this_thread::sleep_for(std::chrono::milliseconds(default_config::kEepromCommitDelayMs));
 
-    // Verify calibration by reading back present position (should be ~1500)
+    // Re-release torque immediately: servo firmware re-enables torque on #PSCK!
+    (void)disable_torque(servo_id, nullptr);
+
+    // Verify calibration by reading back present position (must be ~1500 +/- 25)
     int verified_pwm = 0;
     std::string read_err;
-    if (read_servo_position(servo_id, &verified_pwm, &read_err))
+    if (!read_servo_position(servo_id, &verified_pwm, &read_err))
     {
-      if (std::abs(verified_pwm - 1500) <= 25)
-      {
-        return true;
-      }
+      set_error(error, "Verification read failed after midpoint lock: " + read_err);
+      return false;
+    }
+    if (std::abs(verified_pwm - 1500) > 25)
+    {
+      set_error(error, "Calibration offset outside tolerance: " + std::to_string(verified_pwm) + " != 1500 +/- 25");
+      return false;
     }
     return true;
   }
@@ -409,14 +525,14 @@ namespace teleop_zhongli_servo_hw
     {
       return false;
     }
-    // Pattern: #<ID:03d>P<PWM:4+ digits>!  e.g. "#001P1500!"
+    // Pattern: #<ID>P<PWM>!  e.g. "#001P1500!" or "#001P500!"
     const size_t hash_pos = response.find('#');
     if (hash_pos == std::string_view::npos)
     {
       return false;
     }
     std::string_view sub = response.substr(hash_pos);
-    if (sub.size() < 10 || sub[0] != '#')
+    if (sub.size() < 6 || sub[0] != '#')
     {
       return false;
     }
@@ -435,14 +551,14 @@ namespace teleop_zhongli_servo_hw
     }
 
     const size_t bang_pos = sub.find('!', p_pos);
-    if (bang_pos == std::string_view::npos)
+    if (bang_pos == std::string_view::npos || bang_pos <= p_pos + 1)
     {
       return false;
     }
 
     int pwm_val = 0;
     auto res_pwm = std::from_chars(sub.data() + p_pos + 1, sub.data() + bang_pos, pwm_val);
-    if (res_pwm.ec != std::errc())
+    if (res_pwm.ec != std::errc() || pwm_val < 0)
     {
       return false;
     }
@@ -502,6 +618,16 @@ namespace teleop_zhongli_servo_hw
   bool ZhongliProtocol::parse_ok_response(std::string_view response)
   {
     return response.find("#OK!") != std::string_view::npos;
+  }
+
+  bool ZhongliProtocol::parse_version_response(std::string_view response)
+  {
+    // The hardware board responds with e.g.:
+    // "#000@ ZL-ZServo_AD_CBM V2.1.16STG!\r\n" or "#000PV2.1!"
+    return (response.find("ZL-ZServo") != std::string_view::npos ||
+            response.find("V2.") != std::string_view::npos ||
+            response.find("PV") != std::string_view::npos ||
+            response.find("#000@") != std::string_view::npos);
   }
 
   // --- Kinematic Math Implementation ---
