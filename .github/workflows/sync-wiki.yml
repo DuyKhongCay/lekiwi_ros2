@@ -33,20 +33,17 @@ jobs:
         with:
           path: source
 
-      - name: Resolve Wiki authentication token
+      - name: Validate and resolve Wiki authentication token
         id: auth
         env:
           CUSTOM_PAT: ${{ secrets.WIKI_SYNC_TOKEN }}
-          DEFAULT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Use WIKI_SYNC_TOKEN (PAT) if provided, otherwise fall back to GITHUB_TOKEN
-          if [ -n "$CUSTOM_PAT" ]; then
-            echo "Using repository secret WIKI_SYNC_TOKEN for Wiki authentication."
-            echo "token=$CUSTOM_PAT" >> "$GITHUB_OUTPUT"
-          else
-            echo "WIKI_SYNC_TOKEN not found. Falling back to GITHUB_TOKEN."
-            echo "token=$DEFAULT_TOKEN" >> "$GITHUB_OUTPUT"
+          if [ -z "$CUSTOM_PAT" ]; then
+            echo "::error::Secret WIKI_SYNC_TOKEN not found! GitHub Wiki (.wiki.git) strictly requires a Personal Access Token (classic) with 'repo' scope. Default GITHUB_TOKEN is rejected by GitHub with HTTP 403."
+            echo "Please create a Personal Access Token (classic) with 'repo' scope and add it to Repository Secrets as WIKI_SYNC_TOKEN."
+            exit 1
           fi
+          echo "token=$CUSTOM_PAT" >> "$GITHUB_OUTPUT"
 
       - name: Checkout Wiki repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -65,7 +62,7 @@ jobs:
       - name: Commit and push changes to GitHub Wiki
         working-directory: wiki
         env:
-          GITHUB_ACTOR: ${{ github.actor }}
+          WIKI_TOKEN: ${{ steps.auth.outputs.token }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
           git config --local user.name "github-actions[bot]"
@@ -80,6 +77,9 @@ jobs:
           echo "📝 Changes detected. Staging and committing..."
           git add -A
           git commit -m "docs: sync documentation from commit ${COMMIT_SHA:0:7} [skip ci]"
+
+          # Explicitly set authenticated remote URL with token for pushing
+          git remote set-url origin "https://x-access-token:${WIKI_TOKEN}@github.com/${{ github.repository }}.wiki.git"
           git push origin master
           echo "🚀 Successfully synced documentation to GitHub Wiki!"
 
