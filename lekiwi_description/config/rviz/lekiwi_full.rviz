@@ -18,8 +18,8 @@ Panels:
         - "/3D Chessboard & Pieces1/Topic1"
         - /Robot Mission Status HUD1
         - /Robot Mission Status HUD1/Topic1
+        - /Left Camera1
         - /Left Camera1/Topic1
-        - /Right Camera1
         - /Right Camera1/Topic1
         - /Side Camera1
         - /Image1/Topic1
@@ -182,8 +182,6 @@ Visualization Manager:
           Value: false
         gripperframe:
           Value: false
-        handeye_target:
-          Value: true
         icm20948_imu:
           Value: true
         lower_arm:
@@ -221,6 +219,33 @@ Visualization Manager:
         map:
           chessboard_frame:
             {}
+          odom:
+            base_footprint:
+              baseframe:
+                {}
+              icm20948_imu:
+                {}
+              omniwheel_7:
+                {}
+              omniwheel_8:
+                {}
+              omniwheel_9:
+                {}
+              rotation_pitch:
+                side_camera_optical:
+                  {}
+                upper_arm:
+                  lower_arm:
+                    wrist:
+                      gripper:
+                        gripperframe:
+                          {}
+                        moving_jaw_so101_v1:
+                          {}
+                        wrist_camera_optical:
+                          {}
+              stereo_left_optical:
+                {}
       Update Interval: 0
       Value: true
     - Acceleration properties:
@@ -294,7 +319,10 @@ Visualization Manager:
       Enabled: true
       Name: Chessboard AprilTag Markers
       Namespaces:
-        {}
+        chessboard/gridlines: true
+        chessboard/labels: true
+        chessboard/squares: true
+        chessboard/tags: true
       Topic:
         Depth: 5
         Durability Policy: Transient Local
@@ -318,7 +346,7 @@ Visualization Manager:
       Enabled: true
       Name: "3D Chessboard & Pieces"
       Namespaces:
-        {}
+        chess/pieces: true
       Topic:
         Depth: 10
         Durability Policy: Transient Local
@@ -454,51 +482,51 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.1469237804412842
+      Distance: 2.235285758972168
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.027257679030299187
-        Y: 0.3221743702888489
-        Z: -0.32218635082244873
+        X: -0.3977496922016144
+        Y: 0.38799968361854553
+        Z: 0.02591477520763874
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6297961473464966
+      Pitch: 0.5397962331771851
       Target Frame: base_footprint
       Value: Orbit (rviz)
-      Yaw: 5.28856897354126
+      Yaw: 5.623568534851074
     Saved: ~
 Window Geometry:
   Displays:
-    collapsed: false
-  Height: 749
+    collapsed: true
+  Height: 1011
   Hide Left Dock: false
-  Hide Right Dock: false
+  Hide Right Dock: true
   Image:
     collapsed: false
   Left Camera:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd00000002000000000000030300000287fc020000000afb0000001800570072006900730074002000430061006d0065007200610000000043000000bb0000001b00fffffffb00000016004c006500660074002000430061006d00650072006101000000430000023d0000001b00fffffffb0000001800520069006700680074002000430061006d00650072006100000001be000001b30000001b00fffffffb0000000c00430061006d0065007200610100000043000003430000000000000000fb0000000a0049006d00610067006500000001ab000000d50000001b00fffffffb0000002e00530074006500720065006f005f006c006500660074002000430061006c006900620072006100740069006f006e01000000430000027b0000000000000000fb0000002e00530074006500720065006f005f006c006500660074002000430061006c006900620072006100740069006f006e0100000043000003430000000000000000fb0000000800540069006d00650100000286000000440000004400fffffffb0000000a0049006d0061006700650000000308000000c80000000000000000fb000000160053006900640065002000430061006d0065007200610000000304000000cc0000001b00ffffff000000010000027100000287fc0200000004fb0000000a005600690065007700730100000043000000b5000000b500fffffffb000000100044006900730070006c00610079007301000000fe000000fe000000d400fffffffb0000001200530065006c0065006300740069006f006e0100000202000000610000006100fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000269000000610000006100ffffff000000200000028700000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000200000000000003030000038dfc020000000afb0000001800570072006900730074002000430061006d0065007200610000000043000000bb0000001b00fffffffb00000016004c006500660074002000430061006d0065007200610100000043000003270000001b00fffffffb0000001800520069006700680074002000430061006d00650072006100000001be000001b30000001b00fffffffb0000000c00430061006d0065007200610100000043000003430000000000000000fb0000000a0049006d00610067006500000001ab000000d50000001b00fffffffb0000002e00530074006500720065006f005f006c006500660074002000430061006c006900620072006100740069006f006e01000000430000027b0000000000000000fb0000002e00530074006500720065006f005f006c006500660074002000430061006c006900620072006100740069006f006e0100000043000003430000000000000000fb0000000800540069006d00650100000370000000600000004400fffffffb0000000a0049006d0061006700650000000308000000c80000000000000000fb000000160053006900640065002000430061006d0065007200610000000304000000cc0000001b00ffffff000000010000027100000287fc0200000004fb0000000a005600690065007700730000000043000000b5000000b500fffffffb000000100044006900730070006c00610079007300000000fe000000fe000000d400fffffffb0000001200530065006c0065006300740069006f006e0000000202000000610000006100fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730000000269000000610000006100ffffff000004770000038d00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Right Camera:
     collapsed: false
   Selection:
-    collapsed: false
+    collapsed: true
   Side Camera:
     collapsed: false
   Time:
     collapsed: false
   Tool Properties:
-    collapsed: false
+    collapsed: true
   Views:
-    collapsed: false
-  Width: 1440
+    collapsed: true
+  Width: 1920
   Wrist Camera:
     collapsed: false
-  X: 460
-  Y: 57
+  X: 0
+  Y: 32
