@@ -57,7 +57,7 @@ def generate_launch_description():
             description="Use simulation clock if true",
         ),
         DeclareLaunchArgument(
-            "enable_ekf",
+            "localization",
             default_value="true",
             description="Start robot_localization EKF odometry fusion",
         ),
@@ -217,10 +217,9 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "enable_ekf": LaunchConfiguration("enable_ekf"),
             "use_mag": "false",
         }.items(),
-        condition=IfCondition(LaunchConfiguration("enable_ekf")),
+        condition=IfCondition(LaunchConfiguration("localization")),
     )
 
     chess_master = IncludeLaunchDescription(

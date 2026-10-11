@@ -1,0 +1,35 @@
+sequenceDiagram
+    autonumber
+    participant RobotSensors as Cameras & Servo HW
+    participant ClientNode as async_ros2_client_node (Pi5)
+    participant ActionQueue as Action Buffer & Aggregator
+    participant ZmqTrans as ZMQ Socket (Wi-Fi)
+    participant PolicyServer as lerobot_policy_server (GPU)
+    participant ArmController as arm_forward_controller (50Hz)
+
+    rect rgb(240, 248, 255)
+        note over RobotSensors, ArmController: Phase 1: Asynchronous Remote Inference Loop
+        RobotSensors->>ClientNode: New Frame (JPEG) & JointState (t_0)
+        ClientNode->>ZmqTrans: Send Observation Payload (msgpack + bytes)
+        ZmqTrans->>PolicyServer: ZMQ REQ over Wi-Fi (~5-15ms network latency)
+        
+        loop Deterministic Robot Control Loop (every 20ms / 50Hz)
+            ActionQueue->>ArmController: Pop interpolated action a(t)
+            ArmController->>RobotSensors: Command 6 Feetech Servos
+        end
+
+        PolicyServer->>PolicyServer: GPU CUDA Forward Pass (ACT ~12ms)
+        PolicyServer-->>ZmqTrans: Predicted Action Chunk (K=100 steps)
+        ZmqTrans-->>ClientNode: ZMQ REP Reply
+        ClientNode->>ActionQueue: Ingest & Apply Weighted Moving Average Smoothing
+    end
+
+    rect rgb(255, 245, 238)
+        note over RobotSensors, ArmController: Phase 3: Ultra-Low Latency Edge Hailo-8 NPU Loop
+        RobotSensors->>ClientNode: Intra-process Image & JointState (Zero-Copy)
+        ClientNode->>ClientNode: Direct DMA Transfer to Hailo-8 NPU via HailoRT
+        note over ClientNode: Hailo-8 INT8 ACT Compute (~8ms, 0ms network jitter)
+        ClientNode->>ActionQueue: Direct local action chunk update
+        ActionQueue->>ArmController: Smooth deterministic continuous motion
+    end
+

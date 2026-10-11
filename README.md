@@ -1,211 +1,188 @@
-# LeKiwi ROS 2 Workspace
+# LeKiwi ROS 2: Autonomous Mobile Manipulator & Physical-AI Platform
 
-[![ROS 2](https://img.shields.io/badge/ROS_2-Humble%20%7C%20Jazzy-22314E.svg?logo=ros)](https://docs.ros.org/)
-[![C++](https://img.shields.io/badge/C++-17-00599C.svg?logo=c%2B%2B)](https://en.cppreference.com/)
-[![Python](https://img.shields.io/badge/Python-3.10%2B%20%7C%203.12-3776AB.svg?logo=python)](https://www.python.org/)
-[![HailoRT](https://img.shields.io/badge/HailoRT-8%2F8L%20NPU-brightgreen.svg)](https://hailo.ai/)
-[![LeRobot](https://img.shields.io/badge/Physical--AI-LeRobot%20v3.0-orange.svg)](https://github.com/huggingface/lerobot)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+<div align="center">
 
-Production ROS 2 workspace for the **LeKiwi Robot**: an autonomous mobile manipulation platform featuring an omnidirectional 3-wheel base, a 6-DoF robotic arm, stereo perception with Hailo-8/8L NPU acceleration, autonomous chess game playing with Stockfish FSM integration, native LeRobot imitation learning policy serving via ZeroMQ, and high-performance `ros2_control` hardware abstraction.
+[![English](https://img.shields.io/badge/Language-English-blue.svg)](README.md)
+[![Tiếng Việt](https://img.shields.io/badge/Ngôn_ngữ-Tiếng_Việt-red.svg)](README.vi.md)
+[![ROS 2](https://img.shields.io/badge/ROS_2-Jazzy%20%7C%20Humble-22314E.svg?logo=ros)](https://docs.ros.org/)
+[![Hardware](https://img.shields.io/badge/Hardware-Raspberry%20Pi%205-C51A4A.svg?logo=raspberrypi)](https://www.raspberrypi.com/)
+[![HailoRT](https://img.shields.io/badge/NPU-Hailo--8%2F8L%2026TOPS-00A651.svg)](https://hailo.ai/)
+[![Physical-AI](https://img.shields.io/badge/Physical--AI-LeRobot%20v3.0-FF6F00.svg)](https://github.com/huggingface/lerobot)
+[![Middleware](https://img.shields.io/badge/Middleware-Zenoh%20RMW-black.svg)](https://zenoh.io/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
+
+**[English](README.md)** | **[Tiếng Việt](README.vi.md)**
+
+<p align="center">
+  <em>An open-source desktop autonomous mobile manipulator integrating holonomic omni-drive, 6-DoF precision manipulation, real-time edge AI perception, autonomous chess play, and state-of-the-art imitation learning.</em>
+</p>
+
+</div>
 
 ---
 
-## 🏛️ System Architecture
+> [!IMPORTANT]
+> ### 📚 Comprehensive Technical Documentation & Wiki Portal
+> This README provides a high-level showcase, project vision, and quick-start entrypoints. For the complete engineering handbook — including **System Architecture deep-dives, 15 Active Packages catalog, custom ROS 2 Action/Service contracts, hardware pinout specs, calibration workflows, and distributed container setup** — visit our project Wiki:
+> 
+> 👉 **[Explore the LeKiwi Project GitHub Wiki](https://github.com/DuyKhongCay/lekiwi_ros2/wiki)**
 
-The following diagram illustrates the complete runtime architecture, from sensor ingestion and Hailo NPU inference to Stockfish decision-making, motion feasibility verification, LeRobot policy execution, and low-level motor actuation.
+---
 
-```mermaid
-flowchart TD
-    subgraph SENSORS["Perception & Sensors"]
-        CAM["Dual CSI Cameras (IMX219 / IMX708)"] -->|GStreamer / v4l2| PERCEPT["lekiwi_perception\n(Camera Hub & Lifecycle)"]
-        PERCEPT -->|HailoRT / NPU| YOLO["YOLO Chessboard & Piece Detection"]
-        IMU_DEV["ICM-20948 (I2C /dev/i2c-1)"] --> IMU_HW["lekiwi_icm20948_hardware\n(ros2_control SensorInterface)"]
-    end
+## 🌟 Project Vision & Highlights
 
-    subgraph DECISION["Decision & Orchestration"]
-        YOLO -->|FEN String / State| CHESS["lekiwi_chess_master\n(Stockfish 16 Engine Node)"]
-        CHESS -->|ComputeBestMove Action| ORCH["lekiwi_orchestrator\n(Mission FSM & Readiness Gate)"]
-        ORCH -->|/camera_mode Service| PERCEPT
-    end
+**LeKiwi** is an integrated autonomous mobile manipulation robotics platform designed to bridge physical robotics with modern **Physical-AI (Imitation Learning & VLA policies)** and **High-Performance Edge AI**. Built around a 3-wheel holonomic omnidirectional chassis and a 6-DoF serial arm, LeKiwi demonstrates complex real-world interaction through autonomous chess gameplay against human players.
 
-    subgraph PLANNING["Planning & Policy Serving"]
-        ORCH -->|ExecuteChessMove Action| MANIP["lekiwi_manipulation\n(Action Server & Trajectory)"]
-        MANIP -->|CheckMoveFeasibility Srv| MOTION["lekiwi_motion\n(Workspace IK & Feasibility Checker)"]
-        MANIP <-->|ZeroMQ REQ/REP| POL_SRV["lerobot_policy_server\n(SmolVLA / ACT / Diffusion Policy)"]
-    end
-
-    subgraph CONTROL["Execution & Hardware Control"]
-        MANIP -->|Trajectory / Joint Cmds| CM["ros2_control Controller Manager\n(Joint Trajectory Controller)"]
-        CM --> FT_HW["lekiwi_ftservo_hardware\n(SystemInterface - 1 Mbps Serial Bus)"]
-        FT_HW -->|Async Serial I/O /dev/lekiwi_serial| SERVOS["9x Feetech STS3215 Servos\n(6-DoF Arm + 3-Wheel Omni Base)"]
-        IMU_HW -->|/imu/data_raw| CM
-    end
-
-    subgraph TELEOP_DATA["Teleoperation & Physical-AI Pipeline"]
-        GAMEPAD["Gamepad Controller"] --> RECORDER["chess_episode_recorder\n(D-Pad Controlled MCAP Bag)"]
-        TELEOP_ARM["Zhongli Leader Arm"] --> TELEOP_HW["teleop_zhongli_servo_hw\n(Serial Bus Driver & Remapper)"]
-        TELEOP_HW --> CM
-        RECORDER --> CONVERTER["chess_rosbag_to_lerobot\n(Dataset Exporter to LeRobot v3.0)"]
-    end
+```
+       [ Dual CSI Cameras ]                 [ 9x Feetech STS3215 Servos ]
+                │                                         │
+                ▼                                         ▼
+   ┌───────────────────────────┐             ┌───────────────────────────┐
+   │    Hailo-8 M.2 NPU HAT    │             │   ros2_control Hardware   │
+   │  Stereo Vision & 26 TOPS  │             │ 1 Mbps Async Serial Bus   │
+   └─────────────┬─────────────┘             └─────────────▲─────────────┘
+                 │                                         │
+                 ▼                                         │
+   ┌───────────────────────────────────────────────────────┴─────────────┐
+   │            LeKiwi Autonomous Orchestrator & Mission FSM             │
+   │      Stockfish 16 Engine  ◄──►  ZeroMQ LeRobot Policy Server        │
+   └─────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## 📦 Active Packages Catalog
-
-The workspace consists of 15 active packages organized by operational domain:
-
-### 1. Core Orchestration & Game Decision
-
-| Package | Language / Type | Description |
-| :--- | :---: | :--- |
-| [`lekiwi_orchestrator`](lekiwi_orchestrator/) | Python / `rclpy` | High-level autonomous chess mission orchestrator FSM, readiness-gated navigation startup, and dynamic camera mode switching. |
-| [`lekiwi_chess_master`](lekiwi_chess_master/) | C++ | Chess game state tracking, FEN string generation, and Stockfish action server implementing `ComputeBestMove.action`. |
-
-### 2. Motion Planning & Physical-AI Policy Serving
-
-| Package | Language / Type | Description |
-| :--- | :---: | :--- |
-| [`lekiwi_manipulation`](lekiwi_manipulation/) | Python / `rclpy` | Cartesian trajectory planning, pick-and-place execution, `ExecuteChessMove.action` server, and ZeroMQ policy client bridge. |
-| [`lekiwi_motion`](lekiwi_motion/) | C++ | Kinematics feasibility checker, workspace reachability validation, system readiness gating, and torque management state. |
-| [`lerobot_policy_server`](lerobot_policy_server/) | Python / ZeroMQ | High-throughput ZeroMQ inference server bridging LeRobot physical-AI policies (ACT, Diffusion, SmolVLA) with ROS 2. |
-
-### 3. Perception & Sensor Hub
-
-| Package | Language / Type | Description |
-| :--- | :---: | :--- |
-| [`lekiwi_perception`](lekiwi_perception/) | C++ Components | Lifecycle-managed dual CSI camera hub, dynamic GStreamer valve control, Hailo-8/8L NPU YOLO inference, and chessboard detection. |
-
-### 4. Hardware Abstraction & Teleoperation
-
-| Package | Language / Type | Description |
-| :--- | :---: | :--- |
-| [`lekiwi_ftservo_hardware`](lekiwi_ftservo_hardware/) | C++ `ros2_control` | `SystemInterface` hardware plugin for 9 Feetech STS3215 servos over a 1 Mbps serial bus with dedicated asynchronous I/O thread. |
-| [`lekiwi_icm20948_hardware`](lekiwi_icm20948_hardware/) | C++ `ros2_control` | `SensorInterface` hardware plugin for ICM-20948 9-DoF IMU communicating over hardware I2C (`/dev/i2c-1`). |
-| [`teleop_zhongli_servo_hw`](teleop_zhongli_servo_hw/) | C++ Driver | Dedicated protocol driver, calibration CLI, and joint publisher for Zhongli / uArm leader teleoperation arms. |
-
-### 5. System Composition, Kinematics & Interfaces
-
-| Package | Language / Type | Description |
-| :--- | :---: | :--- |
-| [`lekiwi_interfaces`](lekiwi_interfaces/) | Custom IDL | Custom ROS 2 Actions (`ComputeBestMove`, `ExecuteChessMove`), Services (`SetCamMode`, `CheckMoveFeasibility`), and Messages. |
-| [`lekiwi_description`](lekiwi_description/) | URDF / Xacro | Kinematic robot description, CAD STL meshes, joint limits, transmissions, and `ros2_control` hardware tags. |
-| [`lekiwi_bringup`](lekiwi_bringup/) | Launch & Config | Master launch compositions (`robot.launch.py`), controller parameters, udev rules, and diagnostic monitors. |
-
-### 6. Calibration & Physical-AI Dataset Pipeline
-
-| Package | Language / Type | Description |
-| :--- | :---: | :--- |
-| [`lekiwi_calibration`](lekiwi_calibration/) | Python / OpenCV | Unified calibration suite: Chessboard AprilTag bundle adjustment, Hand-Eye calibration, and Omni Base kinematics tuning. |
-| [`chess_episode_recorder`](chess_episode_recorder/) | C++ / ROS 2 | Real-time episode recorder for LeKiwi Chess Physical-AI with Gamepad D-Pad workflow and lossless MCAP storage. |
-| [`chess_rosbag_to_lerobot`](chess_rosbag_to_lerobot/) | Python / LeRobot | Converter pipeline transforming LeKiwi MCAP rosbags into standard HuggingFace LeRobot v3.0 dataset formats. |
+### Core Capabilities
+* **♟️ Autonomous Game Intelligence:** End-to-end autonomous chess playing powered by the Stockfish 16 chess engine, dynamic FSM mission orchestration, and visual board state verification.
+* **⚡ Accelerated Edge Perception:** Real-time dual CSI stereo vision and YOLO neural inference running at 30+ FPS via the Raspberry Pi 5 Hailo-8 M.2 NPU HAT+.
+* **🤖 Precision Manipulation & Control:** 6-DoF robotic arm driven by 9 smart Feetech STS3215 bus servos via an asynchronous `ros2_control` hardware abstraction layer at 1 Mbps.
+* **🦾 Physical-AI Imitation Learning:** Native streaming bridge connecting LeRobot policy models (ACT, Diffusion Policy, SmolVLA) with ROS 2 via ZeroMQ binary transport.
+* **🌐 Zero-Multicast Distributed Networking:** Clean edge deployment on Raspberry Pi 5 with Docker and Zenoh middleware (`rmw_zenoh_cpp`), enabling instant remote RViz2 monitoring without Wi-Fi multicast packet loss.
 
 ---
 
-## 📡 ROS 2 Communication Contracts
+## 📸 Feature Showcase: LeKiwi in Action
 
-### Custom Actions
+Below are the primary operating scenarios of LeKiwi. *(Photos, animated GIFs, and demonstration videos are being actively recorded and linked below)*.
 
-| Action | Providing Package | Description |
+### 1. 🤖 Physical Robot & 3-Wheel Omni Chassis
+The platform features an agile 3-wheel holonomic base capable of omnidirectional translation and in-place rotation, combined with an onboard Raspberry Pi 5 brain and integrated power management.
+
+| Robot Overview | Hardware Architecture |
+| :---: | :---: |
+| ![LeKiwi Physical Robot Overview](docs/images/showcase/lekiwi_robot_overview.png)<br>*(Placeholder: LeKiwi full robot standing on the test arena)* | ![Chassis & Arm Assembly](docs/images/showcase/lekiwi_chassis_arm.png)<br>*(Placeholder: 3-wheel omni base and 6-DoF arm assembly)* |
+
+---
+
+### 2. ♟️ Autonomous Chess Master & 6-DoF Pick-and-Place
+LeKiwi detects chessboard squares, identifies opponent piece moves, calculates optimal counter-moves using Stockfish 16, and executes physical pick-and-place trajectories with workspace reachability validation.
+
+| Visual Board Evaluation | Precision Pick-and-Place |
+| :---: | :---: |
+| ![Chessboard State Tracking](docs/images/showcase/chess_vision_evaluation.png)<br>*(Placeholder: YOLO board corner & FEN detection in action)* | ![Physical Move Execution](docs/images/showcase/chess_piece_manipulation.png)<br>*(Placeholder: Arm gripper picking and relocating a chess piece)* |
+
+---
+
+### 3. 👁️ Edge Vision & Hailo-8 NPU Acceleration
+Equipped with dual IMX CSI cameras and the 26 TOPS Hailo-8 NPU, LeKiwi processes stereo vision, board corner estimation, and object detection with minimal CPU utilization.
+
+| Stereo Camera Pipeline | Hailo NPU Inference Stream |
+| :---: | :---: |
+| ![Dual CSI Camera Streams](docs/images/showcase/stereo_camera_stream.png)<br>*(Placeholder: Real-time stereo camera stream & rectification)* | ![Hailo YOLO Detection](docs/images/showcase/hailo_yolo_detection.png)<br>*(Placeholder: 30 FPS neural detection bounding boxes)* |
+
+---
+
+### 4. 🦾 Teleoperation & Physical-AI Dataset Pipeline
+Collect demonstration episodes via the Zhongli / uArm leader teleoperation arm or USB gamepad, record lossless MCAP rosbags, and convert them seamlessly into Hugging Face LeRobot datasets.
+
+| Leader Arm Teleoperation | LeRobot Policy Serving |
+| :---: | :---: |
+| ![Bilateral Teleoperation Arm](docs/images/showcase/teleop_leader_arm.png)<br>*(Placeholder: Operator teaching arm trajectories via leader arm)* | ![Inference Policy Rollout](docs/images/showcase/lerobot_inference_rollout.png)<br>*(Placeholder: ZeroMQ autonomous policy execution)* |
+
+---
+
+## 🚀 Getting Started & Documentation Portal
+
+> [!TIP]
+> ### 🛠️ Ready to Build or Run LeKiwi?
+> Complete step-by-step setup guides, toolchain installation, simulation setups, and distributed deployment walk-throughs have been organized on our **Project Wiki**:
+> 
+> * 🐳 **[Raspberry Pi 5 Docker Container Deployment](https://github.com/DuyKhongCay/lekiwi_ros2/wiki)** — Deploy the pre-packaged containerized stack with Hailo-8 and Zenoh drivers.
+> * 💻 **[Native Host Build & Mock Simulation](https://github.com/DuyKhongCay/lekiwi_ros2/wiki)** — Set up `colcon` workspaces on Ubuntu 24.04/22.04 without physical hardware.
+> * ♟️ **[Autonomous Chess Playing Mission Guide](https://github.com/DuyKhongCay/lekiwi_ros2/wiki)** — Launch the Stockfish FSM orchestrator and vision pipeline.
+> * 🦾 **[LeRobot Physical-AI & Teleoperation Setup](https://github.com/DuyKhongCay/lekiwi_ros2/wiki)** — Stream imitation learning policies and record MCAP episodes.
+> * 🌐 **[Distributed PC Monitoring via Zenoh](docs/how-to-guides/deployment/distributed-pi5-docker-and-pc-zenoh-setup.md)** — Connect your remote workstation to monitor topics and view 3D RViz2 displays.
+> 
+> 👉 **[Explore Full Installation Guides on GitHub Wiki](https://github.com/DuyKhongCay/lekiwi_ros2/wiki)**
+
+---
+
+## 🗺️ Project Roadmap & Milestones
+
+The development of LeKiwi follows a staged progression from low-level hardware abstraction to autonomous manipulation and physical-AI intelligence:
+
+- [x] **Phase 1: Hardware Abstraction & Omnidirectional Base**
+  - [x] 3-wheel holonomic omnidirectional chassis kinematics and odometry.
+  - [x] 9-DoF ICM-20948 IMU sensor integration over hardware I2C.
+  - [x] Feetech STS3215 asynchronous serial bus driver operating at 1 Mbps with `ros2_control`.
+  - [x] Dedicated persistent udev rules and hardware mapping.
+
+- [x] **Phase 2: Edge Perception & Hardware Acceleration**
+  - [x] Dual CSI stereo camera pipeline with dynamic GStreamer control.
+  - [x] Raspberry Pi 5 Hailo-8 M.2 NPU HAT+ integration (26 TOPS).
+  - [x] Real-time YOLO chessboard square & piece detection at 30+ FPS.
+  - [x] Hand-Eye calibration and AprilTag bundle adjustment suite.
+
+- [x] **Phase 3: Autonomous Chess Playing & Mission Orchestration**
+  - [x] Stockfish 16 chess engine ROS 2 action server (`ComputeBestMove`).
+  - [x] High-level Mission Orchestrator FSM with dynamic camera switching.
+  - [x] 6-DoF Cartesian trajectory planning with workspace reachability validation.
+  - [x] Complete autonomous human-robot chess game playing loop.
+
+- [/] **Phase 4: Physical-AI & Imitation Learning (LeRobot)**
+  - [x] ZeroMQ high-throughput streaming bridge between LeRobot policies and ROS 2.
+  - [x] Gamepad and leader-arm MCAP episode recorder (`chess_episode_recorder`).
+  - [x] Lossless dataset conversion into Hugging Face LeRobot v3.0 format.
+  - [🟡] End-to-end evaluation of ACT, Diffusion Policy, and SmolVLA policies on real hardware.
+
+- [ ] **Phase 5: Room-Scale Autonomous Navigation & Multi-Task VLA**
+  - [ ] Nav2 integration with SLAM Toolbox and lidar/visual odometry for global navigation.
+  - [ ] Voice-prompted mission dispatch and multi-task Vision-Language-Action (VLA) interaction.
+  - [ ] Cloud-to-edge policy distribution and continuous demonstration learning.
+
+---
+
+## 🤝 Reference Projects & Acknowledgements
+
+The LeKiwi ecosystem stands on the shoulders of remarkable open-source robotics, physical-AI, and edge-computing projects. We gratefully acknowledge the following reference repositories:
+
+| Category | Reference Project | Role & Architectural Influence in LeKiwi |
 | :--- | :--- | :--- |
-| `lekiwi_interfaces/action/ComputeBestMove` | `lekiwi_chess_master` | Requests Stockfish chess engine to analyze current FEN and compute optimal UCI move (e.g. `e2e4`). |
-| `lekiwi_interfaces/action/ExecuteChessMove` | `lekiwi_manipulation` | Executes physical pick-and-place chess move across target squares with Cartesian trajectory or policy rollout. |
+| **1. Hardware & Base Design** | [`DuyKhongCay/lekiwi-robot`](https://github.com/DuyKhongCay/lekiwi-robot) | Physical CAD models, 3D printing STL files, mechanical bill of materials (BOM), and assembly specs. |
+| | [`SIGRobotics-UIUC/LeKiwi`](https://github.com/SIGRobotics-UIUC/LeKiwi) | Foundational mechanical design and original concept of the LeKiwi omni-manipulator. |
+| | [`legalaspro/feetech_ros2_driver`](https://github.com/legalaspro/feetech_ros2_driver) | Asynchronous serial bus communication driver for Feetech STS3215 smart servos. |
+| | [`NTkot/icm20948_i2c`](https://github.com/NTkot/icm20948_i2c) | Low-level Linux I2C communication library for the ICM-20948 9-DoF IMU. |
+| | [`MINT-SJTU/LeRobot-Anything-U-Arm`](https://github.com/MINT-SJTU/LeRobot-Anything-U-Arm) | Teleoperation leader arm communication protocol and joint remapping conventions. |
+| **2. Physical-AI & Imitation Learning** | [`huggingface/lerobot`](https://github.com/huggingface/lerobot) | Core Physical-AI framework for training imitation learning policies (ACT, Diffusion, SmolVLA). |
+| | [`legalaspro/so101-ros-physical-ai`](https://github.com/legalaspro/so101-ros-physical-ai) | Architectural pattern for high-performance ZeroMQ streaming bridges between ROS 2 and LeRobot. |
+| | [`fiveages-sim/lerobot_ros2`](https://github.com/fiveages-sim/lerobot_ros2) | ROS 2 simulation integration and teleoperation workflow references. |
+| **3. Edge Vision & Acceleration** | [`hailo-ai/hailo-apps`](https://github.com/hailo-ai/hailo-apps) | Hailo-8 M.2 hardware acceleration pipelines and GStreamer inference plugin architectures. |
+| | [`ros-drivers/gscam`](https://github.com/ros-drivers/gscam) | GStreamer camera pipeline driver bridging v4l2/CSI video feeds into ROS 2 Image topics. |
+| **4. Chess Logic & Game Intelligence** | [`Disservin/chess-library`](https://github.com/Disservin/chess-library) | High-performance header-only C++ chess library for board representation and move generation. |
+| | [`wojciechc1/AI_Chess`](https://github.com/wojciechc1/AI_Chess) | Visual chessboard detection and computer vision state validation concepts. |
+| **5. Engineering Skills & Tooling** | [`dbwls99706/ros2-engineering-skills`](https://github.com/dbwls99706/ros2-engineering-skills) | Production engineering guidelines, executor architectures, and ROS 2 lifecycle design patterns. |
+| | [`github/awesome-copilot`](https://github.com/github/awesome-copilot) | Curated agent prompts, instructions, skills, and AI pair-programming workflows. |
 
-### Custom Services
-
-| Service | Providing Package | Description |
-| :--- | :--- | :--- |
-| `lekiwi_interfaces/srv/SetCamMode` | `lekiwi_perception` | Dynamically switches camera pipeline modes (e.g. Head/Chessboard vs. Wrist/Obstacle). |
-| `lekiwi_interfaces/srv/CheckMoveFeasibility` | `lekiwi_motion` | Verifies workspace reachability, collision clearances, and inverse kinematics before execution. |
-| `lekiwi_interfaces/srv/SetTorqueEnabled` | `lekiwi_motion` | Enables or disables servo bus torque for lead-through teaching or compliance. |
-| `lekiwi_interfaces/srv/ResetMotorBus` | `lekiwi_ftservo_hardware` | Clears serial hardware faults and re-initializes Feetech STS communication. |
-
----
-
-## 🔌 Hardware Setup & Device Mappings
-
-Ensure dedicated udev rules are installed to grant non-root permissions and create stable persistent device symlinks:
-
-```bash
-sudo cp lekiwi_bringup/udev/99-lekiwi.rules /etc/udev/rules.d/
-sudo cp teleop_zhongli_servo_hw/udev/99-teleop-lekiwi.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
-```
-
-### Port & Bus Assignments
-
-| Device Symlink | Interface | Baudrate / Address | Target Subsystem |
-| :--- | :---: | :---: | :--- |
-| `/dev/lekiwi_serial` | USB-to-UART Serial | 1,000,000 baud | 9x Feetech STS3215 Servos (Arm + Omni Base) |
-| `/dev/uarm_leader` | USB-to-UART Serial | 115,200 baud | Zhongli Teleoperation Leader Arm |
-| `/dev/i2c-1` | Hardware I2C | Address `0x68` | ICM-20948 9-DoF IMU Sensor |
-| `/dev/gamepad` | USB HID | Event Device | Teleop Joystick & Episode Recording Controller |
+> [!NOTE]
+> **Community Gratitude:** In addition to the repositories listed above, LeKiwi builds upon countless academic publications, ROS 2 community contributions, Hugging Face open models, and Linux kernel drivers that cannot all be listed here. We extend our sincere thanks to the global robotics and open-source physical-AI communities!
 
 ---
 
-## 🚀 Quick Start Guide
-
-### 1. Build the Workspace
-
-```bash
-# Clean build with symlink install
-colcon build --symlink-install
-
-# Or selectively build core subsystems
-colcon build --packages-up-to lekiwi_bringup lekiwi_orchestrator lerobot_policy_server
-source install/setup.bash
-```
-
-### 2. Run Test Suites
-
-```bash
-# Execute unit tests across all active packages
-colcon test --event-handlers console_direct+
-colcon test-result --verbose
-```
-
-### 3. Launching the System
-
-#### A. Full Stack Simulation & Mock Mode (Safe, no physical hardware needed)
-```bash
-# Launches complete robot stack with simulated motor bus and mock camera streams
-ros2 launch lekiwi_bringup robot.launch.py hardware_type:=mock
-```
-
-#### B. Full Autonomous Stack on Physical Robot
-```bash
-# Launches real hardware interfaces, Hailo-8 NPU inference, and orchestrator FSM
-ros2 launch lekiwi_bringup robot.launch.py \
-  hardware_type:=real \
-  manipulation:=kinematics \
-  chess_master:=true \
-  cameras:=true
-```
-
-#### C. Subsystem-Level Isolated Execution
-```bash
-# Launch only the perception pipeline (Cameras + Hailo NPU)
-ros2 launch lekiwi_bringup cameras.launch.py
-
-# Launch Stockfish chess engine action server
-ros2 launch lekiwi_bringup chess_master.launch.py
-
-# Launch Autonomous Mission Orchestrator
-ros2 launch lekiwi_bringup orchestrator.launch.py
-
-# Launch LeRobot ZeroMQ Policy Server
-ros2 run lerobot_policy_server server --config src/lerobot_policy_server/config/policy_config.yaml
-
-# Launch Unified Calibration Suite
-ros2 launch lekiwi_calibration calibrate_handeye.launch.py
-```
+> [!NOTE]
+> ### 🤖 AI-Assisted Documentation Notice
+> This repository documentation was authored and structured with the assistance of advanced AI engineering agents. While every section undergoes cross-verification against the codebase, automated documentation may occasionally contain discrepancies. If you spot any error, broken link, or outdated instruction, please [open a GitHub Issue](https://github.com/DuyKhongCay/lekiwi_ros2/issues) to help maintainers and contributors keep the project accurate!
 
 ---
 
-## 🗄️ Archived & Deprecated Packages
+## 📜 License & Maintainers
 
-Legacy components located in [`deprecated/`](deprecated/) are retained for historical reference and isolated from build routines via `COLCON_IGNORE`:
-- `apriltag_localizer` & `handeye_calibration`: Migrated to the unified [`lekiwi_calibration`](lekiwi_calibration/) suite.
-- `lekiwi_moveit_config`: Replaced by the native Cartesian & LeRobot trajectory pipeline in [`lekiwi_manipulation`](lekiwi_manipulation/).
-- Legacy `lekiwi_orchestrator`: Refactored and modernized in root [`lekiwi_orchestrator`](lekiwi_orchestrator/).
+* **License:** Distributed under the [Apache-2.0 License](LICENSE).
+* **Project Maintainer:** **DuyKhongCay** ([@DuyKhongCay](https://github.com/DuyKhongCay))
+* **Wiki & Documentation:** [https://github.com/DuyKhongCay/lekiwi_ros2/wiki](https://github.com/DuyKhongCay/lekiwi_ros2/wiki)

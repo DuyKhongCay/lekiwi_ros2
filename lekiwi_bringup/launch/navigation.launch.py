@@ -105,6 +105,10 @@ def generate_launch_description():
         namespace="",
         package="rclcpp_components",
         executable="component_container_isolated",
+        parameters=[
+            nav2_params,
+            {"use_sim_time": use_sim_time},
+        ],
         composable_node_descriptions=[
             map_server_component,
             planner_server_component,

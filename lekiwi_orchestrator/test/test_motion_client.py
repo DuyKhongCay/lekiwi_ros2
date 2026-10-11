@@ -362,3 +362,22 @@ def test_obs_navigator_cancellation_and_tf_fallback(ros_context):
         assert success is False
     finally:
         node.destroy_node()
+
+
+def test_action_watchdog_disabled_when_zero_or_negative_timeout(ros_context):
+    """Verify that _start_action_watchdog does not create a timer when timeout_sec <= 0.0."""
+    node = Node("test_watchdog_bypass_node")
+    try:
+        client = RosMotionClient(node=node, mock_nav2=True)
+        # Call with 0.0
+        client._start_action_watchdog("Test zero timeout", timeout_sec=0.0)
+        assert client._action_timer is None
+        assert client._action_watchdog_desc == ""
+
+        # Call with negative timeout
+        client._start_action_watchdog("Test negative timeout", timeout_sec=-1.0)
+        assert client._action_timer is None
+        assert client._action_watchdog_desc == ""
+    finally:
+        node.destroy_node()
+

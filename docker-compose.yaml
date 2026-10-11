@@ -1,0 +1,59 @@
+services:
+  # ----------------------------------------------------------------------------
+  # 1. Zenoh Router (Middleware daemon for ROS 2 rmw_zenoh_cpp communication)
+  # ----------------------------------------------------------------------------
+  zenoh-router:
+    image: lekiwi-ros2:jazzy-hailo-zenoh
+    container_name: lekiwi_zenoh_router
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    command: [ "bash", "-c", "source /opt/ros/jazzy/setup.bash && ros2 run rmw_zenoh_cpp rmw_zenohd" ]
+
+  # ----------------------------------------------------------------------------
+  # 2. LeKiwi Core Runtime (Raspberry Pi 5 Hardware, Hailo NPU, Cameras, Actuators)
+  # ----------------------------------------------------------------------------
+  lekiwi-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lekiwi-ros2:jazzy-hailo-zenoh
+    container_name: lekiwi_ros2_core
+    depends_on:
+      - zenoh-router
+    privileged: true
+    devices:
+      - /dev/hailo0:/dev/hailo0
+    volumes:
+      # Workspace repository mount (mounts current lekiwi_ros2 folder into container)
+      - .:/root/docker_ws/lekiwi_ros2
+      # External AI agents & LeRobot workspace mounts
+      - ${HOME:-/home/duykhongcay}/.agents:/root/.agents:ro
+      - ${HOME:-/home/duykhongcay}/lerobot_ws:/root/lerobot_ws
+      # X11 GUI forwarding
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ~/.Xauthority:/root/.Xauthority:rw
+      # Raspberry Pi 5 CSI cameras, libcamera & hardware devices
+      - /dev:/dev:rslave
+      - /run/udev:/run/udev:ro
+      - /proc/device-tree:/proc/device-tree:ro
+      - /sys:/sys:ro
+    environment:
+      - DISPLAY=:0
+      - XAUTHORITY=/root/.Xauthority
+      - XDG_RUNTIME_DIR=/tmp/runtime-root
+      - QT_X11_NO_MITSHM=1
+      - QT_QPA_PLATFORM=xcb
+      - LIBCAMERA_LOG_LEVELS=*:WARN
+      - TZ=Asia/Ho_Chi_Minh
+      - HAILORT_LOGGER_PATH=NONE
+      - GST_SHARK_CTF_DISABLE=1
+      - ZENOH_SESSION_CONFIG_URI=/root/docker_ws/lekiwi_ros2/zenoh_pi5.json
+      - RMW_IMPLEMENTATION=rmw_zenoh_cpp
+    working_dir: /root/docker_ws/lekiwi_ros2
+    ipc: host
+    network_mode: host
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+

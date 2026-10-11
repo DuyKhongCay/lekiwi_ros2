@@ -47,11 +47,6 @@ def generate_launch_description():
         default_value="false",
         description="Use simulation (Gazebo) clock if true",
     )
-    enable_ekf_arg = DeclareLaunchArgument(
-        "enable_ekf",
-        default_value="true",
-        description="Enable Local and Global robot_localization EKF nodes",
-    )
     use_mag_arg = DeclareLaunchArgument(
         "use_mag",
         default_value="false",
@@ -202,7 +197,6 @@ def generate_launch_description():
     return LaunchDescription(
         [
             use_sim_time_arg,
-            enable_ekf_arg,
             use_mag_arg,
             localization_container,
             ekf_local_node,

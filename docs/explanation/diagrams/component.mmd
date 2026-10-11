@@ -1,0 +1,57 @@
+flowchart TB
+    subgraph LeKiwiInferencePackage ["Package: lekiwi_inference"]
+        direction TB
+        
+        subgraph ModeAsync ["Phase 1: Async Inference Engine"]
+            AsyncNode["async_ros2_client_node\n(ROS 2 Jazzy Lifecycle / Node)"]
+            ClientCore["AsyncInferenceClient\n(Action Queue + Aggregator)"]
+            TransportZMQ["ZmqTransportClient\n(msgpack binary wire protocol)"]
+            Watchdog["Safety Watchdog & Timeout Arbiter"]
+        end
+
+        subgraph ModeEdge ["Phase 3: Edge NPU Inference Engine"]
+            EdgeNode["hailo_act_inference_node\n(Zero-latency local executor)"]
+            HailoRTDriver["HailoRT Runtime Engine\n(VDevice / ConfiguredNetworkGroup)"]
+            QuantHEF["act_policy.hef\n(INT8 Quantized ACT Model)"]
+            LocalSmoother["Temporal Action Chunk Smoother"]
+        end
+
+        ConfigManager["Inference Config Manager\n(YAML Params & Dynamic Reconfigure)"]
+    end
+
+    subgraph RemoteServer ["Package: lerobot_policy_server (GPU Workstation)"]
+        ServerCore["ZMQ REP Policy Server"]
+        PyTorchEngine["PyTorch LeRobot Engine\n(ACT / SmolVLA / Diffusion)"]
+    end
+
+    subgraph HardwareAndROS ["Robot System (Pi 5 Hardware & ros2_control)"]
+        Cameras["lekiwi_perception\n(/cameras/usb_wrist, /cameras/usb_side)"]
+        Joints["lekiwi_ftservo_hardware\n(/joint_states)"]
+        Controller["arm_forward_controller\n(/arm_forward_controller/commands 50Hz)"]
+        FSM["lekiwi_orchestrator\n(Mission FSM / State Transitions)"]
+    end
+
+    %% Wiring Phase 1
+    Cameras -->|"sensor_msgs/CompressedImage"| AsyncNode
+    Joints -->|"sensor_msgs/JointState"| AsyncNode
+    AsyncNode --> ClientCore
+    ClientCore --> TransportZMQ
+    ClientCore --> Watchdog
+    Watchdog -->|"Emergency Hold / Ramp-down"| Controller
+    ClientCore -->|"Float64MultiArray 50Hz"| Controller
+
+    TransportZMQ -->|"TCP ZMQ Request"| ServerCore
+    ServerCore -->|"Action Reply"| TransportZMQ
+    ServerCore --> PyTorchEngine
+
+    %% Wiring Phase 3
+    Cameras -.->|"Zero-Copy / Shared Memory cv_bridge"| EdgeNode
+    Joints -.->|"JointState"| EdgeNode
+    EdgeNode --> HailoRTDriver
+    HailoRTDriver --> QuantHEF
+    HailoRTDriver --> LocalSmoother
+    LocalSmoother -.->|"Float64MultiArray 50Hz"| Controller
+
+    FSM -->|"Start/Stop/Reset Actions"| AsyncNode
+    FSM -.->|"Switch Mode"| EdgeNode
+

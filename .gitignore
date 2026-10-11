@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-scripts/
+/scripts/
 
 core.*
 deprecated/
@@ -21,7 +21,6 @@ log/
 CMakeFiles/
 
 cross_reference/
-zenoh_pi5.json
 so101_camera_calibration
 frames_*.gv
 frames_*.pdf
@@ -197,3 +196,4 @@ my_colcon_log/
 my_install/
 ros_bag/
 lekiwi_description/assets/chess_pieces/raw_backup/
+docker_packages/

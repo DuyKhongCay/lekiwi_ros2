@@ -42,6 +42,14 @@ EpisodeRecorderNode::~EpisodeRecorderNode()
     RCLCPP_WARN(get_logger(), "Shutting down while recording. Stopping active episode...");
     stop_episode();
   }
+
+  std::lock_guard<std::mutex> lock(action_goal_mutex_);
+  if (active_goal_handle_ && active_goal_handle_->is_active()) {
+    auto result = std::make_shared<ExecuteChessMove::Result>();
+    result->success = false;
+    result->message = "EpisodeRecorderNode shutting down. Aborting active goal.";
+    active_goal_handle_->abort(result);
+  }
 }
 
 void EpisodeRecorderNode::init_parameters()
@@ -50,6 +58,8 @@ void EpisodeRecorderNode::init_parameters()
   this->declare_parameter<std::string>("experiment_name", "chess_teleop_v1");
   this->declare_parameter<std::string>("task", "chess_pick_and_place");
   this->declare_parameter<std::string>("storage_id", "mcap");
+  this->declare_parameter<std::string>("goal_topic", "/manipulation/active_chess_move");
+  this->declare_parameter<std::string>("action_name", "/manipulation/execute_chess_move");
   this->declare_parameter<std::vector<std::string>>(
     "topics",
     std::vector<std::string>{
@@ -60,9 +70,7 @@ void EpisodeRecorderNode::init_parameters()
       "/arm_trajectory_controller/joint_trajectory",
       "/tf",
       "/tf_static",
-      "/chess/detections_2d",
-      "/chess/raw_fen",
-      "/chess/grid_points"});
+      "/manipulation/execute_chess_move/_action/feedback"});
 
   // Gamepad parameters
   this->declare_parameter<bool>("gamepad.enable", true);
@@ -80,7 +88,15 @@ void EpisodeRecorderNode::init_parameters()
   experiment_name_ = this->get_parameter("experiment_name").as_string();
   task_ = this->get_parameter("task").as_string();
   storage_id_ = this->get_parameter("storage_id").as_string();
+  goal_topic_ = this->get_parameter("goal_topic").as_string();
+  action_name_ = this->get_parameter("action_name").as_string();
   requested_topics_ = this->get_parameter("topics").as_string_array();
+
+  // Create latched goal subscription for ExecuteChessMove goal context (backward compatibility)
+  auto goal_qos = rclcpp::QoS(1).reliable().transient_local();
+  goal_sub_ = this->create_subscription<lekiwi_interfaces::action::ExecuteChessMove_Goal>(
+    goal_topic_, goal_qos,
+    std::bind(&EpisodeRecorderNode::on_goal_received, this, std::placeholders::_1));
 
   base_output_dir_ = std::filesystem::path(root_dir_);
   if (!experiment_name_.empty()) {
@@ -115,6 +131,16 @@ void EpisodeRecorderNode::init_services()
   srv_discard_ = this->create_service<std_srvs::srv::Trigger>(
     "~/discard_episode",
     std::bind(&EpisodeRecorderNode::handle_discard, this, std::placeholders::_1, std::placeholders::_2));
+
+  // Initialize Action Server for ExecuteChessMove
+  action_server_ = rclcpp_action::create_server<ExecuteChessMove>(
+    this,
+    action_name_,
+    std::bind(&EpisodeRecorderNode::handle_action_goal, this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&EpisodeRecorderNode::handle_action_cancel, this, std::placeholders::_1),
+    std::bind(&EpisodeRecorderNode::handle_action_accepted, this, std::placeholders::_1));
+
+  RCLCPP_INFO(get_logger(), "ExecuteChessMove Action Server ready on: %s", action_name_.c_str());
 }
 
 void EpisodeRecorderNode::init_gamepad()
@@ -175,6 +201,22 @@ void EpisodeRecorderNode::on_joy(const sensor_msgs::msg::Joy::ConstSharedPtr msg
     default:
       break;
   }
+}
+
+void EpisodeRecorderNode::on_goal_received(
+  const lekiwi_interfaces::action::ExecuteChessMove_Goal::ConstSharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(goal_mutex_);
+  current_instruction_ = msg->instruction;
+  current_pick_point_ = msg->pick_point;
+  current_place_point_ = msg->place_point;
+  current_target_frame_ = msg->target_frame.empty() ? "chessboard_frame" : msg->target_frame;
+  has_goal_context_ = true;
+
+  RCLCPP_INFO(
+    get_logger(),
+    "🎯 Received Action Goal Context: instruction='%s' (frame='%s')",
+    current_instruction_.c_str(), current_target_frame_.c_str());
 }
 
 void EpisodeRecorderNode::discover_and_subscribe_topics()
@@ -355,6 +397,21 @@ bool EpisodeRecorderNode::save_episode()
                 current_episode_index_);
     current_episode_index_++;
     current_state_.store(EpisodeState::IDLE);
+
+    // Notify Action Client (Orchestrator) that the move succeeded
+    {
+      std::lock_guard<std::mutex> lock(action_goal_mutex_);
+      if (active_goal_handle_ && active_goal_handle_->is_active()) {
+        auto result = std::make_shared<ExecuteChessMove::Result>();
+        result->success = true;
+        result->message = "Teleop move recorded and saved successfully.";
+        result->execution_time_sec = static_cast<float>(duration);
+        active_goal_handle_->succeed(result);
+        active_goal_handle_ = nullptr;
+        RCLCPP_INFO(get_logger(), "✔ [ACTION SERVER] Successfully reported GOAL COMPLETED to client!");
+      }
+    }
+
     return true;
   }
 
@@ -428,18 +485,43 @@ bool EpisodeRecorderNode::write_episode_info_yaml(
 {
   std::filesystem::path file_path = episode_dir / "episode_info.yaml";
 
+  std::string task_str = task_;
+  geometry_msgs::msg::Point pick_pt;
+  geometry_msgs::msg::Point place_pt;
+  std::string frame_str = "chessboard_frame";
+  bool has_ctx = false;
+
+  {
+    std::lock_guard<std::mutex> lock(goal_mutex_);
+    if (has_goal_context_ && !current_instruction_.empty()) {
+      task_str = current_instruction_;
+    }
+    pick_pt = current_pick_point_;
+    place_pt = current_place_point_;
+    frame_str = current_target_frame_;
+    has_ctx = has_goal_context_;
+  }
+
   try {
     YAML::Emitter out;
     out << YAML::BeginMap;
     out << YAML::Key << "episode_id" << YAML::Value << episode_index;
     out << YAML::Key << "dataset_format" << YAML::Value << "lerobot_3.0";
     out << YAML::Key << "experiment_name" << YAML::Value << experiment_name_;
-    out << YAML::Key << "task" << YAML::Value << task_;
+    out << YAML::Key << "task" << YAML::Value << task_str;
     out << YAML::Key << "teleop_mode" << YAML::Value << "gamepad_manual";
     out << YAML::Key << "success" << YAML::Value << true;
     out << YAML::Key << "duration_sec" << YAML::Value << duration_sec;
     out << YAML::Key << "timestamp_start" << YAML::Value << start_time.seconds();
     out << YAML::Key << "timestamp_end" << YAML::Value << end_time.seconds();
+
+    if (has_ctx) {
+      out << YAML::Key << "target_frame" << YAML::Value << frame_str;
+      out << YAML::Key << "pick_point" << YAML::Value << YAML::Flow << YAML::BeginSeq
+          << pick_pt.x << pick_pt.y << pick_pt.z << YAML::EndSeq;
+      out << YAML::Key << "place_point" << YAML::Value << YAML::Flow << YAML::BeginSeq
+          << place_pt.x << place_pt.y << place_pt.z << YAML::EndSeq;
+    }
 
     out << YAML::Key << "message_counts" << YAML::Value << YAML::BeginMap;
     for (const auto &[topic, count] : message_counts_) {
@@ -512,4 +594,58 @@ void EpisodeRecorderNode::handle_discard(
   }
 }
 
+rclcpp_action::GoalResponse EpisodeRecorderNode::handle_action_goal(
+  const rclcpp_action::GoalUUID & /*uuid*/,
+  std::shared_ptr<const ExecuteChessMove::Goal> goal)
+{
+  std::lock_guard<std::mutex> lock(action_goal_mutex_);
+  if (active_goal_handle_ && active_goal_handle_->is_active()) {
+    RCLCPP_WARN(get_logger(), "Rejecting goal: A teleop episode is already in progress.");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
+  {
+    std::lock_guard<std::mutex> glock(goal_mutex_);
+    current_instruction_ = goal->instruction;
+    current_pick_point_ = goal->pick_point;
+    current_place_point_ = goal->place_point;
+    current_target_frame_ = goal->target_frame.empty() ? "chessboard_frame" : goal->target_frame;
+    has_goal_context_ = true;
+  }
+
+  RCLCPP_INFO(
+    get_logger(),
+    "📥 [ACTION GOAL ACCEPTED] Instruction='%s' (from='%s' to='%s', target_frame='%s')",
+    goal->instruction.c_str(), goal->from_square.c_str(), goal->to_square.c_str(),
+    goal->target_frame.c_str());
+
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse EpisodeRecorderNode::handle_action_cancel(
+  const std::shared_ptr<GoalHandleChessMove> /*goal_handle*/)
+{
+  RCLCPP_WARN(get_logger(), "Action cancel requested by client.");
+  if (current_state_.load() == EpisodeState::RECORDING ||
+      current_state_.load() == EpisodeState::STOPPED) {
+    discard_episode();
+  }
+  std::lock_guard<std::mutex> lock(action_goal_mutex_);
+  active_goal_handle_ = nullptr;
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void EpisodeRecorderNode::handle_action_accepted(
+  const std::shared_ptr<GoalHandleChessMove> goal_handle)
+{
+  std::lock_guard<std::mutex> lock(action_goal_mutex_);
+  active_goal_handle_ = goal_handle;
+  RCLCPP_INFO(
+    get_logger(),
+    "🎯 Goal active. Please teleoperate follower arm, then press D-Pad [UP: Start], [DOWN: Stop], [RIGHT: Save].");
+}
+
 } // namespace chess_episode_recorder
+
+#include "rclcpp_components/register_node_macro.hpp"
+RCLCPP_COMPONENTS_REGISTER_NODE(chess_episode_recorder::EpisodeRecorderNode)
