@@ -1,7 +1,7 @@
 site_name: LeKiwi ROS 2 Documentation
 site_description: Production Documentation for LeKiwi Autonomous Mobile Manipulator Platform
 site_author: LeKiwi Robotics Team
-repo_url: https://github.com/lekiwi/lekiwi_ros2
+repo_url: https://github.com/DuyKhongCay/lekiwi_ros2
 docs_dir: docs
 
 theme:
@@ -64,6 +64,10 @@ extra_javascript:
   - javascripts/mathjax.js
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
+extra:
+  announcement: >-
+    🤖 <strong>AI-Assisted Documentation:</strong> This documentation is generated with AI engineering assistance. Found any discrepancy? Please <a href="https://github.com/DuyKhongCay/lekiwi_ros2/issues" style="color: #fff; text-decoration: underline;">report an issue</a> to our maintainers!
+
 nav:
   - Overview: index.md
   - Tutorials:
@@ -74,6 +78,8 @@ nav:
       - 4. LeRobot Imitation Learning: tutorials/04-lerobot-imitation-learning.md
   - How-To Guides:
       - Task Catalog: how-to-guides/index.md
+      - Deployment & Networking:
+          - Distributed Pi 5 Docker & PC Zenoh Setup: how-to-guides/deployment/distributed-pi5-docker-and-pc-zenoh-setup.md
       - Hardware & Teleoperation:
           - Udev Rules & Serial Bus Setup: how-to-guides/hardware/udev-and-serial-setup.md
           - Motor Bus Fault Recovery: how-to-guides/hardware/motor-bus-troubleshooting.md

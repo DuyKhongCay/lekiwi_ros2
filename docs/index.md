@@ -4,6 +4,14 @@ Welcome to the technical documentation suite for **LeKiwi**: an open-source, phy
 
 LeKiwi unites a 3-wheel omnidirectional mobile base, a 6-DoF robotic arm powered by Feetech STS3215 bus servos, stereo vision accelerated by an onboard Hailo-8 M.2 NPU (26 TOPS), autonomous chess decision-making with Stockfish 16, and physical-AI manipulation policies powered by Hugging Face LeRobot.
 
+!!! warning "🤖 AI-Assisted Documentation Disclaimer"
+    **Please Read Before Proceeding:**
+    This technical documentation suite was authored and structured with the assistance of advanced AI engineering agents. While every guide, interface contract, and architecture document undergoes rigorous cross-verification against the codebase, automated documentation may occasionally contain discrepancies, outdated parameter names, or unintentional omissions.
+
+    If you encounter any technical inaccuracy, broken reference, or execution issue:
+    * 🐛 **Report an Inaccuracy:** Please report it immediately by [opening a GitHub Issue](https://github.com/DuyKhongCay/lekiwi_ros2/issues) with the `documentation` label.
+    * 🛠️ **Contribute a Fix:** Pull Requests from the community are warmly welcomed to help maintainers keep these engineering resources up-to-date and accurate.
+
 ---
 
 ## 🧭 Documentation System (Diátaxis Framework)

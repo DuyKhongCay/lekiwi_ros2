@@ -6,6 +6,9 @@ How-To Guides are **task-oriented** recipes that escort developers through speci
 
 ## 🛠️ Guide Categories
 
+### Deployment & Networking
+- [**Distributed Pi 5 Docker & PC Zenoh Setup**](deployment/distributed-pi5-docker-and-pc-zenoh-setup.md): Deploy the robot runtime stack inside Docker on Raspberry Pi 5 and establish zero-multicast Zenoh connection with remote PC workstations for RViz2 monitoring.
+
 ### Hardware & Teleoperation
 - [**Udev Rules & Serial Bus Setup**](hardware/udev-and-serial-setup.md): Configure stable device symlinks and access rights for Feetech servos and IMUs.
 - [**Motor Bus Fault Recovery**](hardware/motor-bus-troubleshooting.md): Identify servo communication timeouts, clear hardware faults, and reset motor bus torque.

@@ -13,6 +13,10 @@ Before starting, verify that your environment satisfies these system requirement
 - **Build Tools**: `colcon`, `rosdep`, `git`, `cmake` (3.22+).
 - **Python Version**: Python 3.10+ (Jazzy uses Python 3.12).
 
+> [!TIP]
+> **Running on Raspberry Pi 5 with Docker Container?**
+> If you are deploying directly onto the physical robot (Raspberry Pi 5 with Hailo-8 NPU, CSI stereo cameras, and Feetech serial bus), you can bypass manual host toolchain installation and run the isolated containerized stack. Refer directly to [**Distributed Pi 5 Docker & PC Zenoh Setup**](../how-to-guides/deployment/distributed-pi5-docker-and-pc-zenoh-setup.md).
+
 ---
 
 ## Step 1: Clone the Repository
