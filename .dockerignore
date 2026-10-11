@@ -1,0 +1,85 @@
+# ==============================================================================
+# .dockerignore for lekiwi_ros2 (Raspberry Pi 5 / Hailo-8 Container Environment)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. ROS 2 Local Build & Cache Artifacts (Critical: prevents sending ~2.5GB context)
+# ------------------------------------------------------------------------------
+build/
+install/
+log/
+colcon_log/
+my_build/
+my_install/
+my_colcon_log/
+CMakeFiles/
+CMakeCache.txt
+
+# ------------------------------------------------------------------------------
+# 2. Large Datasets, Rosbags & Temporary Media
+# ------------------------------------------------------------------------------
+ros_bag/
+data/
+outputs/
+*.bag
+*.db3
+*.mcap
+lekiwi_description/assets/chess_pieces/raw_backup/
+
+# ------------------------------------------------------------------------------
+# 3. Version Control & Git History (~70MB+)
+# ------------------------------------------------------------------------------
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# ------------------------------------------------------------------------------
+# 4. Python Bytecode, Caches & Virtual Environments
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv/
+env/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+dist/
+wheels/
+
+# ------------------------------------------------------------------------------
+# 5. Documentation, Schemas & Static Web Assets
+# ------------------------------------------------------------------------------
+docs/
+site/
+mkdocs.yml
+deprecated/
+
+# ------------------------------------------------------------------------------
+# 6. IDE, Editors & OS Files
+# ------------------------------------------------------------------------------
+.vscode/
+.idea/
+.devcontainer/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ------------------------------------------------------------------------------
+# 7. CI/CD & Local Test Reports
+# ------------------------------------------------------------------------------
+*.log
+nosetests.xml
+coverage.xml
+

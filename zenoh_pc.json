@@ -1,0 +1,20 @@
+{
+  "mode": "client",
+  "connect": {
+    "endpoints": [
+      "tcp/192.168.1.13:7447"
+    ]
+  },
+  "timestamping": {
+    "enabled": true
+  },
+  "queries_default_timeout": 5000,
+  "transport": {
+    "link": {
+      "tx": {
+        "lease": 2000,
+        "keep_alive": 4
+      }
+    }
+  }
+}
