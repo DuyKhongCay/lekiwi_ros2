@@ -10,7 +10,10 @@
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <rosbag2_cpp/writer.hpp>
+#include <geometry_msgs/msg/point.hpp>
+#include <lekiwi_interfaces/action/execute_chess_move.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
@@ -47,6 +50,7 @@ private:
 
   void discover_and_subscribe_topics();
   void on_joy(const sensor_msgs::msg::Joy::ConstSharedPtr msg);
+  void on_goal_received(const lekiwi_interfaces::action::ExecuteChessMove_Goal::ConstSharedPtr msg);
   void write_serialized_message(
     const std::string &topic_name,
     const std::string &topic_type,
@@ -103,11 +107,38 @@ private:
   std::unique_ptr<GamepadController> gamepad_controller_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
 
+  // Goal Context (LeRobot instruction and conditioning points)
+  std::string goal_topic_{"/manipulation/active_chess_move"};
+  rclcpp::Subscription<lekiwi_interfaces::action::ExecuteChessMove_Goal>::SharedPtr goal_sub_;
+  std::mutex goal_mutex_;
+  std::string current_instruction_{""};
+  geometry_msgs::msg::Point current_pick_point_{};
+  geometry_msgs::msg::Point current_place_point_{};
+  std::string current_target_frame_{"chessboard_frame"};
+  bool has_goal_context_{false};
+
+  // Action Server Callbacks for ExecuteChessMove
+  using ExecuteChessMove = lekiwi_interfaces::action::ExecuteChessMove;
+  using GoalHandleChessMove = rclcpp_action::ServerGoalHandle<ExecuteChessMove>;
+
+  rclcpp_action::GoalResponse handle_action_goal(
+    const rclcpp_action::GoalUUID & uuid,
+    std::shared_ptr<const ExecuteChessMove::Goal> goal);
+  rclcpp_action::CancelResponse handle_action_cancel(
+    const std::shared_ptr<GoalHandleChessMove> goal_handle);
+  void handle_action_accepted(const std::shared_ptr<GoalHandleChessMove> goal_handle);
+
   // ROS 2 Trigger services
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_start_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_save_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_discard_;
+
+  // Action Server for ExecuteChessMove
+  std::string action_name_{"/manipulation/execute_chess_move"};
+  rclcpp_action::Server<ExecuteChessMove>::SharedPtr action_server_;
+  std::shared_ptr<GoalHandleChessMove> active_goal_handle_{nullptr};
+  std::mutex action_goal_mutex_;
 };
 
 } // namespace chess_episode_recorder

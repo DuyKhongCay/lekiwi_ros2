@@ -21,6 +21,9 @@
       button_left: 11
       button_right: 12
 
+    # Action Goal context topic (ExecuteChessMove_Goal)
+    goal_topic: "/manipulation/active_chess_move"
+
     # Topics to record into each episode MCAP (LeRobot Dataset 3.0 compatible)
     topics:
       # 1. Visual observations (Compressed JPEG from gscam)
@@ -28,7 +31,7 @@
       - "/cameras/usb_side/image_raw/compressed"
       - "/cameras/stereo_right/image_raw/compressed"
 
-      # 2. Joint states & commands (Robot State & Actions)
+      # 2. Follower Joint states & Action commands (LeRobot Observation & Action)
       - "/joint_states"
       - "/arm_trajectory_controller/joint_trajectory"
 
@@ -36,7 +39,5 @@
       - "/tf"
       - "/tf_static"
 
-      # 4. Perception & Chessboard context
-      - "/chess/detections_2d"
-      - "/chess/raw_fen"
-      - "/chess/grid_points"
+      # 4. Manipulation Action Feedback (Phase & progress tracking)
+      - "/manipulation/execute_chess_move/_action/feedback"

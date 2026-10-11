@@ -7,8 +7,13 @@ import time
 import pytest
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionClient
 from sensor_msgs.msg import Joy
 from std_srvs.srv import Trigger
+try:
+    from lekiwi_interfaces.action import ExecuteChessMove
+except ImportError:
+    ExecuteChessMove = None
 
 
 @pytest.fixture(scope="module")
@@ -32,6 +37,11 @@ def test_gamepad_and_services(ros_context):
         stop_cli = test_node.create_client(Trigger, "/episode_recorder_node/stop_episode")
         save_cli = test_node.create_client(Trigger, "/episode_recorder_node/save_episode")
         discard_cli = test_node.create_client(Trigger, "/episode_recorder_node/discard_episode")
+
+        # Action client for ExecuteChessMove
+        if ExecuteChessMove is not None:
+            action_cli = ActionClient(test_node, ExecuteChessMove, "/manipulation/execute_chess_move")
+            assert action_cli is not None
 
         # Let's verify that the module compiles and can run
         assert os.path.exists(temp_dir)
