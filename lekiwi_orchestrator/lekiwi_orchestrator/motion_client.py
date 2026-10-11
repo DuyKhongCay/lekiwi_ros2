@@ -169,6 +169,11 @@ class RosMotionClient(MotionClient):
         on_timeout: Callable[[], None] | None = None,
     ) -> None:
         self._cancel_action_watchdog()
+        if timeout_sec <= 0.0:
+            self._node.get_logger().info(
+                f"{desc}: Watchdog disabled (timeout_sec={timeout_sec:.1f}s)."
+            )
+            return
         self._action_watchdog_desc = desc
 
         def _on_watchdog_timeout() -> None:
