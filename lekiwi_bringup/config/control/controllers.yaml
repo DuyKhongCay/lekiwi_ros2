@@ -31,7 +31,7 @@ arm_trajectory_controller:
     allow_nonzero_velocity_at_trajectory_end: true
     allow_partial_joints_goal: true
     state_publish_rate: 50.0
-    action_monitor_rate: 20.0
+    action_monitor_rate: 20.0 
     # constraints:
     #   stopped_velocity_tolerance: 0.05
     #   goal_time: 0.5
