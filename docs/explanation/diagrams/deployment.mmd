@@ -1,0 +1,52 @@
+flowchart LR
+    subgraph HostStation ["Host Workstation / Cloud Instance"]
+        direction TB
+        subgraph HostOS ["Ubuntu 22.04 / 24.04 (Host)"]
+            NvidiaDriver["NVIDIA Driver 550+ / CUDA 12.x"]
+            DockerHost["Docker Container: lerobot-server"]
+            subgraph ServerProc ["Container Runtime"]
+                PolicyServer["lerobot-policy-server\n(PyTorch, LeRobot, ZMQ REP:8090)"]
+            end
+        end
+    end
+
+    subgraph NetworkLink ["Local Area Network (LAN)"]
+        WiFi["Wi-Fi 6 (5GHz) / Dedicated AP\nLatency: 2-8ms, Jitter: < 5ms\nPayload: Compressed JPEG + JSON/msgpack"]
+    end
+
+    subgraph RobotHardware ["LeKiwi Mobile Manipulator (Raspberry Pi 5)"]
+        direction TB
+        subgraph Pi5Host ["Raspberry Pi OS / Ubuntu 24.04 (arm64)"]
+            HailoDriver["hailo_pci kernel module (PCIe Gen2/3 x1)"]
+            SerialPort["/dev/lekiwi_serial (1,000,000 baud)"]
+            
+            subgraph Pi5Container ["Docker Container: lekiwi-ros2-hailort"]
+                ROS2Middleware["ROS 2 Jazzy Base (RMW Zenoh / FastDDS)"]
+                
+                subgraph NodesRunning ["Active ROS 2 Nodes"]
+                    NodeInference["lekiwi_inference\n(async_ros2_client_node OR hailo_act_node)"]
+                    NodeControl["controller_manager\n(arm_forward_controller)"]
+                    NodeHW["lekiwi_ftservo_hardware\n(Async Serial Worker)"]
+                    NodeVision["lekiwi_perception\n(GStreamer + HailoRT)"]
+                end
+            end
+        end
+
+        subgraph PhysicalPeripherals ["Peripherals & Actuators"]
+            NPU["Hailo-8 M.2 Module\n(26 TOPS INT8, M.2 HAT+)"]
+            Servos["6x Feetech STS3215 Servos\n(Arm Joints & Gripper)"]
+            Cams["USB/CSI Cameras\n(Wrist Cam & Wide Cam)"]
+        end
+    end
+
+    PolicyServer ---|"TCP Socket :8090"| WiFi
+    WiFi ---|"ZMQ REQ"| NodeInference
+
+    HailoDriver ---|"PCIe Link"| NPU
+    SerialPort ---|"UART 1Mbps"| Servos
+    Cams --> NodeVision
+    NodeInference --> NodeControl
+    NodeControl --> NodeHW
+    NodeHW --> SerialPort
+    NodeInference -.->|"HailoRT API (Phase 3)"| HailoDriver
+

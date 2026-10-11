@@ -1,0 +1,85 @@
+name: Sync Documentation to GitHub Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '.github/scripts/sync_wiki.py'
+      - 'scripts/sync_wiki.py'
+      - '.github/workflows/sync-wiki.yml'
+  workflow_dispatch:
+
+# Enforce least-privilege permissions at workflow level
+permissions:
+  contents: read
+
+# Prevent concurrent wiki sync deployments that may cause git conflicts
+concurrency:
+  group: wiki-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync-wiki:
+    name: Sync docs to GitHub Wiki
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: source
+
+      - name: Resolve Wiki authentication token
+        id: auth
+        env:
+          CUSTOM_PAT: ${{ secrets.WIKI_SYNC_TOKEN }}
+          DEFAULT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use WIKI_SYNC_TOKEN (PAT) if provided, otherwise fall back to GITHUB_TOKEN
+          if [ -n "$CUSTOM_PAT" ]; then
+            echo "Using repository secret WIKI_SYNC_TOKEN for Wiki authentication."
+            echo "token=$CUSTOM_PAT" >> "$GITHUB_OUTPUT"
+          else
+            echo "WIKI_SYNC_TOKEN not found. Falling back to GITHUB_TOKEN."
+            echo "token=$DEFAULT_TOKEN" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout Wiki repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ github.repository }}.wiki
+          path: wiki
+          token: ${{ steps.auth.outputs.token }}
+
+      - name: Execute documentation transformation and sync
+        run: |
+          SCRIPT_PATH="source/.github/scripts/sync_wiki.py"
+          python3 "$SCRIPT_PATH" \
+            --docs-dir source/docs \
+            --wiki-dir wiki
+
+      - name: Commit and push changes to GitHub Wiki
+        working-directory: wiki
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Check for changes
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "ℹ️ No changes detected between docs/ and wiki. Skipping commit."
+            exit 0
+          fi
+
+          echo "📝 Changes detected. Staging and committing..."
+          git add -A
+          git commit -m "docs: sync documentation from commit ${COMMIT_SHA:0:7} [skip ci]"
+          git push origin master
+          echo "🚀 Successfully synced documentation to GitHub Wiki!"
+

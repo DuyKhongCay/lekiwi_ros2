@@ -1,0 +1,31 @@
+flowchart LR
+    subgraph Step1 ["Phase 1: Async Remote Inference (MVP)"]
+        direction TB
+        P1_Srv["Host GPU Policy Server\n(FP16 PyTorch ACT)"]
+        P1_Net["ZMQ over 5GHz Wi-Fi\n(JPEG Images + Actions)"]
+        P1_Rob["LeKiwi Async Client\n(Action Queue & Temporal Smoothing)"]
+        P1_Srv --- P1_Net --- P1_Rob
+        P1_Note["Goal: Rapid policy validation,\nzero quantization barrier,\neasy training-to-deploy loop."]
+    end
+
+    subgraph Step2 ["Phase 2: Hardware-in-the-Loop & Quantization Pipeline"]
+        direction TB
+        P2_HIL["Real-robot episode collection & telemetry verification"]
+        P2_DFC["Model Export & Hailo DFC Calibration\n(ONNX -> HAR -> HEF INT8)"]
+        P2_Bench["Accuracy vs Latency Benchmarking (CosSim >= 0.98)"]
+        P2_HIL --> P2_DFC --> P2_Bench
+        P2_Note["Goal: Validate INT8 accuracy,\nresolve transformer op constraints,\nprepare standalone HEF."]
+    end
+
+    subgraph Step3 ["Phase 3: Production Edge NPU Inference"]
+        direction TB
+        P3_NPU["On-board Hailo-8 M.2 NPU\n(26 TOPS, <2.5W, PCIe)"]
+        P3_Node["hailo_act_inference_node\n(Zero-latency local executor)"]
+        P3_Perf["Deterministic 50Hz Execution\n(Sub-15ms, 100% offline, zero drop)"]
+        P3_NPU --- P3_Node --- P3_Perf
+        P3_Note["Goal: True robot autonomy,\nimmunity to Wi-Fi drops,\nproduction deployment."]
+    end
+
+    Step1 ==>|System Proven & Deployed| Step2
+    Step2 ==>|HEF Compiled & Verified| Step3
+

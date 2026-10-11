@@ -1,0 +1,108 @@
+site_name: LeKiwi ROS 2 Documentation
+site_description: Production Documentation for LeKiwi Autonomous Mobile Manipulator Platform
+site_author: LeKiwi Robotics Team
+repo_url: https://github.com/lekiwi/lekiwi_ros2
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    # Light mode
+    - scheme: default
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.arithmatex:
+      generic: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Overview: index.md
+  - Tutorials:
+      - Learning Overview: tutorials/index.md
+      - 1. Workspace Setup & Build: tutorials/01-getting-started-workspace.md
+      - 2. Robot Bringup & Mock Simulation: tutorials/02-robot-bringup-simulation.md
+      - 3. Autonomous Chess Mission: tutorials/03-autonomous-chess-match.md
+      - 4. LeRobot Imitation Learning: tutorials/04-lerobot-imitation-learning.md
+  - How-To Guides:
+      - Task Catalog: how-to-guides/index.md
+      - Hardware & Teleoperation:
+          - Udev Rules & Serial Bus Setup: how-to-guides/hardware/udev-and-serial-setup.md
+          - Motor Bus Fault Recovery: how-to-guides/hardware/motor-bus-troubleshooting.md
+          - Teleoperation Arm Setup: how-to-guides/hardware/teleop-arm-setup.md
+      - Sensor Calibration:
+          - Stereo Camera & Hand-Eye Calibration: how-to-guides/calibration/stereo-and-handeye-calibration.md
+      - Physical-AI & Inference:
+          - Record MCAP Demonstration Episodes: how-to-guides/physical-ai/record-mcap-episodes.md
+          - Convert MCAP to LeRobot Dataset: how-to-guides/physical-ai/convert-rosbag-to-lerobot.md
+          - Deploy ZeroMQ Policy Server: how-to-guides/physical-ai/deploy-zeromq-policy-server.md
+      - Navigation:
+          - Tune Nav2 for Omni-Base: how-to-guides/navigation/tune-nav2-omni-base.md
+  - Reference:
+      - Reference Overview: reference/index.md
+      - Active Packages Catalog: reference/packages/catalog.md
+      - ROS 2 Interfaces:
+          - Custom Actions: reference/ros-interfaces/actions.md
+          - Custom Services: reference/ros-interfaces/services.md
+          - Topics & TF Frames: reference/ros-interfaces/topics-and-tf.md
+      - Hardware Specifications:
+          - Pinout & Wiring Specifications: reference/hardware-specifications/pinout-and-wiring.md
+      - Command Line Utilities: reference/cli-tools/scripts-reference.md
+  - Architecture & Explanation:
+      - Architecture Overview: explanation/index.md
+      - System Architecture: explanation/system-architecture.md
+      - Physical-AI Inference Strategy: explanation/physical-ai-inference-strategy.md
+      - Hardware Control Loop & STS3215: explanation/hardware-control-loop.md
+      - Decision FSM & Stockfish Engine: explanation/decision-and-fsm.md
+      - Architecture Decision Records (ADRs):
+          - ADR Index: explanation/adr/index.md
+          - ADR-001 Inference Evolution: explanation/adr/ADR-001-async-to-edge-inference-evolution.md
+

@@ -1,0 +1,33 @@
+flowchart TD
+    subgraph Environment ["Physical & Operational Environment"]
+        TargetObj["Manipulation Targets (Chess pieces, blocks)"]
+        SceneLight["Workcell Environment & Lighting"]
+    end
+
+    subgraph Robot ["LeKiwi Robot Platform (Mobile Manipulator)"]
+        Sensors["Cameras (Stereo / Wrist / Side) & Servos (STS3215)"]
+        Actuators["6-DoF Arm Forward Controller & Omni Base"]
+        EdgeCompute["Raspberry Pi 5 + Hailo-8 M.2 NPU (26 TOPS)"]
+    end
+
+    subgraph HostStation ["Remote Host Workstation / Cloud"]
+        GPUWorkstation["Workstation (NVIDIA RTX GPU / CUDA)"]
+        PolicyRegistry["HuggingFace Hub / Local Policy Weights"]
+    end
+
+    subgraph Operators ["Developers & Mission Control"]
+        Orchestrator["LeKiwi FSM Orchestrator"]
+        TeleopStation["Teleop / Gamepad Station"]
+    end
+
+    Sensors -->|"Photons & Feedback"| TargetObj
+    EdgeCompute -->|Joint Position Commands 50Hz| Actuators
+    Actuators -->|Physical Interaction| TargetObj
+
+    EdgeCompute -->|"ZMQ REQ-REP (Phase 1)"| GPUWorkstation
+    GPUWorkstation -->|"Action Chunk Stream"| EdgeCompute
+    GPUWorkstation -->|"Load Checkpoint"| PolicyRegistry
+
+    Orchestrator -->|"Mode Triggers"| EdgeCompute
+    TeleopStation -->|"Safety E-Stop / Override"| EdgeCompute
+
