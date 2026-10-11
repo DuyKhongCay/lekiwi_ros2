@@ -37,6 +37,10 @@ def clean_markdown_for_wiki(content: str) -> str:
     content = re.sub(r'<div class="grid cards"[^>]*>', "", content)
     content = content.replace("</div>", "")
 
+    # Strip .md extension from internal markdown links to prevent GitHub Wiki
+    # from redirecting to raw.githubusercontent.com instead of rendering HTML pages
+    content = re.sub(r'\[([^\]]+)\]\(((?!https?:\/\/)[^)]+?)\.md(#[^)]+)?\)', r'[\1](\2\3)', content)
+
     return content
 
 
@@ -59,7 +63,7 @@ def parse_index_file(index_file: Path, folder_prefix: str) -> list:
             prefix = h_link.group(1) or ""
             title = prefix + h_link.group(2).strip()
             target = h_link.group(3).strip()
-            clean_target = f"{folder_prefix}/{target}"
+            clean_target = re.sub(r"\.md$", "", f"{folder_prefix}/{target}")
             entries.append({"group": current_group, "title": title, "link": clean_target})
             continue
 
@@ -76,7 +80,7 @@ def parse_index_file(index_file: Path, folder_prefix: str) -> list:
         if list_link:
             title = list_link.group(1).strip()
             target = list_link.group(2).strip()
-            clean_target = f"{folder_prefix}/{target}"
+            clean_target = re.sub(r"\.md$", "", f"{folder_prefix}/{target}")
             entries.append({"group": current_group, "title": title, "link": clean_target})
             continue
 
@@ -88,7 +92,7 @@ def parse_index_file(index_file: Path, folder_prefix: str) -> list:
             target = adr_match.group(2).strip()
             desc = adr_match.group(3).strip()
             title = f"{adr_id}: {desc}"
-            clean_target = f"{folder_prefix}/{target}"
+            clean_target = re.sub(r"\.md$", "", f"{folder_prefix}/{target}")
             entries.append({"group": current_group, "title": title, "link": clean_target})
             continue
 
@@ -111,7 +115,7 @@ def generate_dynamic_sidebar(docs_dir: Path) -> str:
         index_path = docs_dir / cat_dir / "index.md"
         out.append("---")
         out.append(f"#### {icon} {cat_title}")
-        out.append(f"- [🧭 {overview_title}]({cat_dir}/index.md)")
+        out.append(f"- [🧭 {overview_title}]({cat_dir}/index)")
 
         entries = parse_index_file(index_path, cat_dir)
 
