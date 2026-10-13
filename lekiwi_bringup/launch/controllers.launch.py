@@ -98,7 +98,7 @@ def generate_launch_description():
         package="controller_manager",
         executable="spawner",
         arguments=[
-            "arm_forward_controller",
+            "arm_trajectory_controller",
             "--controller-manager",
             "/controller_manager",
         ],
