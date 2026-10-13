@@ -46,11 +46,6 @@ namespace teleop_zhongli_servo_hw
     {
       return false;
     }
-    if (baudrate == 1000000)
-    {
-      *out = LibSerial::BaudRate::BAUD_1000000;
-      return true;
-    }
     if (baudrate == 115200)
     {
       *out = LibSerial::BaudRate::BAUD_115200;
@@ -70,7 +65,7 @@ namespace teleop_zhongli_servo_hw
     LibSerial::BaudRate serial_baud{};
     if (!baudrate_to_libserial(baudrate, &serial_baud) || timeout_ms <= 0 || command_delay_us < 0)
     {
-      set_error(error, "Unsupported baudrate (must be 1000000 or 115200) or invalid timeout/delay parameters");
+      set_error(error, "Unsupported baudrate (strictly 115200) or invalid timeout/delay parameters");
       return false;
     }
 
@@ -123,95 +118,6 @@ namespace teleop_zhongli_servo_hw
       set_error(error, std::string("LibSerial open failure: ") + e.what());
       return false;
     }
-  }
-
-  bool ZhongliProtocol::auto_negotiate_and_open(
-      const std::string &port_name,
-      int target_baudrate,
-      int *negotiated_baudrate,
-      int timeout_ms,
-      int command_delay_us,
-      std::string *error)
-  {
-    if (negotiated_baudrate == nullptr)
-    {
-      set_error(error, "negotiated_baudrate pointer is null");
-      return false;
-    }
-
-    // Step 1: Probe target baudrate (e.g. 1 Mbps)
-    const int probe_1m_timeout = (target_baudrate == 1000000) ? default_config::kTimeoutMs1M : timeout_ms;
-    if (open(port_name, target_baudrate, probe_1m_timeout, command_delay_us, error))
-    {
-      if (handshake(2, nullptr))
-      {
-        *negotiated_baudrate = target_baudrate;
-        timeout_ms_ = default_config::kTimeoutMs1M;
-        command_delay_us_ = default_config::kCommandDelayUs1M;
-        return true;
-      }
-      close();
-    }
-
-    // Step 2: Fallback probe at 115200 baud with safe margin timeout (70 ms)
-    const int fallback_timeout = default_config::kTimeoutMs115200;
-    const int fallback_delay_us = default_config::kCommandDelayUs115200;
-    if (!open(port_name, 115200, fallback_timeout, fallback_delay_us, error))
-    {
-      return false;
-    }
-
-    if (!handshake(3, error))
-    {
-      close();
-      set_error(error, "Handshake failed at both target rate and 115200 fallback");
-      return false;
-    }
-
-    // If target was 115200 or not 1000000, we are done
-    if (target_baudrate != 1000000)
-    {
-      *negotiated_baudrate = 115200;
-      timeout_ms_ = fallback_timeout;
-      command_delay_us_ = fallback_delay_us;
-      return true;
-    }
-
-    // Step 3: Attempt to upgrade board to 1 Mbps via #000PBD5!
-    std::string rx;
-    std::string upgrade_err;
-    (void)send_and_receive("#000PBD5!", &rx, &upgrade_err);
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    close();
-
-    // Re-open at target baudrate (1000000)
-    if (open(port_name, target_baudrate, default_config::kTimeoutMs1M, default_config::kCommandDelayUs1M, error))
-    {
-      if (handshake(2, nullptr))
-      {
-        *negotiated_baudrate = target_baudrate;
-        timeout_ms_ = default_config::kTimeoutMs1M;
-        command_delay_us_ = default_config::kCommandDelayUs1M;
-        return true;
-      }
-      close();
-    }
-
-    // If 1 Mbps re-handshake fails, reconnect reliably at 115200 with adaptive timeout (70 ms)
-    if (open(port_name, 115200, fallback_timeout, fallback_delay_us, error))
-    {
-      if (handshake(3, error))
-      {
-        *negotiated_baudrate = 115200;
-        timeout_ms_ = fallback_timeout;
-        command_delay_us_ = fallback_delay_us;
-        return true;
-      }
-      close();
-    }
-
-    set_error(error, "Auto-negotiation failed to establish stable communication");
-    return false;
   }
 
   void ZhongliProtocol::close() noexcept

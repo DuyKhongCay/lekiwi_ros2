@@ -19,22 +19,12 @@ namespace teleop_zhongli_servo_hw
 
   namespace default_config
   {
-    /// Standard high-rate bus baud rate (target 1 Mbps).
-    inline constexpr int kBaudRate = 1000000;
-    /// Fallback bus baud rate for standard USB-UART bridges (115200 bps).
-    inline constexpr int kBaudRate115200 = 115200;
-    /// Per-transaction timeout in milliseconds for 1 Mbps.
-    inline constexpr int kTimeoutMs1M = 20;
+    /// Standard bus baud rate (115200 bps).
+    inline constexpr int kBaudRate = 115200;
     /// Per-transaction timeout in milliseconds for 115200 baud (safe margin 60 - 80 ms).
-    inline constexpr int kTimeoutMs115200 = 70;
-    /// Default per-transaction timeout.
-    inline constexpr int kTimeoutMs = kTimeoutMs1M;
-    /// Inter-command microsecond delay at 1 Mbps.
-    inline constexpr int kCommandDelayUs1M = 300;
+    inline constexpr int kTimeoutMs = 70;
     /// Inter-command microsecond delay at 115200 bps.
-    inline constexpr int kCommandDelayUs115200 = 50;
-    /// Default inter-command delay.
-    inline constexpr int kCommandDelayUs = kCommandDelayUs1M;
+    inline constexpr int kCommandDelayUs = 50;
     /// Flash EEPROM commit delay after #PSCK! zero-calibration in milliseconds.
     inline constexpr int kEepromCommitDelayMs = 150;
     /// Default kinematic publishing rate in Hz for teleoperation (50 Hz).

@@ -63,7 +63,8 @@ TEST(TestZhongliBusWorker, InvalidPortHandling)
 
   std::string err;
   // Connecting to a non-existent device port must fail cleanly without throwing
-  EXPECT_FALSE(worker.configure("/dev/non_existent_uarm_port_12345", 1000000, 20, 300, &err));
+  EXPECT_FALSE(worker.configure("/dev/non_existent_uarm_port_12345", default_config::kBaudRate,
+                                default_config::kTimeoutMs, default_config::kCommandDelayUs, &err));
   EXPECT_FALSE(err.empty());
   EXPECT_FALSE(worker.activate(&err));
 }

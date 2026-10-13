@@ -2,7 +2,7 @@
  * @file zhongli_bus_worker.hpp
  * @brief Background asynchronous I/O worker and real-time buffer engine for Zhongli bus servos.
  *
- * Encapsulates 1 Mbps ASCII serial polling at 50 Hz, wait-free real-time buffers (< 50 ns),
+ * Encapsulates 115200 baud ASCII serial polling at 50 Hz, wait-free real-time buffers (< 50 ns),
  * zero-allocation scratch buffers in the control loop, interleaved diagnostics, and 3-tier fault escalation.
  *
  * @author DuyKhongCay
@@ -52,7 +52,7 @@ namespace teleop_zhongli_servo_hw
         std::string *error = nullptr) noexcept;
 
     /**
-     * @brief Connects to serial bus at 1 Mbps and validates handshake.
+     * @brief Connects to serial bus at 115200 baud and validates handshake.
      */
     bool configure(
         const std::string &port_name,

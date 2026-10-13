@@ -50,6 +50,30 @@ namespace teleop_zhongli_servo_hw
     // Initial connection attempt via async bus worker
     connect_hardware();
 
+    // Subscribe to robot_description published by robot_state_publisher from description.launch.py
+    const auto qos = rclcpp::QoS(1).transient_local().reliable();
+    robot_description_sub_ = create_subscription<std_msgs::msg::String>(
+        "robot_description", qos,
+        std::bind(&TeleopUarmNode::on_robot_description, this, std::placeholders::_1));
+
+    // Check if robot_description parameter was provided at startup (e.g. from launch file)
+    if (has_parameter("robot_description"))
+    {
+      const std::string urdf_param = get_parameter("robot_description").as_string();
+      if (!urdf_param.empty())
+      {
+        parse_and_apply_urdf(urdf_param);
+      }
+    }
+
+    if (!follower_limits_ready_.load(std::memory_order_relaxed))
+    {
+      RCLCPP_WARN(
+          get_logger(),
+          "'/robot_description' is not yet available from description.launch.py. "
+          "Publishing '/leader/joint_states' is active, but follower motion dispatching is PAUSED.");
+    }
+
     // 50 Hz main kinematic polling loop (wait-free read from RealtimeBuffer)
     const auto loop_period = std::chrono::duration<double>(1.0 / publish_rate_hz_);
     loop_timer_ = create_wall_timer(
@@ -109,6 +133,86 @@ namespace teleop_zhongli_servo_hw
     };
   }
 
+  void TeleopUarmNode::parse_servos_yaml(const YAML::Node &servos_node)
+  {
+    if (servos_node["ids"] && servos_node["ids"].IsSequence())
+    {
+      servo_ids_.clear();
+      for (const auto &id_node : servos_node["ids"])
+      {
+        servo_ids_.push_back(static_cast<uint8_t>(id_node.as<int>()));
+      }
+    }
+
+    for (const auto id : servo_ids_)
+    {
+      const std::string s_key = "servo_" + std::to_string(id);
+      if (servos_node[s_key])
+      {
+        const auto &s = servos_node[s_key];
+        ServoConfig cfg;
+        cfg.id = id;
+        cfg.min_pwm = s["min_pwm"] ? s["min_pwm"].as<int>() : 500;
+        cfg.max_pwm = s["max_pwm"] ? s["max_pwm"].as<int>() : 2500;
+        cfg.rad_per_pwm = s["rad_per_pwm"] ? s["rad_per_pwm"].as<double>()
+                                           : (270.0 * M_PI / 180.0) / 2000.0;
+        servo_configs_[id] = cfg;
+      }
+    }
+  }
+
+  void TeleopUarmNode::parse_joints_yaml(const YAML::Node &joints_node)
+  {
+    std::vector<JointKinematicConfig> new_joints;
+
+    for (auto it = joints_node.begin(); it != joints_node.end(); ++it)
+    {
+      const std::string jname = it->first.as<std::string>();
+      const auto &jval = it->second;
+      if (!jval.IsMap())
+        continue;
+
+      JointKinematicConfig jcfg;
+      jcfg.joint_name = jname;
+
+      double l_min = -M_PI;
+      double l_max = M_PI;
+      if (jval["leader_range"] && jval["leader_range"].IsSequence() && jval["leader_range"].size() == 2)
+      {
+        l_min = jval["leader_range"][0].as<double>();
+        l_max = jval["leader_range"][1].as<double>();
+      }
+      jcfg.min_limit_rad = l_min;
+      jcfg.max_limit_rad = l_max;
+
+      if (jval["sources"] && jval["sources"].IsSequence())
+      {
+        const auto &sources = jval["sources"];
+        const auto &weights = jval["weights"];
+        const auto &signs = jval["signs"];
+        for (size_t i = 0; i < sources.size(); ++i)
+        {
+          ServoContribution sc;
+          sc.servo_id = static_cast<uint8_t>(sources[i].as<int>());
+          sc.weight = (weights && i < weights.size()) ? weights[i].as<double>() : 1.0;
+          sc.sign = (signs && i < signs.size()) ? signs[i].as<double>() : 1.0;
+          jcfg.sources.push_back(sc);
+        }
+      }
+      new_joints.push_back(jcfg);
+
+      if (jval["mode"] && custom_remap_modes_.find(jname) == custom_remap_modes_.end())
+      {
+        custom_remap_modes_[jname] = jval["mode"].as<std::string>();
+      }
+    }
+
+    if (!new_joints.empty())
+    {
+      joint_configs_ = std::move(new_joints);
+    }
+  }
+
   bool TeleopUarmNode::load_calibration_file(const std::string &filepath)
   {
     if (filepath.empty())
@@ -124,118 +228,18 @@ namespace teleop_zhongli_servo_hw
         return false;
       }
 
-      // Load physical servo configs
       if (config["servos"])
       {
-        const auto &servos_node = config["servos"];
-        if (servos_node["ids"] && servos_node["ids"].IsSequence())
-        {
-          servo_ids_.clear();
-          for (const auto &id_node : servos_node["ids"])
-          {
-            servo_ids_.push_back(static_cast<uint8_t>(id_node.as<int>()));
-          }
-        }
-
-        for (const auto id : servo_ids_)
-        {
-          const std::string s_key = "servo_" + std::to_string(id);
-          if (servos_node[s_key])
-          {
-            const auto &s = servos_node[s_key];
-            ServoConfig cfg;
-            cfg.id = id;
-            cfg.min_pwm = s["min_pwm"] ? s["min_pwm"].as<int>() : 500;
-            cfg.max_pwm = s["max_pwm"] ? s["max_pwm"].as<int>() : 2500;
-            cfg.rad_per_pwm = s["rad_per_pwm"] ? s["rad_per_pwm"].as<double>()
-                                               : (270.0 * M_PI / 180.0) / 2000.0;
-            servo_configs_[id] = cfg;
-          }
-        }
+        parse_servos_yaml(config["servos"]);
       }
 
-      // Load unified kinematic joint & remapping definitions
       if (config["joints"])
       {
-        const auto &joints_node = config["joints"];
-        std::vector<JointKinematicConfig> new_joints;
-        std::vector<JointRemapConfig> remap_configs;
-
-        for (auto it = joints_node.begin(); it != joints_node.end(); ++it)
-        {
-          const std::string jname = it->first.as<std::string>();
-          const auto &jval = it->second;
-          if (!jval.IsMap())
-            continue;
-
-          // 1. Leader Joint Hardware & Kinematic Limits
-          JointKinematicConfig jcfg;
-          jcfg.joint_name = jname;
-
-          double l_min = -M_PI;
-          double l_max = M_PI;
-          if (jval["leader_range"] && jval["leader_range"].IsSequence() && jval["leader_range"].size() == 2)
-          {
-            l_min = jval["leader_range"][0].as<double>();
-            l_max = jval["leader_range"][1].as<double>();
-          }
-          jcfg.min_limit_rad = l_min;
-          jcfg.max_limit_rad = l_max;
-
-          if (jval["sources"] && jval["sources"].IsSequence())
-          {
-            const auto &sources = jval["sources"];
-            const auto &weights = jval["weights"];
-            const auto &signs = jval["signs"];
-            for (size_t i = 0; i < sources.size(); ++i)
-            {
-              ServoContribution sc;
-              sc.servo_id = static_cast<uint8_t>(sources[i].as<int>());
-              sc.weight = (weights && i < weights.size()) ? weights[i].as<double>() : 1.0;
-              sc.sign = (signs && i < signs.size()) ? signs[i].as<double>() : 1.0;
-              jcfg.sources.push_back(sc);
-            }
-          }
-          new_joints.push_back(jcfg);
-
-          // 2. Follower Kinematic Remapping
-          JointRemapConfig rcfg;
-          rcfg.joint_name = jname;
-          rcfg.leader_min = l_min;
-          rcfg.leader_max = l_max;
-
-          if (jval["mode"])
-          {
-            rcfg.mode = KinematicRemapper::string_to_mode(jval["mode"].as<std::string>());
-          }
-
-          if (jval["follower_range"] && jval["follower_range"].IsSequence() && jval["follower_range"].size() == 2)
-          {
-            rcfg.follower_min = jval["follower_range"][0].as<double>();
-            rcfg.follower_max = jval["follower_range"][1].as<double>();
-          }
-
-          if (jval["scale"])
-            rcfg.scale = jval["scale"].as<double>();
-          if (jval["offset"])
-            rcfg.offset = jval["offset"].as<double>();
-
-          remap_configs.push_back(rcfg);
-        }
-
-        if (!new_joints.empty())
-        {
-          joint_configs_ = std::move(new_joints);
-        }
-        if (!remap_configs.empty())
-        {
-          remapper_.configure(remap_configs);
-          RCLCPP_INFO(get_logger(), "Configured %zu unified leader/follower joints from '%s'",
-                      remap_configs.size(), filepath.c_str());
-        }
+        parse_joints_yaml(config["joints"]);
       }
 
-      RCLCPP_INFO(get_logger(), "Successfully loaded calibration from '%s'", filepath.c_str());
+      update_remapping_configuration();
+      RCLCPP_INFO(get_logger(), "Successfully loaded leader calibration from '%s'", filepath.c_str());
       return true;
     }
     catch (const std::exception &e)
@@ -250,11 +254,25 @@ namespace teleop_zhongli_servo_hw
   {
     port_ = declare_parameter<std::string>("port", "/dev/uarm_leader");
     baudrate_ = declare_parameter<int>("baudrate", default_config::kBaudRate);
-    timeout_ms_ = declare_parameter<int>("timeout_ms", default_config::kTimeoutMs);
     publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", default_config::kPublishRateHz);
-    command_delay_us_ = declare_parameter<int>("command_delay_us", default_config::kCommandDelayUs);
     leader_topic_ = declare_parameter<std::string>("leader_topic", "/leader/joint_states");
     calibration_file_ = declare_parameter<std::string>("calibration_file", "");
+
+    // Remap mode overrides (e.g. ["arm_gripper=min_max", "arm_shoulder_pan=direct"])
+    const auto remap_modes_param = declare_parameter<std::vector<std::string>>(
+        "joint_remap_modes", std::vector<std::string>{});
+    for (const auto &item : remap_modes_param)
+    {
+      const auto sep = item.find_first_of("=:");
+      if (sep != std::string::npos)
+      {
+        custom_remap_modes_[item.substr(0, sep)] = item.substr(sep + 1);
+      }
+      else
+      {
+        custom_remap_modes_["*"] = item;
+      }
+    }
 
     // Follower Controller & Dispatch Parameters
     DispatcherConfig disp_cfg;
@@ -324,11 +342,11 @@ namespace teleop_zhongli_servo_hw
       return false;
     }
 
-    if (!bus_worker_->configure(port_, baudrate_, timeout_ms_, command_delay_us_, &err))
+    if (!bus_worker_->configure(port_, baudrate_, default_config::kTimeoutMs, default_config::kCommandDelayUs, &err))
     {
       RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 5000,
-          "Cannot open 1 Mbps serial port '%s': %s (Check udev rules or permissions)",
+          "Cannot open serial port '%s': %s (Check udev rules or permissions)",
           port_.c_str(), err.c_str());
       connected_ = false;
       return false;
@@ -386,16 +404,19 @@ namespace teleop_zhongli_servo_hw
 
       joint_pub_->publish(joint_state_msg_);
 
-      // Dispatch real-time commands to follower arm
+      // Dispatch real-time commands to follower arm only when dynamic URDF limits are ready
       if (dispatcher_.get_mode() != DispatchMode::JOINT_STATES_ONLY)
       {
-        const size_t num_joints = follower_arm_joints_.size();
-        for (size_t i = 0; i < num_joints; ++i)
+        if (follower_limits_ready_.load(std::memory_order_relaxed))
         {
-          leader_positions_scratch_[i] = snapshot->joint_positions_rad[follower_to_leader_idx_[i]];
+          const size_t num_joints = follower_arm_joints_.size();
+          for (size_t i = 0; i < num_joints; ++i)
+          {
+            leader_positions_scratch_[i] = snapshot->joint_positions_rad[follower_to_leader_idx_[i]];
+          }
+          const auto follower_positions = remapper_.remap_all(leader_positions_scratch_);
+          dispatcher_.dispatch(follower_positions, joint_state_msg_.header.stamp);
         }
-        const auto follower_positions = remapper_.remap_all(leader_positions_scratch_);
-        dispatcher_.dispatch(follower_positions, joint_state_msg_.header.stamp);
       }
 
       // Update measured publish rate
@@ -451,6 +472,149 @@ namespace teleop_zhongli_servo_hw
         follower_arm_joints_.size());
   }
 
+  void TeleopUarmNode::on_robot_description(const std_msgs::msg::String::ConstSharedPtr msg)
+  {
+    if (msg && !msg->data.empty())
+    {
+      parse_and_apply_urdf(msg->data);
+    }
+  }
+
+  bool TeleopUarmNode::parse_and_apply_urdf(const std::string &urdf_xml)
+  {
+    urdf::Model model;
+    if (!model.initString(urdf_xml))
+    {
+      RCLCPP_WARN(get_logger(), "Failed to parse robot_description URDF XML string.");
+      return false;
+    }
+
+    std::unordered_map<std::string, std::pair<double, double>> new_limits;
+    size_t found_count = 0;
+
+    for (const auto &jname : follower_arm_joints_)
+    {
+      const auto joint = model.getJoint(jname);
+      if (joint && joint->limits)
+      {
+        new_limits[jname] = {joint->limits->lower, joint->limits->upper};
+        found_count++;
+      }
+      else
+      {
+        RCLCPP_WARN(
+            get_logger(),
+            "Joint '%s' missing from robot_description URDF or lacks limits. Using fallback [-pi, pi].",
+            jname.c_str());
+        new_limits[jname] = {-M_PI, M_PI};
+      }
+    }
+
+    follower_limits_ = std::move(new_limits);
+    update_remapping_configuration();
+    follower_limits_ready_.store(true, std::memory_order_release);
+
+    RCLCPP_INFO(
+        get_logger(),
+        "Applied dynamic follower joint limits for %zu/%zu joints from '/robot_description'. Follower dispatching is ACTIVE.",
+        found_count, follower_arm_joints_.size());
+
+    for (const auto &cfg : remapper_.get_configs())
+    {
+      RCLCPP_INFO(
+          get_logger(),
+          "  [%s] Mode: %s, Leader: [%.3f, %.3f], Follower (URDF): [%.3f, %.3f], Scale: %.3f, Offset: %.3f",
+          cfg.joint_name.c_str(),
+          KinematicRemapper::mode_to_string(cfg.mode).c_str(),
+          cfg.leader_min, cfg.leader_max,
+          cfg.follower_min, cfg.follower_max,
+          cfg.scale, cfg.offset);
+    }
+
+    return true;
+  }
+
+  JointRemapConfig TeleopUarmNode::build_single_remap_config(
+      const std::string &joint_name,
+      const std::unordered_map<std::string, const JointKinematicConfig *> &leader_cfg_map) const
+  {
+    JointRemapConfig rcfg;
+    rcfg.joint_name = joint_name;
+
+    double l_min = -M_PI;
+    double l_max = M_PI;
+    const auto it_l = leader_cfg_map.find(joint_name);
+    if (it_l != leader_cfg_map.end())
+    {
+      l_min = it_l->second->min_limit_rad;
+      l_max = it_l->second->max_limit_rad;
+    }
+    rcfg.leader_min = l_min;
+    rcfg.leader_max = l_max;
+
+    double f_min = -M_PI;
+    double f_max = M_PI;
+    const auto it_f = follower_limits_.find(joint_name);
+    if (it_f != follower_limits_.end())
+    {
+      f_min = it_f->second.first;
+      f_max = it_f->second.second;
+    }
+    rcfg.follower_min = f_min;
+    rcfg.follower_max = f_max;
+
+    std::string mode_str;
+    const auto it_m = custom_remap_modes_.find(joint_name);
+    if (it_m != custom_remap_modes_.end())
+    {
+      mode_str = it_m->second;
+    }
+    else if (joint_name == "arm_gripper")
+    {
+      mode_str = "min_max";
+    }
+    else if (joint_name == "arm_shoulder_pan")
+    {
+      mode_str = "direct";
+    }
+    else
+    {
+      mode_str = "scale_offset";
+    }
+
+    rcfg.mode = KinematicRemapper::string_to_mode(mode_str);
+
+    if (rcfg.mode == RemapMode::SCALE_OFFSET || rcfg.mode == RemapMode::CENTERED_SCALE)
+    {
+      const double l_span = std::abs(l_max - l_min);
+      const double f_span = std::abs(f_max - f_min);
+      rcfg.scale = (l_span > 1e-4) ? (f_span / l_span) : 1.0;
+      rcfg.offset = 0.0;
+    }
+
+    return rcfg;
+  }
+
+  void TeleopUarmNode::update_remapping_configuration()
+  {
+    std::unordered_map<std::string, const JointKinematicConfig *> leader_cfg_map;
+    leader_cfg_map.reserve(joint_configs_.size());
+    for (const auto &jcfg : joint_configs_)
+    {
+      leader_cfg_map[jcfg.joint_name] = &jcfg;
+    }
+
+    std::vector<JointRemapConfig> remap_configs;
+    remap_configs.reserve(follower_arm_joints_.size());
+
+    for (const auto &fj : follower_arm_joints_)
+    {
+      remap_configs.push_back(build_single_remap_config(fj, leader_cfg_map));
+    }
+
+    remapper_.configure(remap_configs);
+  }
+
   void TeleopUarmNode::produce_connection_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat)
   {
     const bool is_active = (bus_worker_ && bus_worker_->is_running());
@@ -468,7 +632,7 @@ namespace teleop_zhongli_servo_hw
     }
     else
     {
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Serial connection active (1 Mbps)");
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Serial connection active (115200 baud)");
     }
 
     stat.add("Serial Port", port_);

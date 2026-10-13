@@ -12,18 +12,22 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
+#include <urdf/model.h>
 
 #include "teleop_zhongli_servo_hw/follower_dispatcher.hpp"
 #include "teleop_zhongli_servo_hw/kinematic_remapper.hpp"
@@ -59,14 +63,30 @@ namespace teleop_zhongli_servo_hw
         const rclcpp::Time &stamp);
     void setup_joint_mapping();
 
-    // Runtime Parameter Configurations (1 Mbps high-rate defaults)
+    // Dynamic Robot Description & Follower Limits
+    void on_robot_description(const std_msgs::msg::String::ConstSharedPtr msg);
+    bool parse_and_apply_urdf(const std::string &urdf_xml);
+    void update_remapping_configuration();
+
+    // Helper methods for configuration and remapping
+    void parse_servos_yaml(const YAML::Node &servos_node);
+    void parse_joints_yaml(const YAML::Node &joints_node);
+    JointRemapConfig build_single_remap_config(
+        const std::string &joint_name,
+        const std::unordered_map<std::string, const JointKinematicConfig *> &leader_cfg_map) const;
+
+    // Runtime Parameter Configurations (115200 baud defaults)
     std::string port_{"/dev/uarm_leader"};
     int baudrate_{default_config::kBaudRate};
-    int timeout_ms_{default_config::kTimeoutMs};
     double publish_rate_hz_{default_config::kPublishRateHz};
-    int command_delay_us_{default_config::kCommandDelayUs};
     std::string leader_topic_{"/leader/joint_states"};
     std::string calibration_file_{""};
+
+    // Dynamic Follower URDF / Joint Limits Management
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_sub_;
+    std::atomic<bool> follower_limits_ready_{false};
+    std::unordered_map<std::string, std::string> custom_remap_modes_;
+    std::unordered_map<std::string, std::pair<double, double>> follower_limits_;
 
     // Follower Dispatcher & Remapping Components
     KinematicRemapper remapper_;

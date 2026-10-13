@@ -42,10 +42,10 @@ namespace teleop_zhongli_servo_hw
     ZhongliProtocol &operator=(ZhongliProtocol &&) = delete;
 
     /**
-     * @brief Open serial port to communication bus at 1 Mbps.
+     * @brief Open serial port to communication bus at 115200 baud.
      *
      * @param[in] port_name Device path (e.g. "/dev/ttyUSB0").
-     * @param[in] baudrate Baud rate (strictly 1000000).
+     * @param[in] baudrate Baud rate (strictly 115200).
      * @param[in] timeout_ms Per-transaction read/write timeout in milliseconds.
      * @param[in] command_delay_us Inter-command spacing in microseconds.
      * @param[out] error Optional output string for failure details.
@@ -54,17 +54,6 @@ namespace teleop_zhongli_servo_hw
     bool open(
         const std::string &port_name,
         int baudrate = default_config::kBaudRate,
-        int timeout_ms = default_config::kTimeoutMs,
-        int command_delay_us = default_config::kCommandDelayUs,
-        std::string *error = nullptr);
-
-    /**
-     * @brief Auto-negotiate baud rate: probes 1 Mbps, falls back to 115200, sends #000PBD5! to upgrade.
-     */
-    bool auto_negotiate_and_open(
-        const std::string &port_name,
-        int target_baudrate,
-        int *negotiated_baudrate,
         int timeout_ms = default_config::kTimeoutMs,
         int command_delay_us = default_config::kCommandDelayUs,
         std::string *error = nullptr);

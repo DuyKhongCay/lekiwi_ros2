@@ -82,15 +82,20 @@ namespace teleop_zhongli_servo_hw
       std::string *error) noexcept
   {
     port_name_ = port_name;
+    baudrate_ = baudrate;
     timeout_ms_ = timeout_ms;
     command_delay_us_ = command_delay_us;
 
-    int negotiated_baud = baudrate;
-    if (!protocol_.auto_negotiate_and_open(port_name_, baudrate, &negotiated_baud, timeout_ms_, command_delay_us_, error))
+    if (!protocol_.open(port_name_, baudrate_, timeout_ms_, command_delay_us_, error))
     {
       return false;
     }
-    baudrate_ = negotiated_baud;
+
+    if (!protocol_.handshake(3, error))
+    {
+      protocol_.close();
+      return false;
+    }
 
     return true;
   }

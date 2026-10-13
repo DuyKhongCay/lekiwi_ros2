@@ -14,6 +14,7 @@ find_package(diagnostic_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(urdf REQUIRED)
 
 pkg_check_modules(SERIAL REQUIRED libserial)
 
@@ -58,6 +59,7 @@ target_link_libraries(teleop_uarm_node
   trajectory_msgs::trajectory_msgs
   std_msgs::std_msgs
   yaml-cpp
+  urdf::urdf
 )
 
 add_executable(calibrate_uarm_node
@@ -117,7 +119,7 @@ if(BUILD_TESTING)
   ament_add_gtest(test_kinematic_remapping test/test_kinematic_remapping.cpp)
   target_compile_features(test_kinematic_remapping PUBLIC cxx_std_20)
   target_include_directories(test_kinematic_remapping PRIVATE include)
-  target_link_libraries(test_kinematic_remapping teleop_zhongli_protocol)
+  target_link_libraries(test_kinematic_remapping teleop_zhongli_protocol urdf::urdf)
 
   ament_add_gtest(test_bus_worker test/test_bus_worker.cpp)
   target_compile_features(test_bus_worker PUBLIC cxx_std_20)
@@ -126,5 +128,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(teleop_zhongli_servo_hwTargets HAS_LIBRARY_TARGET)
-ament_export_dependencies(rclcpp sensor_msgs diagnostic_updater diagnostic_msgs trajectory_msgs std_msgs)
+ament_export_dependencies(rclcpp sensor_msgs diagnostic_updater diagnostic_msgs trajectory_msgs std_msgs urdf)
 ament_package()

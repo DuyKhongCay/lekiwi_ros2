@@ -1,6 +1,6 @@
 /**
  * @file test_command_format.cpp
- * @brief Unit tests for Zhongli ASCII 1 Mbps protocol formatting and parsing.
+ * @brief Unit tests for Zhongli ASCII protocol formatting and parsing (115200 baud).
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -100,11 +100,26 @@ TEST(TestZhongliProtocolParse, ParseVersionResponse)
 
 TEST(TestZhongliProtocolTiming, DefaultConfigTimingConstants)
 {
-  EXPECT_EQ(default_config::kTimeoutMs115200, 70);
-  EXPECT_EQ(default_config::kTimeoutMs1M, 20);
+  EXPECT_EQ(default_config::kBaudRate, 115200);
+  EXPECT_EQ(default_config::kTimeoutMs, 70);
+  EXPECT_EQ(default_config::kCommandDelayUs, 50);
   EXPECT_EQ(default_config::kEepromCommitDelayMs, 150);
   EXPECT_DOUBLE_EQ(default_config::kCalibPublishRateHz, 20.0);
   EXPECT_DOUBLE_EQ(default_config::kPublishRateHz, 50.0);
+}
+
+TEST(TestZhongliProtocolBaudRate, Enforce115200Exclusive)
+{
+  ZhongliProtocol protocol;
+  std::string err;
+
+  // Attempting to open with 1000000 or anything other than 115200 must be immediately rejected
+  EXPECT_FALSE(protocol.open("/dev/non_existent_port", 1000000, 70, 50, &err));
+  EXPECT_NE(err.find("Unsupported baudrate"), std::string::npos);
+
+  err.clear();
+  EXPECT_FALSE(protocol.open("/dev/non_existent_port", 9600, 70, 50, &err));
+  EXPECT_NE(err.find("Unsupported baudrate"), std::string::npos);
 }
 
 

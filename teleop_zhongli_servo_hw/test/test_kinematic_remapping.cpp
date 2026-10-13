@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "teleop_zhongli_servo_hw/kinematic_remapper.hpp"
+#include <urdfdom/urdf_parser/urdf_parser.h>
 
 using namespace teleop_zhongli_servo_hw;
 
@@ -228,4 +229,93 @@ TEST(TestKinematicRemapper, ModeStringConversions)
   EXPECT_EQ(KinematicRemapper::mode_to_string(RemapMode::MIN_MAX), "min_max");
   EXPECT_EQ(KinematicRemapper::mode_to_string(RemapMode::CENTERED_SCALE), "centered_scale");
   EXPECT_EQ(KinematicRemapper::mode_to_string(RemapMode::SCALE_OFFSET), "scale_offset");
+}
+
+TEST(TestKinematicRemapper, DynamicSpanAutoScaling)
+{
+  // Test dynamic calculation of scale = follower_span / leader_span
+  JointRemapConfig cfg;
+  cfg.joint_name = "arm_shoulder_lift";
+  cfg.mode = RemapMode::SCALE_OFFSET;
+  cfg.leader_min = -1.5;
+  cfg.leader_max = 1.5;      // span = 3.0
+  cfg.follower_min = -2.25;
+  cfg.follower_max = 2.25;    // span = 4.5
+
+  const double l_span = std::abs(cfg.leader_max - cfg.leader_min);
+  const double f_span = std::abs(cfg.follower_max - cfg.follower_min);
+  cfg.scale = (l_span > 1e-4) ? (f_span / l_span) : 1.0; // 4.5 / 3.0 = 1.5
+  cfg.offset = 0.0;
+
+  KinematicRemapper remapper;
+  EXPECT_TRUE(remapper.configure({cfg}));
+
+  EXPECT_NEAR(cfg.scale, 1.5, 1e-6);
+  EXPECT_NEAR(remapper.remap_joint(0, 0.0), 0.0, 1e-6);
+  EXPECT_NEAR(remapper.remap_joint(0, 1.0), 1.5, 1e-6);
+  EXPECT_NEAR(remapper.remap_joint(0, -1.0), -1.5, 1e-6);
+  // Clamping at follower bounds
+  EXPECT_NEAR(remapper.remap_joint(0, 2.0), 2.25, 1e-6);
+  EXPECT_NEAR(remapper.remap_joint(0, -2.0), -2.25, 1e-6);
+
+  // Degenerate zero leader span
+  const double l_span_zero = 0.0;
+  const double fallback_scale = (l_span_zero > 1e-4) ? (f_span / l_span_zero) : 1.0;
+  EXPECT_DOUBLE_EQ(fallback_scale, 1.0);
+}
+
+TEST(TestKinematicRemapper, URDFDynamicLimitIngestion)
+{
+  // Minimal URDF XML representative of robot_description
+  const std::string urdf_xml = R"(
+    <robot name="test_robot">
+      <link name="base"/>
+      <link name="shoulder"/>
+      <link name="elbow"/>
+      <joint name="arm_shoulder_lift" type="revolute">
+        <parent link="base"/>
+        <child link="shoulder"/>
+        <limit lower="-1.7794" upper="1.8070" effort="10.0" velocity="1.0"/>
+      </joint>
+      <joint name="arm_elbow_flex" type="revolute">
+        <parent link="shoulder"/>
+        <child link="elbow"/>
+        <limit lower="-1.6873" upper="1.5753" effort="10.0" velocity="1.0"/>
+      </joint>
+    </robot>
+  )";
+
+  // Parse using urdfdom parser
+  auto model = urdf::parseURDF(urdf_xml);
+  ASSERT_NE(model, nullptr);
+
+  auto joint_lift = model->getJoint("arm_shoulder_lift");
+  ASSERT_NE(joint_lift, nullptr);
+  ASSERT_NE(joint_lift->limits, nullptr);
+  EXPECT_NEAR(joint_lift->limits->lower, -1.7794, 1e-4);
+  EXPECT_NEAR(joint_lift->limits->upper, 1.8070, 1e-4);
+
+  auto joint_elbow = model->getJoint("arm_elbow_flex");
+  ASSERT_NE(joint_elbow, nullptr);
+  ASSERT_NE(joint_elbow->limits, nullptr);
+  EXPECT_NEAR(joint_elbow->limits->lower, -1.6873, 1e-4);
+  EXPECT_NEAR(joint_elbow->limits->upper, 1.5753, 1e-4);
+
+  // Construct remapping configuration using dynamic limits
+  JointRemapConfig rcfg_lift;
+  rcfg_lift.joint_name = "arm_shoulder_lift";
+  rcfg_lift.mode = RemapMode::SCALE_OFFSET;
+  rcfg_lift.leader_min = -1.566869;
+  rcfg_lift.leader_max = 1.670542;
+  rcfg_lift.follower_min = joint_lift->limits->lower;
+  rcfg_lift.follower_max = joint_lift->limits->upper;
+
+  const double l_span = std::abs(rcfg_lift.leader_max - rcfg_lift.leader_min);
+  const double f_span = std::abs(rcfg_lift.follower_max - rcfg_lift.follower_min);
+  rcfg_lift.scale = (l_span > 1e-4) ? (f_span / l_span) : 1.0;
+  rcfg_lift.offset = 0.0;
+
+  KinematicRemapper remapper;
+  EXPECT_TRUE(remapper.configure({rcfg_lift}));
+  EXPECT_NEAR(rcfg_lift.scale, 3.5864 / 3.2374, 1e-3);
 }

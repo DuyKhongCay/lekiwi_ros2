@@ -164,39 +164,3 @@ TEST(TestZhongliKinematics, LowPassFilterConvergence)
   }
   EXPECT_NEAR(y, 0.0, 1e-4);
 }
-
-TEST(TestZhongliKinematics, DirectIdenticalJointMapping)
-{
-  const std::vector<std::string> leader_joints = {
-      "arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex",
-      "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"};
-
-  const std::vector<std::string> follower_joints = {
-      "arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex",
-      "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"};
-
-  std::unordered_map<std::string, int> leader_indices;
-  for (size_t i = 0; i < leader_joints.size(); ++i)
-  {
-    leader_indices[leader_joints[i]] = static_cast<int>(i);
-  }
-
-  // 1. Direct 1:1 match
-  std::vector<int> mapped_indices(follower_joints.size(), -1);
-  for (size_t i = 0; i < follower_joints.size(); ++i)
-  {
-    const auto &fj = follower_joints[i];
-    auto it = leader_indices.find(fj);
-    ASSERT_NE(it, leader_indices.end());
-    mapped_indices[i] = it->second;
-  }
-
-  for (size_t i = 0; i < follower_joints.size(); ++i)
-  {
-    EXPECT_EQ(mapped_indices[i], static_cast<int>(i));
-  }
-
-  // 2. Missing/mismatched joint detection
-  const std::string invalid_fj = "arm_unknown_joint";
-  EXPECT_EQ(leader_indices.find(invalid_fj), leader_indices.end());
-}

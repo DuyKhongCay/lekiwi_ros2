@@ -1,13 +1,11 @@
 # ==============================================================================
-# uArm Leader Arm Teleoperation Runtime Parameters (1 Mbps High-Rate Bus)
+# uArm Leader Arm Teleoperation Runtime Parameters (115200 Baud Bus)
 # ==============================================================================
 /**:
   ros__parameters:
     port: "/dev/uarm_leader" # /dev/uarm_leader_2 or /dev/uarm_leader
     baudrate: 115200
-    timeout_ms: 70
     publish_rate_hz: 50.0
-    command_delay_us: 50
     leader_topic: "/leader/joint_states"
     calibration_file: "" # Optional custom calibration YAML path
 
