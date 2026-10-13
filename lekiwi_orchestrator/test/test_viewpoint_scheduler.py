@@ -42,7 +42,7 @@ def test_rank_by_azimuth_sorting_and_edges():
     assert math.isclose(ranked[2].angle_offset, math.pi / 2)
     assert math.isclose(ranked[3].angle_offset, math.pi)
     for i in range(len(ranked) - 1):
-        assert ranked[i].arc_cost <= ranked[i + 1].arc_cost
+        assert ranked[i].cumulative_cost <= ranked[i + 1].cumulative_cost
 
     # Wraparound across +pi / -pi boundary
     curr_x = 0.56 * math.cos(3.1)
@@ -55,3 +55,21 @@ def test_rank_by_azimuth_sorting_and_edges():
     assert rank_by_azimuth(0.56, 0.0, candidate_offsets=[], standoff_radius=0.56) == []
     ranked_orig = rank_by_azimuth(0.0, 0.0, candidate_offsets=[0.0, math.pi - 0.1], standoff_radius=0.56, fallback_yaw=math.pi)
     assert math.isclose(ranked_orig[0].angle_offset, math.pi - 0.1)
+
+
+def test_rank_by_azimuth_chained_sequence():
+    """Verify that viewpoints form a continuous nearest-neighbor chain without zigzagging."""
+    # Candidates: [-0.3, 0.1, 0.4, 0.7] starting from 0.0 rad
+    # Star topology would sort as [0.1, -0.3, 0.4, 0.7] (ping-pong across 0)
+    # Chained nearest-neighbor produces [0.1, 0.4, 0.7, -0.3] (unidirectional sweep)
+    candidates = [-0.3, 0.1, 0.4, 0.7]
+    ranked = rank_by_azimuth(0.56, 0.0, candidate_offsets=candidates, standoff_radius=0.56)
+
+    assert len(ranked) == 4
+    assert math.isclose(ranked[0].angle_offset, 0.1)
+    assert math.isclose(ranked[1].angle_offset, 0.4)
+    assert math.isclose(ranked[2].angle_offset, 0.7)
+    assert math.isclose(ranked[3].angle_offset, -0.3)
+
+    for i in range(len(ranked) - 1):
+        assert ranked[i].cumulative_cost <= ranked[i + 1].cumulative_cost

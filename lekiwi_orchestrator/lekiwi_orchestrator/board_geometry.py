@@ -64,6 +64,43 @@ class RankedViewpoint:
     pose_in_board: PoseStamped
     angular_distance: float
     arc_cost: float
+    cumulative_cost: float = 0.0
+
+
+def _resolve_azimuth(curr_x: float, curr_y: float, fallback_yaw: float) -> float:
+    """Resolve current azimuth angle, falling back if at origin."""
+    return math.atan2(curr_y, curr_x) if math.hypot(curr_x, curr_y) > 1e-4 else fallback_yaw
+
+
+def _build_viewpoint(
+    target_offset: float,
+    ref_azimuth: float,
+    standoff_radius: float,
+    board_frame: str,
+    cum_cost: float,
+) -> RankedViewpoint:
+    """Construct a RankedViewpoint computed relative to the preceding reference azimuth."""
+    delta_theta = abs(normalize_angle(target_offset - ref_azimuth))
+    step_cost = standoff_radius * delta_theta
+
+    target_x = standoff_radius * math.cos(target_offset)
+    target_y = standoff_radius * math.sin(target_offset)
+    facing_yaw = math.atan2(-target_y, -target_x)
+
+    pose = _create_standoff_pose(
+        target_x=target_x,
+        target_y=target_y,
+        facing_yaw=facing_yaw,
+        frame_id=board_frame,
+    )
+
+    return RankedViewpoint(
+        angle_offset=target_offset,
+        pose_in_board=pose,
+        angular_distance=delta_theta,
+        arc_cost=step_cost,
+        cumulative_cost=cum_cost + step_cost,
+    )
 
 
 def rank_by_azimuth(
@@ -74,9 +111,11 @@ def rank_by_azimuth(
     board_frame: str = "chessboard_frame",
     fallback_yaw: float = 0.0,
 ) -> list[RankedViewpoint]:
-    """Rank candidate viewpoints by shortest geodesic distance along the standoff circle.
+    """Rank candidate viewpoints sequentially via a chained nearest-neighbor tour.
 
-    Minimizes mobile base transit time by selecting the closest angular vantage point first.
+    The first viewpoint is chosen closest to the current robot position.
+    Each subsequent viewpoint is chosen closest to the preceding viewpoint,
+    eliminating back-and-forth zigzagging along the standoff perimeter.
 
     Args:
         curr_x: Current X position in `board_frame` (meters).
@@ -87,35 +126,35 @@ def rank_by_azimuth(
         fallback_yaw: Fallback angle if current robot position is at board origin.
 
     Returns:
-        List of RankedViewpoint instances sorted ascending by arc_cost (closest first).
+        List of RankedViewpoint instances ordered as a smooth sequential tour.
     """
-    dist = math.hypot(curr_x, curr_y)
-    curr_azimuth = math.atan2(curr_y, curr_x) if dist > 1e-4 else fallback_yaw
+    if not candidate_offsets:
+        return []
 
+    curr_azimuth = _resolve_azimuth(curr_x, curr_y, fallback_yaw)
+    remaining = list(candidate_offsets)
     ranked: list[RankedViewpoint] = []
-    for offset in candidate_offsets:
-        delta_theta = abs(normalize_angle(offset - curr_azimuth))
-        arc_cost = standoff_radius * delta_theta
 
-        target_x = standoff_radius * math.cos(offset)
-        target_y = standoff_radius * math.sin(offset)
-        facing_yaw = math.atan2(-target_y, -target_x)
+    ref_azimuth = curr_azimuth
+    accumulated_cost = 0.0
 
-        pose = _create_standoff_pose(
-            target_x=target_x,
-            target_y=target_y,
-            facing_yaw=facing_yaw,
-            frame_id=board_frame,
+    while remaining:
+        best_idx = min(
+            range(len(remaining)),
+            key=lambda i: abs(normalize_angle(remaining[i] - ref_azimuth)),
         )
+        next_offset = remaining.pop(best_idx)
 
-        ranked.append(
-            RankedViewpoint(
-                angle_offset=offset,
-                pose_in_board=pose,
-                angular_distance=delta_theta,
-                arc_cost=arc_cost,
-            )
+        vp = _build_viewpoint(
+            target_offset=next_offset,
+            ref_azimuth=ref_azimuth,
+            standoff_radius=standoff_radius,
+            board_frame=board_frame,
+            cum_cost=accumulated_cost,
         )
+        ranked.append(vp)
 
-    ranked.sort(key=lambda vp: vp.arc_cost)
+        ref_azimuth = next_offset
+        accumulated_cost = vp.cumulative_cost
+
     return ranked
