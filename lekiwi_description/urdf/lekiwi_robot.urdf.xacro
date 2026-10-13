@@ -8,7 +8,7 @@
   <!-- Core hardware control arguments -->
   <xacro:arg name="use_ros2_control" default="true"/>
   <xacro:arg name="hardware_type" default="mock"/>
-  <xacro:arg name="usb_port" default="/dev/lekiwi_serial"/>
+  <xacro:arg name="usb_port" default="/dev/lekiwi_serial_2"/>
   <xacro:arg name="add_transmissions" default="false"/>
   <xacro:arg name="arm_control_mode" default="kinematics"/>
 
