@@ -2,7 +2,7 @@
   "mode": "client",
   "connect": {
     "endpoints": [
-      "tcp/192.168.1.13:7447"
+      "tcp/192.168.1.13:7447#so_sndbuf=262144;so_rcvbuf=262144"
     ]
   },
   "timestamping": {
