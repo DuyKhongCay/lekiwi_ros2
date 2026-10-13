@@ -28,6 +28,7 @@
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include <urdf/model.h>
+#include <yaml-cpp/yaml.h>
 
 #include "teleop_zhongli_servo_hw/follower_dispatcher.hpp"
 #include "teleop_zhongli_servo_hw/kinematic_remapper.hpp"
