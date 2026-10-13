@@ -3,18 +3,18 @@
 # ==============================================================================
 /**:
   ros__parameters:
-    port: "/dev/uarm_leader" # /dev/uarm_leader_2 or /dev/uarm_leader
+    port: "/dev/zhongli_serial" # /dev/uarm_leader_2 or /dev/uarm_leader
     baudrate: 115200
-    publish_rate_hz: 50.0
+    publish_rate_hz: 25.0
     leader_topic: "/leader/joint_states"
     calibration_file: "" # Optional custom calibration YAML path
 
     # Follower Dispatcher Settings
-    arm_mode: "forward_position" # Options: "joint_trajectory", "forward_position", "joint_states_only"
+    arm_mode: "joint_trajectory" # Options: "joint_trajectory", "forward_position", "joint_states_only"
     follower_jtc_topic: "/arm_trajectory_controller/joint_trajectory"
     follower_fwd_topic: "/arm_forward_controller/commands"
-    point_dt_s: 0.04
-    lpf_alpha: 1.0 # 1.0 = pass-through; < 1.0 = low-pass smoothing
+    point_dt_s: 0.08
+    lpf_alpha: 0.3 # 1.0 = pass-through; < 1.0 = low-pass smoothing
     follower_arm_joints:
       - "arm_shoulder_pan"
       - "arm_shoulder_lift"

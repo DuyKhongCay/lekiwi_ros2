@@ -187,6 +187,7 @@ namespace teleop_zhongli_servo_hw
       total_cycles_.fetch_add(1, std::memory_order_relaxed);
 
       size_t successful_reads = 0;
+      size_t consecutive_fails_in_cycle = 0;
       for (size_t i = 0; i < num_servos; ++i)
       {
         const uint8_t id = servo_ids_[i];
@@ -198,10 +199,18 @@ namespace teleop_zhongli_servo_hw
           local_snapshot.servo_feedbacks[i].raw_pwm = pwm;
           local_snapshot.servo_feedbacks[i].valid = true;
           successful_reads++;
+          consecutive_fails_in_cycle = 0;
         }
         else
         {
           local_snapshot.servo_feedbacks[i].valid = false;
+          consecutive_fails_in_cycle++;
+          if (consecutive_fails_in_cycle >= 2)
+          {
+            // Fast-break: when multiple consecutive servos timeout, the serial bus is severed.
+            // Avoid burning 70ms timeouts on all remaining servos in this cycle.
+            break;
+          }
         }
 
         if (command_delay_us_ > 0)

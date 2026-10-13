@@ -1,11 +1,11 @@
 {
-    "mode": "client",
-    "connect": {
-        "endpoints": [
-            "tcp/127.0.0.1:7447#so_sndbuf=262144;so_rcvbuf=262144"
-        ]
-    },
-    "timestamping": {
-        "enabled": true
-    }
+  "mode": "client",
+  "connect": {
+    "endpoints": [
+      "tcp/127.0.0.1:7447#so_sndbuf=262144;so_rcvbuf=262144"
+    ]
+  },
+  "timestamping": {
+    "enabled": true
+  }
 }

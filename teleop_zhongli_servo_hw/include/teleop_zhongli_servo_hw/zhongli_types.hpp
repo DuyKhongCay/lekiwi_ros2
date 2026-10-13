@@ -34,7 +34,7 @@ namespace teleop_zhongli_servo_hw
     /// Consecutive read errors before snapshot invalidation.
     inline constexpr uint64_t kMaxConsecutiveErrorsBeforeInvalid = 3;
     /// Consecutive read errors before attempting background serial reconnect.
-    inline constexpr uint64_t kMaxConsecutiveErrorsBeforeReconnect = 50;
+    inline constexpr uint64_t kMaxConsecutiveErrorsBeforeReconnect = 10;
   } // namespace default_config
 
   /**

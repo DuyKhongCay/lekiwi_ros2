@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -59,9 +60,8 @@ namespace teleop_zhongli_servo_hw
     /**
      * @brief Filter positions and publish command to configured follower controller.
      * @param follower_positions_rad Unfiltered follower joint angles in radians.
-     * @param stamp Message timestamp.
      */
-    void dispatch(const std::vector<double> &follower_positions_rad, const rclcpp::Time &stamp);
+    void dispatch(const std::vector<double> &follower_positions_rad);
 
     /**
      * @brief Reset filter state on disconnect or timeout to avoid step jumps upon reconnect.
@@ -82,6 +82,9 @@ namespace teleop_zhongli_servo_hw
 
     std::vector<double> lpf_filtered_positions_;
     bool lpf_initialized_{false};
+
+    std::vector<double> previous_positions_;
+    std::chrono::steady_clock::time_point last_dispatch_time_{};
 
     rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr forward_pub_;

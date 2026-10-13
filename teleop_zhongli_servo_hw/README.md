@@ -128,7 +128,7 @@ The driver transforms leader joint positions $\theta_L$ to follower commands $\t
 | `publish_rate_hz` | double | `50.0` | Main teleoperation loop and publish frequency in Hz. |
 | `leader_topic` | string | `"/leader/joint_states"` | Output topic for leader joint states. |
 | `calibration_file` | string | `""` | Path to physical leader calibration YAML (`uarm_teleop_calib.yaml`). |
-| `arm_mode` | string | `"joint_trajectory"` | Follower dispatch mode: `"joint_trajectory"`, `"forward_command"`, or `"joint_states_only"`. |
+| `arm_mode` | string | `"joint_trajectory"` | Follower dispatch mode: `"joint_trajectory"`, `"forward_position"`, or `"joint_states_only"`. |
 | `point_dt_s` | double | `0.04` | Time delta between trajectory waypoints in seconds. |
 | `lpf_alpha` | double | `1.0` | Command smoothing filter factor ($1.0 = \text{no filtering}$, $0.2 = \text{aggressive smoothing}$). |
 | `joint_remap_modes` | string[] | `[]` | Remap mode overrides (e.g. `["arm_gripper=min_max", "arm_shoulder_pan=direct"]`). |

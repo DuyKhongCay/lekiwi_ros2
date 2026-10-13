@@ -28,6 +28,7 @@
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include <urdf/model.h>
+#include <yaml-cpp/yaml.h>
 
 #include "teleop_zhongli_servo_hw/follower_dispatcher.hpp"
 #include "teleop_zhongli_servo_hw/kinematic_remapper.hpp"
@@ -57,10 +58,6 @@ namespace teleop_zhongli_servo_hw
     void produce_connection_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
     void produce_telemetry_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
     void produce_frequency_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
-
-    void publish_follower_command(
-        const std::vector<JointStateData> &joint_data,
-        const rclcpp::Time &stamp);
     void setup_joint_mapping();
 
     // Dynamic Robot Description & Follower Limits
@@ -107,7 +104,6 @@ namespace teleop_zhongli_servo_hw
 
     // Pre-allocated cache buffers (Zero heap allocation in 50 Hz loop)
     sensor_msgs::msg::JointState joint_state_msg_;
-    std::vector<JointStateData> joint_data_scratch_;
     std::vector<double> leader_positions_scratch_;
 
     // Timing & Metrics

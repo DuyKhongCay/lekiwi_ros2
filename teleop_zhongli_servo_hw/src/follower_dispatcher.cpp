@@ -34,6 +34,15 @@ namespace teleop_zhongli_servo_hw
       config_.lpf_alpha = 1.0;
     }
 
+    if (config_.point_dt_s <= 0.0)
+    {
+      RCLCPP_WARN(
+          logger_,
+          "Parameter 'point_dt_s' (%.4f) must be positive, defaulting to 0.08s",
+          config_.point_dt_s);
+      config_.point_dt_s = 0.08;
+    }
+
     mode_ = string_to_mode(config_.arm_mode);
 
     // Controller command publishers use Reliable QoS
@@ -57,9 +66,7 @@ namespace teleop_zhongli_servo_hw
         config_.follower_joint_names.size());
   }
 
-  void FollowerDispatcher::dispatch(
-      const std::vector<double> &follower_positions_rad,
-      const rclcpp::Time &stamp)
+  void FollowerDispatcher::dispatch(const std::vector<double> &follower_positions_rad)
   {
     if (mode_ == DispatchMode::JOINT_STATES_ONLY)
     {
@@ -88,14 +95,35 @@ namespace teleop_zhongli_servo_hw
       }
     }
 
+    // Estimate instantaneous joint velocities: v_k = (q_k - q_{k-1}) / dt
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<double> velocities(num_joints, 0.0);
+
+    if (previous_positions_.size() == num_joints && last_dispatch_time_.time_since_epoch().count() > 0)
+    {
+      const double dt = std::chrono::duration<double>(now - last_dispatch_time_).count();
+      if (dt > 0.001 && dt <= 0.2)
+      {
+        for (size_t i = 0; i < num_joints; ++i)
+        {
+          velocities[i] = (lpf_filtered_positions_[i] - previous_positions_[i]) / dt;
+        }
+      }
+    }
+    previous_positions_ = lpf_filtered_positions_;
+    last_dispatch_time_ = now;
+
     if (mode_ == DispatchMode::JOINT_TRAJECTORY)
     {
       trajectory_msgs::msg::JointTrajectory jt;
-      jt.header.stamp = stamp;
+      // Streaming Teleop Pattern: header.stamp = 0 indicates immediate execution
+      // upon receipt (T_start = T_recv), preventing "ends in the past" trajectory drops.
+      jt.header.stamp = clock_ ? rclcpp::Time(0, 0, clock_->get_clock_type()) : rclcpp::Time(0);
       jt.joint_names = config_.follower_joint_names;
 
       trajectory_msgs::msg::JointTrajectoryPoint pt;
       pt.positions = lpf_filtered_positions_;
+      pt.velocities = std::move(velocities);
 
       const int sec = static_cast<int>(config_.point_dt_s);
       const uint32_t nsec = static_cast<uint32_t>((config_.point_dt_s - sec) * 1e9);
@@ -124,6 +152,8 @@ namespace teleop_zhongli_servo_hw
   {
     lpf_initialized_ = false;
     lpf_filtered_positions_.clear();
+    previous_positions_.clear();
+    last_dispatch_time_ = std::chrono::steady_clock::time_point{};
   }
 
   DispatchMode FollowerDispatcher::string_to_mode(const std::string &mode_str)

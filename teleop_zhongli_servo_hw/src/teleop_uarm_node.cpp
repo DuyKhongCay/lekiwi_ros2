@@ -415,7 +415,7 @@ namespace teleop_zhongli_servo_hw
             leader_positions_scratch_[i] = snapshot->joint_positions_rad[follower_to_leader_idx_[i]];
           }
           const auto follower_positions = remapper_.remap_all(leader_positions_scratch_);
-          dispatcher_.dispatch(follower_positions, joint_state_msg_.header.stamp);
+          dispatcher_.dispatch(follower_positions);
         }
       }
 

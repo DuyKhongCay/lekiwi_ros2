@@ -125,6 +125,11 @@ if(BUILD_TESTING)
   target_compile_features(test_bus_worker PUBLIC cxx_std_20)
   target_include_directories(test_bus_worker PRIVATE include)
   target_link_libraries(test_bus_worker teleop_zhongli_protocol)
+
+  ament_add_gtest(test_follower_dispatcher test/test_follower_dispatcher.cpp)
+  target_compile_features(test_follower_dispatcher PUBLIC cxx_std_20)
+  target_include_directories(test_follower_dispatcher PRIVATE include)
+  target_link_libraries(test_follower_dispatcher teleop_zhongli_protocol)
 endif()
 
 ament_export_targets(teleop_zhongli_servo_hwTargets HAS_LIBRARY_TARGET)

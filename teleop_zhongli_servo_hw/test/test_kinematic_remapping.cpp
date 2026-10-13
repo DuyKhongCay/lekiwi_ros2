@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "teleop_zhongli_servo_hw/kinematic_remapper.hpp"
-#include <urdfdom/urdf_parser/urdf_parser.h>
+#include <urdf/model.h>
 
 using namespace teleop_zhongli_servo_hw;
 
@@ -285,17 +285,17 @@ TEST(TestKinematicRemapper, URDFDynamicLimitIngestion)
     </robot>
   )";
 
-  // Parse using urdfdom parser
-  auto model = urdf::parseURDF(urdf_xml);
-  ASSERT_NE(model, nullptr);
+  // Parse using ROS 2 URDF Model
+  urdf::Model model;
+  ASSERT_TRUE(model.initString(urdf_xml));
 
-  auto joint_lift = model->getJoint("arm_shoulder_lift");
+  auto joint_lift = model.getJoint("arm_shoulder_lift");
   ASSERT_NE(joint_lift, nullptr);
   ASSERT_NE(joint_lift->limits, nullptr);
   EXPECT_NEAR(joint_lift->limits->lower, -1.7794, 1e-4);
   EXPECT_NEAR(joint_lift->limits->upper, 1.8070, 1e-4);
 
-  auto joint_elbow = model->getJoint("arm_elbow_flex");
+  auto joint_elbow = model.getJoint("arm_elbow_flex");
   ASSERT_NE(joint_elbow, nullptr);
   ASSERT_NE(joint_elbow->limits, nullptr);
   EXPECT_NEAR(joint_elbow->limits->lower, -1.6873, 1e-4);
