@@ -3,17 +3,11 @@
 import os
 import shutil
 import tempfile
-import time
 import pytest
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionClient
 from sensor_msgs.msg import Joy
 from std_srvs.srv import Trigger
-try:
-    from lekiwi_interfaces.action import ExecuteChessMove
-except ImportError:
-    ExecuteChessMove = None
 
 
 @pytest.fixture(scope="module")
@@ -31,19 +25,18 @@ def test_gamepad_and_services(ros_context):
         # Create helper test node
         test_node = Node("test_recorder_client")
         joy_pub = test_node.create_publisher(Joy, "/joy", 10)
+        assert joy_pub is not None
 
         # Clients for Trigger services
         start_cli = test_node.create_client(Trigger, "/episode_recorder_node/start_episode")
-        stop_cli = test_node.create_client(Trigger, "/episode_recorder_node/stop_episode")
         save_cli = test_node.create_client(Trigger, "/episode_recorder_node/save_episode")
         discard_cli = test_node.create_client(Trigger, "/episode_recorder_node/discard_episode")
 
-        # Action client for ExecuteChessMove
-        if ExecuteChessMove is not None:
-            action_cli = ActionClient(test_node, ExecuteChessMove, "/manipulation/execute_chess_move")
-            assert action_cli is not None
+        assert start_cli is not None
+        assert save_cli is not None
+        assert discard_cli is not None
 
-        # Let's verify that the module compiles and can run
+        # Verify that the temp output dir exists
         assert os.path.exists(temp_dir)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

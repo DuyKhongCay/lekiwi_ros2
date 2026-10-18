@@ -10,14 +10,9 @@
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
 #include <rosbag2_cpp/writer.hpp>
-#include <geometry_msgs/msg/point.hpp>
 #include <lekiwi_interfaces/action/execute_chess_move.hpp>
-#include <sensor_msgs/msg/joy.hpp>
 #include <std_srvs/srv/trigger.hpp>
-
-#include "chess_episode_recorder/gamepad_controller.hpp"
 
 namespace chess_episode_recorder
 {
@@ -46,11 +41,10 @@ public:
 private:
   void init_parameters();
   void init_services();
-  void init_gamepad();
 
   void discover_and_subscribe_topics();
-  void on_joy(const sensor_msgs::msg::Joy::ConstSharedPtr msg);
-  void on_goal_received(const lekiwi_interfaces::action::ExecuteChessMove_Goal::ConstSharedPtr msg);
+  void on_feedback_received(
+    const lekiwi_interfaces::action::ExecuteChessMove_FeedbackMessage::ConstSharedPtr msg);
   void write_serialized_message(
     const std::string &topic_name,
     const std::string &topic_type,
@@ -69,9 +63,6 @@ private:
   void handle_start(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
     std::shared_ptr<std_srvs::srv::Trigger::Response> res);
-  void handle_stop(
-    const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
-    std::shared_ptr<std_srvs::srv::Trigger::Response> res);
   void handle_save(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
     std::shared_ptr<std_srvs::srv::Trigger::Response> res);
@@ -84,6 +75,7 @@ private:
   std::string experiment_name_;
   std::string task_;
   std::string storage_id_;
+  std::string feedback_topic_{"/manipulation/execute_chess_move/_action/feedback"};
   std::vector<std::string> requested_topics_;
   std::filesystem::path base_output_dir_;
 
@@ -103,42 +95,15 @@ private:
   std::map<std::string, uint64_t> message_counts_;
   rclcpp::TimerBase::SharedPtr discovery_timer_;
 
-  // Gamepad integration
-  std::unique_ptr<GamepadController> gamepad_controller_;
-  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
-
-  // Goal Context (LeRobot instruction and conditioning points)
-  std::string goal_topic_{"/manipulation/active_chess_move"};
-  rclcpp::Subscription<lekiwi_interfaces::action::ExecuteChessMove_Goal>::SharedPtr goal_sub_;
-  std::mutex goal_mutex_;
+  // Feedback Context (captures active move instruction from ManipulationActionServer)
+  rclcpp::Subscription<lekiwi_interfaces::action::ExecuteChessMove_FeedbackMessage>::SharedPtr feedback_sub_;
+  std::mutex instruction_mutex_;
   std::string current_instruction_{""};
-  geometry_msgs::msg::Point current_pick_point_{};
-  geometry_msgs::msg::Point current_place_point_{};
-  std::string current_target_frame_{"chessboard_frame"};
-  bool has_goal_context_{false};
-
-  // Action Server Callbacks for ExecuteChessMove
-  using ExecuteChessMove = lekiwi_interfaces::action::ExecuteChessMove;
-  using GoalHandleChessMove = rclcpp_action::ServerGoalHandle<ExecuteChessMove>;
-
-  rclcpp_action::GoalResponse handle_action_goal(
-    const rclcpp_action::GoalUUID & uuid,
-    std::shared_ptr<const ExecuteChessMove::Goal> goal);
-  rclcpp_action::CancelResponse handle_action_cancel(
-    const std::shared_ptr<GoalHandleChessMove> goal_handle);
-  void handle_action_accepted(const std::shared_ptr<GoalHandleChessMove> goal_handle);
 
   // ROS 2 Trigger services
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_start_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_save_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_discard_;
-
-  // Action Server for ExecuteChessMove
-  std::string action_name_{"/manipulation/execute_chess_move"};
-  rclcpp_action::Server<ExecuteChessMove>::SharedPtr action_server_;
-  std::shared_ptr<GoalHandleChessMove> active_goal_handle_{nullptr};
-  std::mutex action_goal_mutex_;
 };
 
 } // namespace chess_episode_recorder
