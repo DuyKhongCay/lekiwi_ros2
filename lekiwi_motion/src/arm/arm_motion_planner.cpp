@@ -21,7 +21,7 @@
 #include <string>
 #include <utility>
 
-namespace lekiwi_motion
+namespace lekiwi_motion::arm
 {
 
 ArmMotionPlanner::ArmMotionPlanner(
@@ -45,8 +45,7 @@ std::vector<double> ArmMotionPlanner::get_stow_pose_internal() const
   if (opt_stow.has_value() && !opt_stow->empty()) {
     return *opt_stow;
   }
-  // Safe default fallback matching system orchestrator config for SO-101 6-DoF arm
-  return {0.0, -1.57, 1.57, 0.75, 0.0, gripper_closed_rad()};
+  throw std::runtime_error("ArmMotionPlanner: 'stow' named pose is required for transit retract but is not configured.");
 }
 
 std::unordered_map<std::string, std::vector<double>> ArmMotionPlanner::build_pick_targets(
@@ -98,7 +97,7 @@ std::unordered_map<std::string, std::vector<double>> ArmMotionPlanner::build_pha
     {"APPROACH_PLACE", with_gripper(place_approach, closed_g)},
     {"DESCEND_PLACE",  with_gripper(place_descend, closed_g)},
     {"RELEASE",        with_gripper(place_descend, open_g)},
-    {"RETRACT",        with_gripper(get_stow_pose_internal(), open_g)},
+    {"RETRACT",        with_gripper(place_approach, open_g)},
   };
 }
 
@@ -120,7 +119,7 @@ std::unordered_map<std::string, std::vector<double>> ArmMotionPlanner::build_cle
     {"LIFT",           with_gripper(pick_approach, closed_g)},
     {"DROP_CLEAR",     with_gripper(bin_pose, closed_g)},
     {"RELEASE_CLEAR",  with_gripper(bin_pose, open_g)},
-    {"RETRACT_CLEAR",  with_gripper(get_stow_pose_internal(), open_g)},
+    {"RETRACT_CLEAR",  with_gripper(pick_approach, open_g)},
   };
 }
 
@@ -276,4 +275,4 @@ trajectory_msgs::msg::JointTrajectory ArmMotionPlanner::plan_trajectory(
   return traj_msg;
 }
 
-}  // namespace lekiwi_motion
+}  // namespace lekiwi_motion::arm

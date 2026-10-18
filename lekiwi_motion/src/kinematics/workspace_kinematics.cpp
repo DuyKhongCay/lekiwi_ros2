@@ -340,6 +340,16 @@ namespace lekiwi_motion::workspace
     return joints;
   }
 
+  std::pair<double, double> SO101AnalyticalSolver::compute_tool_angles_from_joints(
+      const std::array<double, 5> & joints) const noexcept
+  {
+    const double pitch_sum =
+        signs_[1] * joints[1] + signs_[2] * joints[2] + signs_[3] * joints[3];
+    const double pitch = pitch_sum + tool_pitch_offset_;
+    const double roll = signs_[4] * joints[4] + tool_roll_offset_;
+    return {pitch, roll};
+  }
+
   IkResult SO101AnalyticalSolver::solve(
       double x, double y, double z,
       double pitch,

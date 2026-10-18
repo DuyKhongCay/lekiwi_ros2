@@ -14,7 +14,7 @@
 
 /**
  * @file manipulation_action_server.hpp
- * @brief Composable ROS 2 Action Server executing multi-phase pick-and-place manipulation.
+ * @brief Composable ROS 2 Node orchestrating multi-phase chess manipulation and named poses.
  * @author LeKiwi Labs
  * @copyright Apache-2.0
  */
@@ -24,30 +24,27 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <control_msgs/action/follow_joint_trajectory.hpp>
 #include <diagnostic_updater/diagnostic_updater.hpp>
+#include <geometry_msgs/msg/point.hpp>
 #include <lekiwi_interfaces/action/execute_chess_move.hpp>
+#include <lekiwi_interfaces/srv/go_to_named_pose.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
-#include <optional>
-#include <geometry_msgs/msg/point.hpp>
-#include <sensor_msgs/msg/joint_state.hpp>
-#include <std_msgs/msg/string.hpp>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
-#include <trajectory_msgs/msg/joint_trajectory.hpp>
+#include <std_msgs/msg/bool.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 #include "lekiwi_motion/arm/arm_motion_planner.hpp"
-#include "lekiwi_motion/kinematics/workspace_kinematics.hpp"
+#include "lekiwi_motion/arm/arm_trajectory_executor.hpp"
 
 namespace lekiwi_motion
 {
@@ -57,40 +54,99 @@ class ManipulationActionServer : public rclcpp::Node
 public:
   using ExecuteChessMove = lekiwi_interfaces::action::ExecuteChessMove;
   using GoalHandleChessMove = rclcpp_action::ServerGoalHandle<ExecuteChessMove>;
-  using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
+  using GoToNamedPose = lekiwi_interfaces::srv::GoToNamedPose;
+  using Trigger = std_srvs::srv::Trigger;
 
   explicit ManipulationActionServer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
   ~ManipulationActionServer() override;
 
-  [[nodiscard]] std::vector<double> get_current_positions_or_default();
-  [[nodiscard]] const std::vector<std::string> & arm_joints() const noexcept { return arm_joints_; }
+  void accept_robot_description(const std::string & urdf_xml);
 
-  void init_kinematics_and_tf();
-  void accept_robot_description(const std::string & xml);
+  [[nodiscard]] const std::vector<std::string> & arm_joints() const noexcept
+  {
+    return arm_joints_;
+  }
+
+  [[nodiscard]] std::optional<std::vector<double>> get_named_pose(
+    const std::string & pose_name) const;
+
+  [[nodiscard]] std::vector<double> get_current_positions_or_default() const;
 
   [[nodiscard]] std::optional<std::vector<double>> resolve_point_ik(
     const geometry_msgs::msg::Point & point,
     const std::string & target_frame,
-    double gripper_state);
-
-  std::pair<bool, std::string> execute_named_pose(
-    const std::string & pose_name,
-    std::optional<double> velocity_rad_s = std::nullopt);
-  [[nodiscard]] std::unordered_map<std::string, std::vector<double>> named_poses() const
-  {
-    return arm_motion_planner_.named_poses().to_map();
-  }
-  [[nodiscard]] const ArmMotionPlanner & planner() const noexcept { return arm_motion_planner_; }
-  [[nodiscard]] bool is_mock_manipulation() const noexcept { return mock_manipulation_; }
-  [[nodiscard]] double max_velocity() const noexcept { return max_velocity_; }
+    double gripper_state) const;
 
 private:
-  void declare_and_load_parameters();
-  void on_robot_description(const std_msgs::msg::String::ConstSharedPtr msg);
+  struct ApproachDescendPair
+  {
+    std::vector<double> approach;
+    std::vector<double> descend;
+  };
 
-  void on_joint_state(sensor_msgs::msg::JointState::ConstSharedPtr msg);
-  void on_command_named_pose(std_msgs::msg::String::ConstSharedPtr msg);
+  struct MoveWaypoints
+  {
+    std::optional<ApproachDescendPair> pick;
+    std::optional<ApproachDescendPair> place;
+  };
 
+  struct MoveExecutionContext
+  {
+    std::shared_ptr<GoalHandleChessMove> goal_handle;
+    std::shared_ptr<const ExecuteChessMove::Goal> goal;
+    std::shared_ptr<ExecuteChessMove::Feedback> feedback;
+    std::shared_ptr<ExecuteChessMove::Result> result;
+    std::chrono::steady_clock::time_point start_time;
+  };
+
+  enum class RecordCoordinationSignal
+  {
+    NONE,
+    SAVE,
+    ABORT
+  };
+
+  void declare_and_init_parameters();
+  void set_runtime_approach_pose(const std::vector<double> & joints);
+
+  // Service Callbacks & Helpers
+  void handle_named_pose_request(
+    const std::shared_ptr<GoToNamedPose::Request> request,
+    std::shared_ptr<GoToNamedPose::Response> response);
+
+  [[nodiscard]] std::optional<std::vector<double>> validate_named_pose_request(
+    const std::shared_ptr<GoToNamedPose::Request> & request,
+    const std::shared_ptr<GoToNamedPose::Response> & response) const;
+
+  void handle_toggle_gripper(
+    const std::shared_ptr<Trigger::Request> request,
+    std::shared_ptr<Trigger::Response> response);
+
+  [[nodiscard]] bool execute_manual_joint_target(
+    const std::vector<double> & start_positions,
+    const std::vector<double> & target_positions,
+    const std::string & label,
+    std::string & out_message);
+
+  [[nodiscard]] arm::TrajectoryExecutionGuard acquire_trajectory_guard();
+  void publish_arm_busy(bool is_busy);
+
+  void handle_save_episode(
+    const std::shared_ptr<Trigger::Request> request,
+    std::shared_ptr<Trigger::Response> response);
+
+  void handle_abort_episode(
+    const std::shared_ptr<Trigger::Request> request,
+    std::shared_ptr<Trigger::Response> response);
+
+  bool forward_trigger_request(
+    const rclcpp::Client<Trigger>::SharedPtr & client,
+    const std::string & service_label,
+    const std::shared_ptr<Trigger::Response> & response);
+
+  void notify_record_signal(RecordCoordinationSignal signal) noexcept;
+
+  // Action Server Callbacks & Move Orchestration
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const ExecuteChessMove::Goal> goal);
@@ -100,49 +156,25 @@ private:
 
   void handle_accepted(const std::shared_ptr<GoalHandleChessMove> goal_handle);
   void execute_move(const std::shared_ptr<GoalHandleChessMove> goal_handle);
+  void execute_record_mode(const MoveExecutionContext & ctx, bool is_pure_place);
 
-  std::pair<bool, std::string> send_trajectory_and_wait(
-    const trajectory_msgs::msg::JointTrajectory & traj,
-    const std::shared_ptr<GoalHandleChessMove> & goal_handle = nullptr);
+  [[nodiscard]] RecordCoordinationSignal wait_for_record_signal(
+    const std::shared_ptr<GoalHandleChessMove> & goal_handle);
 
-  std::pair<bool, std::string> execute_mock_trajectory(
-    const trajectory_msgs::msg::JointTrajectory & traj,
-    const std::shared_ptr<GoalHandleChessMove> & goal_handle = nullptr);
-
-  void publish_simulated_joint_state(const std::vector<double> & positions);
-
-  void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper & stat);
-
-  [[nodiscard]] geometry_msgs::msg::Point sanitize_target_point(
-    const geometry_msgs::msg::Point & point,
-    const std::string & target_frame) const;
-
-  [[nodiscard]] std::optional<geometry_msgs::msg::PointStamped> transform_to_base(
-    const geometry_msgs::msg::PointStamped & in_pt) const;
-
-  struct ApproachDescendPair
-  {
-    std::vector<double> approach;
-    std::vector<double> descend;
-  };
-
-  void abort_move(
-    const std::shared_ptr<GoalHandleChessMove> & goal_handle,
-    const std::shared_ptr<ExecuteChessMove::Result> & result,
-    const std::string & message,
-    double progress,
-    std::chrono::steady_clock::time_point start_time);
+  [[nodiscard]] std::optional<MoveWaypoints> resolve_move_waypoints(
+    const MoveExecutionContext & ctx,
+    bool is_pure_pick,
+    bool is_pure_place);
 
   [[nodiscard]] std::optional<ApproachDescendPair> resolve_approach_and_descend(
+    const MoveExecutionContext & ctx,
     const geometry_msgs::msg::Point & target_pt,
-    const std::string & target_frame,
     double gripper_rad,
-    const std::string & stage_name,
-    const std::shared_ptr<GoalHandleChessMove> & goal_handle,
-    const std::shared_ptr<ExecuteChessMove::Result> & result,
-    std::chrono::steady_clock::time_point start_time);
+    const std::string & stage_name);
 
-  [[nodiscard]] std::pair<std::vector<std::string>, std::unordered_map<std::string, std::vector<double>>>
+  [[nodiscard]] std::pair<
+    std::vector<std::string>,
+    std::unordered_map<std::string, std::vector<double>>>
   build_active_phase_plan(
     const std::shared_ptr<const ExecuteChessMove::Goal> & goal,
     bool is_pure_pick,
@@ -155,38 +187,67 @@ private:
     const std::string & phase_name,
     const std::vector<double> & target_pos,
     double total_phases,
-    const std::shared_ptr<GoalHandleChessMove> & goal_handle,
-    const std::shared_ptr<ExecuteChessMove::Feedback> & feedback,
-    const std::shared_ptr<ExecuteChessMove::Result> & result,
-    std::chrono::steady_clock::time_point start_time);
+    const MoveExecutionContext & ctx);
 
-  std::pair<bool, std::string> wait_for_controller_result(
-    rclcpp_action::Client<FollowJointTrajectory>::GoalHandle::SharedPtr handle,
-    double expected_sec,
-    const std::shared_ptr<GoalHandleChessMove> & goal_handle);
+  bool check_and_handle_preemption(
+    const MoveExecutionContext & ctx,
+    const std::string & phase_name,
+    double progress);
 
-  // Parameters
-  std::string action_name_;
-  std::string controller_action_name_;
-  std::string joint_states_topic_;
-  double max_velocity_{1.5};
+  void publish_phase_feedback(
+    const MoveExecutionContext & ctx,
+    const std::string & phase_name,
+    double progress);
+
+  void succeed_move(const MoveExecutionContext & ctx, const std::string & message);
+  void cancel_move(const MoveExecutionContext & ctx, const std::string & message, double progress);
+  void abort_move(const MoveExecutionContext & ctx, const std::string & message, double progress);
+
+  void set_snapshot(
+    const std::string & phase,
+    double progress_percent,
+    const std::string & instruction = "");
+  void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper & stat);
+
+  // Configuration Parameters
+  std::string action_name_{"/manipulation/execute_chess_move"};
+  std::string controller_action_name_{"/arm_trajectory_controller/follow_joint_trajectory"};
+  std::string arm_busy_topic_{"/arm/is_busy"};
   double approach_z_offset_{0.05};
+  double default_velocity_{1.5};
   double sampling_rate_hz_{50.0};
-  std::vector<std::string> arm_joints_;
-  bool mock_manipulation_{false};
+  bool mock_execution_{false};
+  bool record_{false};
+  std::vector<std::string> arm_joints_{
+    "arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex",
+    "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"
+  };
+  std::vector<double> default_approach_pose_{};
 
-  // Callback groups
+  // Domain Planner & Trajectory Executor
+  mutable std::mutex planner_mutex_;
+  arm::ArmMotionPlanner arm_motion_planner_;
+  std::unique_ptr<arm::ArmTrajectoryExecutor> executor_;
+
+  // Record Mode Coordination
+  std::condition_variable record_cv_;
+  std::mutex record_mutex_;
+  RecordCoordinationSignal record_signal_{RecordCoordinationSignal::NONE};
+  std::atomic<bool> is_waiting_record_{false};
+
+  // Callback Groups & ROS 2 Interfaces
   rclcpp::CallbackGroup::SharedPtr cb_group_action_server_;
-  rclcpp::CallbackGroup::SharedPtr cb_group_controller_client_;
-
-  // ROS 2 communication entities
+  rclcpp::CallbackGroup::SharedPtr cb_group_recorder_coordination_;
   rclcpp_action::Server<ExecuteChessMove>::SharedPtr action_server_;
-  rclcpp_action::Client<FollowJointTrajectory>::SharedPtr controller_client_;
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr mock_joint_state_pub_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr named_pose_sub_;
+  rclcpp::Service<GoToNamedPose>::SharedPtr named_pose_srv_;
+  rclcpp::Service<Trigger>::SharedPtr toggle_gripper_srv_;
+  rclcpp::Service<Trigger>::SharedPtr save_episode_srv_;
+  rclcpp::Service<Trigger>::SharedPtr abort_episode_srv_;
+  rclcpp::Client<Trigger>::SharedPtr save_client_;
+  rclcpp::Client<Trigger>::SharedPtr discard_client_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_arm_busy_;
 
-  // Diagnostic updater and thread-safe snapshot
+  // Diagnostics & Execution State
   diagnostic_updater::Updater diagnostic_updater_;
   mutable std::mutex snapshot_mutex_;
   struct ExecutionSnapshot
@@ -196,32 +257,9 @@ private:
     std::string instruction{""};
   } snapshot_;
 
-  void set_snapshot(const std::string & phase, double progress_percent, const std::string & instruction = "");
-
-  // State & Threading
-  std::mutex state_mutex_;
-  std::unordered_map<std::string, double> current_joints_;
-  std::atomic<bool> is_executing_{false};
+  std::atomic<bool> is_goal_active_{false};
   std::atomic<bool> is_shutting_down_{false};
   std::thread execution_thread_;
-
-  // Arm Motion Planner (Phase sequencing & Quintic trajectory generator)
-  ArmMotionPlanner arm_motion_planner_;
-
-  // TF & Kinematics entities
-  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-  std::unique_ptr<workspace::SO101AnalyticalSolver> analytical_solver_;
-  workspace::KinematicsModel kinematics_model_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_desc_sub_;
-
-  // Frame parameters
-  std::string board_frame_{"chessboard_frame"};
-  std::string base_frame_{"base_footprint"};
-  std::string tip_frame_{"gripperframe"};
-  double grasp_z_{0.035};
-  double default_pitch_{-1.57079632679};
-  double default_roll_{0.0};
 };
 
 }  // namespace lekiwi_motion

@@ -29,8 +29,7 @@ The `lekiwi_motion` package provides high-performance motion coordination, analy
 - **Modular Monolith Organization**: Structured into 3 clear semantic sub-modules (`kinematics`, `arm`, `supervision`) within a single performant ROS 2 package, eliminating package sprawl while preserving strict separation of concerns.
 - **Closed-Form 5-DoF Analytical IK Solver**: Deterministic microsecond-scale inverse kinematics for the SO-101 manipulator arm, leveraging geometric wrist decoupling and pitch alignment.
 - **Multi-Tier Mobile Standoff Planner**: Autonomous search across concentric perimeters (Zero-Nav, Single-Base, Dual-Base, Capture Triple-Base) to resolve end-effector targets outside current arm reach.
-- **Quintic Trajectory Generation (`C++`)**: Smooth polynomial trajectory interpolation ($s(t) = a_0 + a_1 t + \dots + a_5 t^5$) with zero velocity and zero acceleration boundary constraints at 50 Hz.
-- **Unified Manipulation & Landmark Action Server**: Composable C++ node `ManipulationActionServer` supporting normal 8-phase pick-and-place (with dynamic vertical ascension `RETRACT`), 7-phase capture clear sequence (dropping pieces into left/right bins), and explicit landmark poses (`home`, `stow`, `clear_left`, `clear_right`) via topic `~/command_named_pose`.
+- **Unified Arm Manipulation Action & Named Pose Service**: Composable C++ node `ManipulationActionServer` supporting multi-phase pick-and-place chess moves, vertical ascension `RETRACT`, capture clear sequences, and synchronous exclusive named pose transitions (`approach`, `stow`, `clear_left`, `clear_right`) via `/arm/go_to_named_pose` service.
 - **Dual-Tier System Readiness Supervisor**: Independent monitoring of Odometry (`ekf_filter_node`), Hardware Joint States (`joint_state_broadcaster`), and TF chains (`odom -> base_footprint -> arm_base_link`) to gate autonomous navigation and manipulation.
 - **Nav2 Lifecycle Gatekeeper**: Deterministic startup sequencing that validates TF tree readiness before transitioning Nav2 lifecycle nodes (`nav2_bringup`), preventing costmap and AMCL crashes during robot initialization.
 - **Hardware Torque Orchestrator**: Atomic switching of `ros2_control` controllers and broadcast bus-level torque enable/disable commands with verification callbacks.
@@ -53,7 +52,10 @@ lekiwi_motion/
 │   │   └── workspace_checker_node.hpp
 │   ├── arm/                            # [Submodule 2: Arm Motion & Manipulation]
 │   │   ├── arm_motion_planner.hpp
-│   │   └── manipulation_action_server.hpp
+│   │   ├── manipulation_action_server.hpp
+│   │   ├── cartesian_jogger.hpp
+│   │   ├── cartesian_jog_server_node.hpp
+│   │   └── joint_motion_filter.hpp
 │   ├── supervision/                    # [Submodule 3: System Supervision & Gating]
 │   │   ├── system_readiness_state.hpp
 │   │   ├── system_readiness_node.hpp
@@ -61,11 +63,11 @@ lekiwi_motion/
 │   │   └── nav2_startup_gate_node.hpp
 ├── src/
 │   ├── kinematics/                     # Workspace model & checker implementation
-│   ├── arm/                            # Arm motion planner & manipulation action server
+│   ├── arm/                            # Arm planner, executor, action servers & jogger
 │   └── supervision/                    # Readiness, torque manager & Nav2 gatekeeper
 └── test/
     ├── kinematics/                     # Kinematics & workspace gtests
-    ├── arm/                            # Arm motion planner & manipulation action server gtests
+    ├── arm/                            # Planner, executor, action servers & jogger gtests
     └── supervision/                    # Readiness state, torque & gate gtests
 ```
 
@@ -87,8 +89,10 @@ flowchart TD
         end
 
         subgraph SubArm["Submodule: arm"]
-            ManipServer["ManipulationActionServer\n(/manipulation/execute_chess_move,\n~/command_named_pose)"]
+            ManipServer["ManipulationActionServer\n(/manipulation/execute_chess_move,\n/arm/go_to_named_pose)"]
             ArmMotionPlannerNode["ArmMotionPlanner\n(Phase Sequences & Quintic Trajectories)"]
+            CartesianJoggerNode["CartesianJogger\n(POCO Cartesian Differential IK)"]
+            CartesianJogServerNode["CartesianJogServerNode\n(Cartesian Jogging & Gripper Toggle)"]
         end
 
         subgraph SubSupervision["Submodule: supervision"]
@@ -107,18 +111,18 @@ flowchart TD
 
     Orchestrator -->|CheckMoveFeasibility| CheckerNode
     Orchestrator -->|ExecuteChessMove Action| ManipServer
-    Orchestrator -->|command_named_pose| ManipServer
     Orchestrator -->|Query Nav/Grasp Ready| ReadinessNode
+    TeleopGamepad["joy_teleop / Gamepad"] -->|/arm/go_to_named_pose Service| ManipServer
 
     CheckerNode --> Mapper & Planner & Marker
     Planner --> Solver
     ManipServer --> ArmMotionPlannerNode
-
     ManipServer -->|FollowJointTrajectory| Ros2Control
 
     ReadinessNode --> ReadinessState
     EKF -->|/odometry/filtered| ReadinessNode
     Ros2Control -->|/joint_states| ReadinessNode
+    Ros2Control -->|/joint_states| ManipServer
 
     NavGateNode -->|ManageLifecycleNodes.srv| Nav2
     TorqueNode -->|SwitchController.srv| Ros2Control
@@ -138,7 +142,9 @@ flowchart TD
 
 ### 2. `arm`
 - **`arm_motion_planner.hpp` / `arm_motion_planner.cpp`**: Unified arm motion planning combining discrete phase sequencing, gripper modeling, strongly typed landmark poses (`NamedPosesConfig`), and smooth $C^2$-continuous 5th-order polynomial trajectory interpolation at configurable sampling rate (default 50 Hz). Supports atomic 5-phase `PICK` (concluding in transit `stow`), atomic 5-phase `PLACE` (starting from transit `stow`), monolithic 8-phase `PICK_AND_PLACE` (direct transit without mid-stow), and 7-phase capture moves (`DROP_CLEAR` to `CLEAR_LEFT` / `CLEAR_RIGHT`).
-- **`manipulation_action_server.hpp` / `manipulation_action_server.cpp`**: Composable ROS 2 node executing multi-phase chess manipulation trajectories (`ExecuteChessMove`) with live JIT inverse kinematics (`SO101AnalyticalSolver`), pure vertical Cartesian descent via ROS parameter `approach_z_offset`, capture bin sorting, and landmark pose commands via `~/command_named_pose`. Supports `mock_manipulation` mode for pure software / sim testing (simulated trajectory duration, real-time `/joint_states` telemetry publishing, and strict JIT IK validation) without requiring hardware trajectory controllers.
+- **`cartesian_jogger.hpp` / `cartesian_jogger.cpp`**: Pure POCO domain controller for Cartesian jogging with bumpless transfer, orientation holding, and joint velocity damping.
+- **`cartesian_jog_server_node.hpp` / `cartesian_jog_server_node.cpp`**: Standalone ROS 2 node executing analytical IK Cartesian velocity jogging with bumpless transfer and gripper toggle service.
+- **`manipulation_action_server.hpp` / `manipulation_action_server.cpp`**: Unified composable ROS 2 node executing multi-phase chess manipulation trajectories (`ExecuteChessMove`) with live JIT inverse kinematics (`SO101AnalyticalSolver`), pure vertical Cartesian descent, capture bin sorting, and synchronous exclusive named pose transitions (`/arm/go_to_named_pose` service via `lekiwi_interfaces/srv/GoToNamedPose`). Directly owns controller trajectory client and joint state telemetry.
 
 ### 3. `supervision`
 - **`system_readiness_state.hpp` / `system_readiness_state.cpp`**: Pure C++ state evaluator gating navigation and manipulation actions based on odometry covariance and joint velocities.
@@ -160,6 +166,7 @@ flowchart TD
 
 | Service Name | Service Type | Server Node | Description |
 | :--- | :--- | :--- | :--- |
+| `/arm/go_to_named_pose` | `lekiwi_interfaces/srv/GoToNamedPose` | `ManipulationActionServer` | Synchronously executes landmark joint trajectories (`approach`, `stow`, `clear_left`, `clear_right`) with exclusive execution locking. |
 | `/workspace/check_move_feasibility` | `lekiwi_interfaces/srv/CheckMoveFeasibility` | `WorkspaceCheckerNode` | Evaluates inverse kinematics, reachability, and mobile standoff tiers for piece actions. |
 | `/set_torque_enabled` | `lekiwi_interfaces/srv/SetTorqueEnabled` | `TorqueManagerNode` | Atomically transitions servo bus torque and toggles joint trajectory controllers. |
 | `/system/query_nav_ready` | `std_srvs/srv/Trigger` | `SystemReadinessNode` | Synchronously queries if localization and TF chains are valid for navigation. |
@@ -177,9 +184,8 @@ flowchart TD
 
 | Topic Name | Message Type | QoS | Node | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
-| `/joint_states` | `sensor_msgs/msg/JointState` | Sensor Data / Best Effort | `SystemReadinessNode`, `ManipulationActionServer` | Monitored for servo positions, heartbeat, and creep velocities. |
+| `/joint_states` | `sensor_msgs/msg/JointState` | Sensor Data / Best Effort | `SystemReadinessNode`, `ManipulationActionServer` | Monitored for servo positions, heartbeat, and start positions. |
 | `/odometry/filtered` | `nav_msgs/msg/Odometry` | System Default, Reliable | `SystemReadinessNode` | Filtered state estimation from EKF for motion detection. |
-| `~/command_named_pose` | `std_msgs/msg/String` | System Default | `ManipulationActionServer` | Accepts named landmark pose strings (`home`, `stow`, `clear_left`, `clear_right`). |
 | `/tf` & `/tf_static` | `tf2_msgs/msg/TFMessage` | Dynamic | `Nav2StartupGateNode`, `WorkspaceCheckerNode` | Coordinate frame resolution between board, robot, and arm. |
 
 ### 5. Action Clients & Service Clients

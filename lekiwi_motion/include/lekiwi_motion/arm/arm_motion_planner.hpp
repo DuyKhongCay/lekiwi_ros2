@@ -24,6 +24,7 @@
 #define LEKIWI_MOTION__ARM_MOTION_PLANNER_HPP_
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -32,7 +33,7 @@
 
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
-namespace lekiwi_motion
+namespace lekiwi_motion::arm
 {
 
 /**
@@ -60,20 +61,38 @@ struct GripperConfig
     const double max_val = std::max(closed_rad, open_rad);
     return std::clamp(position, min_val, max_val);
   }
+
+  /**
+   * @brief Determines whether the gripper is currently in the OPEN state.
+   *        Compares proximity to open_rad vs closed_rad (when stalled holding a piece
+   *        at ~0.20..0.60 rad < midpoint 0.75 rad, is_open() evaluates to false).
+   */
+  [[nodiscard]] bool is_open(double current_rad) const noexcept
+  {
+    return std::abs(current_rad - open_rad) < std::abs(current_rad - closed_rad);
+  }
+
+  /**
+   * @brief Returns the opposite target angle (OPEN -> closed_rad, CLOSED -> open_rad).
+   */
+  [[nodiscard]] double toggled_target(double current_rad) const noexcept
+  {
+    return is_open(current_rad) ? closed_rad : open_rad;
+  }
 };
 
 /**
  * @struct NamedPosesConfig
  * @brief Landmark joint target configurations loaded from YAML.
  *
- * - home: Standby / neutral waypoint pose (safety transition or calibration fallback).
+ * - approach: Standby / neutral waypoint pose or dynamic pre-grasp approach target.
  * - stow: Dual-purpose compact transit pose during Nav2 and board observation pose.
  * - clear_left: Drop location into left onboard chess piece bin.
  * - clear_right: Drop location into right onboard chess piece bin.
  */
 struct NamedPosesConfig
 {
-  std::vector<double> home{};
+  std::vector<double> approach{};
   std::vector<double> stow{};
   std::vector<double> clear_left{};
   std::vector<double> clear_right{};
@@ -87,7 +106,7 @@ struct NamedPosesConfig
     const size_t last = name.find_last_not_of(" \t\n\r");
     std::string key = name.substr(first, last - first + 1);
     std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-    if (key == "home") return home;
+    if (key == "approach") return approach;
     if (key == "stow") return stow;
     if (key == "clear_left") return clear_left;
     if (key == "clear_right") return clear_right;
@@ -97,7 +116,7 @@ struct NamedPosesConfig
   [[nodiscard]] std::unordered_map<std::string, std::vector<double>> to_map() const
   {
     return {
-      {"home", home},
+      {"approach", approach},
       {"stow", stow},
       {"clear_left", clear_left},
       {"clear_right", clear_right}
@@ -161,7 +180,7 @@ public:
   }
 
   /**
-   * @brief Retrieves joint targets for a named landmark pose ("home", "stow", "clear_left", "clear_right").
+   * @brief Retrieves joint targets for a named landmark pose ("approach", "stow", "clear_left", "clear_right").
    */
   [[nodiscard]] std::optional<std::vector<double>> get_named_pose(const std::string & pose_name) const
   {
@@ -231,7 +250,7 @@ public:
     const std::vector<double> & start_positions,
     const std::vector<double> & target_positions,
     double max_velocity_rad_s,
-    double min_duration_sec = 1.0) const;
+    double min_duration_sec = 0.1) const;
 
   /**
    * @brief Plans a quintic joint trajectory from start positions to target positions bounded by max joint velocity.
@@ -281,7 +300,7 @@ private:
   double default_rate_hz_{50.0};
 };
 
-}  // namespace lekiwi_motion
+}  // namespace lekiwi_motion::arm
 
 #endif  // LEKIWI_MOTION__ARM_MOTION_PLANNER_HPP_
 

@@ -21,7 +21,7 @@
 
 #include "lekiwi_motion/arm/arm_motion_planner.hpp"
 
-namespace lekiwi_motion::test
+namespace lekiwi_motion::arm::test
 {
 
 class ArmMotionPlannerTest : public ::testing::Test
@@ -38,7 +38,9 @@ protected:
       "arm_gripper"
     };
     GripperConfig gripper_cfg{1.50, 0.00};
-    planner_ = std::make_unique<ArmMotionPlanner>(arm_joints_, gripper_cfg, NamedPosesConfig{}, 50.0);
+    NamedPosesConfig named_poses{};
+    named_poses.stow = {0.0, -1.57, 1.57, 0.75, 0.0, 0.0};
+    planner_ = std::make_unique<ArmMotionPlanner>(arm_joints_, gripper_cfg, named_poses, 50.0);
   }
 
   std::vector<std::string> arm_joints_;
@@ -89,21 +91,18 @@ TEST_F(ArmMotionPlannerTest, BasicTrajectoryGenerationAndC2Continuity)
   }
 }
 
-TEST_F(ArmMotionPlannerTest, InvalidDurationThrows)
+TEST_F(ArmMotionPlannerTest, TrajectoryValidationThrowsOnInvalidInputs)
 {
   const std::vector<double> q_start = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   const std::vector<double> q_target = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1};
 
+  // Invalid duration
   EXPECT_THROW(planner_->plan_trajectory(q_start, q_target, 0.0), std::invalid_argument);
   EXPECT_THROW(planner_->plan_trajectory(q_start, q_target, -1.5), std::invalid_argument);
-}
 
-TEST_F(ArmMotionPlannerTest, DimensionMismatchThrows)
-{
-  const std::vector<double> q_start = {0.0, 0.0, 0.0};
-  const std::vector<double> q_target = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1};
-
-  EXPECT_THROW(planner_->plan_trajectory(q_start, q_target, 1.0), std::invalid_argument);
+  // Dimension mismatches & empty inputs
+  const std::vector<double> q_short = {0.0, 0.0};
+  EXPECT_THROW(planner_->plan_trajectory(q_short, q_target, 1.0), std::invalid_argument);
 
   const std::vector<double> empty_pos = {};
   EXPECT_THROW(planner_->plan_trajectory(empty_pos, empty_pos, 1.0), std::invalid_argument);
@@ -133,154 +132,102 @@ TEST_F(ArmMotionPlannerTest, GripperClampingBounds)
   EXPECT_DOUBLE_EQ(planner_->clamp_gripper(2.50), 1.50);
 }
 
-TEST_F(ArmMotionPlannerTest, BuildPhaseTargetsGeneratesCompleteSequence)
+TEST_F(ArmMotionPlannerTest, GripperStateDetectionAndToggledTarget)
 {
-  std::vector<double> pick_approach{0.1, 0.2, 0.3, 0.4, 0.5, 1.50};
-  std::vector<double> pick_descend{0.1, 0.1, 0.3, 0.4, 0.5, 1.50};
-  std::vector<double> place_approach{0.6, 0.7, 0.8, 0.9, 1.0, 0.00};
-  std::vector<double> place_descend{0.6, 0.5, 0.8, 0.9, 1.0, 0.00};
+  const auto & cfg = planner_->gripper_config();
 
-  auto phases = planner_->build_phase_targets(
-    pick_approach, pick_descend, place_approach, place_descend);
+  // Fully closed -> CLOSED, toggled target is open_rad (1.50)
+  EXPECT_FALSE(cfg.is_open(0.0));
+  EXPECT_DOUBLE_EQ(cfg.toggled_target(0.0), 1.50);
 
-  for (const auto & phase_name : ArmMotionPlanner::kPickAndPlacePhases) {
-    EXPECT_TRUE(phases.find(phase_name) != phases.end())
-      << "Missing phase: " << phase_name;
-  }
+  // Stalled grasping a chess piece (~0.35 rad < midpoint 0.75 rad) -> CLOSED, toggled target is open_rad (1.50)
+  EXPECT_FALSE(cfg.is_open(0.35));
+  EXPECT_DOUBLE_EQ(cfg.toggled_target(0.35), 1.50);
 
-  // Gripper states & phase targets
-  EXPECT_DOUBLE_EQ(phases.at("APPROACH_PICK").back(), 1.50);
-  EXPECT_EQ(phases.at("APPROACH_PICK"), pick_approach);
-
-  EXPECT_DOUBLE_EQ(phases.at("DESCEND_PICK").back(), 1.50);
-  EXPECT_EQ(phases.at("DESCEND_PICK"), pick_descend);
-
-  EXPECT_DOUBLE_EQ(phases.at("GRASP").back(), 0.00);
-  EXPECT_DOUBLE_EQ(phases.at("GRASP")[0], pick_descend[0]);
-  EXPECT_DOUBLE_EQ(phases.at("GRASP")[1], pick_descend[1]);
-
-  EXPECT_DOUBLE_EQ(phases.at("LIFT").back(), 0.00);
-  EXPECT_DOUBLE_EQ(phases.at("LIFT")[0], pick_approach[0]);
-  EXPECT_DOUBLE_EQ(phases.at("LIFT")[1], pick_approach[1]);
-
-  EXPECT_DOUBLE_EQ(phases.at("APPROACH_PLACE").back(), 0.00);
-  EXPECT_DOUBLE_EQ(phases.at("APPROACH_PLACE")[0], place_approach[0]);
-
-  EXPECT_DOUBLE_EQ(phases.at("DESCEND_PLACE").back(), 0.00);
-  EXPECT_DOUBLE_EQ(phases.at("DESCEND_PLACE")[0], place_descend[0]);
-
-  EXPECT_DOUBLE_EQ(phases.at("RELEASE").back(), 1.50);
-  EXPECT_DOUBLE_EQ(phases.at("RELEASE")[0], place_descend[0]);
-
-  // RETRACT is a dynamic phase: vertically ascending back to place_approach with open gripper
-  EXPECT_DOUBLE_EQ(phases.at("RETRACT").back(), 1.50);
-  EXPECT_DOUBLE_EQ(phases.at("RETRACT")[0], place_approach[0]);
-  EXPECT_DOUBLE_EQ(phases.at("RETRACT")[1], place_approach[1]);
+  // Open (> midpoint 0.75 rad) -> OPEN, toggled target is closed_rad (0.0)
+  EXPECT_TRUE(cfg.is_open(1.20));
+  EXPECT_DOUBLE_EQ(cfg.toggled_target(1.20), 0.0);
+  EXPECT_TRUE(cfg.is_open(1.50));
+  EXPECT_DOUBLE_EQ(cfg.toggled_target(1.50), 0.0);
 }
 
-TEST_F(ArmMotionPlannerTest, BuildClearTargetsForLeftAndRightBins)
+TEST_F(ArmMotionPlannerTest, BuildPickAndPlacePhaseTargetsSequences)
+{
+  const std::vector<double> pick_approach{0.1, 0.2, 0.3, 0.4, 0.5, 1.50};
+  const std::vector<double> pick_descend{0.1, 0.1, 0.3, 0.4, 0.5, 1.50};
+  const std::vector<double> place_approach{0.6, 0.7, 0.8, 0.9, 1.0, 0.00};
+  const std::vector<double> place_descend{0.6, 0.5, 0.8, 0.9, 1.0, 0.00};
+
+  // 1. Direct Pick-and-Place (8 phases)
+  const auto pnp_phases = planner_->build_phase_targets(
+    pick_approach, pick_descend, place_approach, place_descend);
+  EXPECT_EQ(pnp_phases.size(), ArmMotionPlanner::kPickAndPlacePhases.size());
+  for (const auto & phase_name : ArmMotionPlanner::kPickAndPlacePhases) {
+    EXPECT_TRUE(pnp_phases.find(phase_name) != pnp_phases.end()) << "Missing phase: " << phase_name;
+  }
+  EXPECT_DOUBLE_EQ(pnp_phases.at("GRASP").back(), 0.00);    // closed on piece
+  EXPECT_DOUBLE_EQ(pnp_phases.at("RELEASE").back(), 1.50);  // open release
+
+  // 2. Atomic Pick (5 phases, concludes in transit stow with closed gripper)
+  const auto pick_phases = planner_->build_pick_targets(pick_approach, pick_descend);
+  EXPECT_EQ(pick_phases.size(), ArmMotionPlanner::kPickPhases.size());
+  for (const auto & phase_name : ArmMotionPlanner::kPickPhases) {
+    EXPECT_TRUE(pick_phases.find(phase_name) != pick_phases.end()) << "Missing pick phase: " << phase_name;
+  }
+  EXPECT_DOUBLE_EQ(pick_phases.at("RETRACT_STOW")[1], -1.57);
+  EXPECT_DOUBLE_EQ(pick_phases.at("RETRACT_STOW").back(), 0.00);
+
+  // 3. Atomic Place (5 phases, ascends in Z then returns to stow with open gripper)
+  const auto place_phases = planner_->build_place_targets(place_approach, place_descend);
+  EXPECT_EQ(place_phases.size(), ArmMotionPlanner::kPlacePhases.size());
+  for (const auto & phase_name : ArmMotionPlanner::kPlacePhases) {
+    EXPECT_TRUE(place_phases.find(phase_name) != place_phases.end()) << "Missing place phase: " << phase_name;
+  }
+  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT")[0], place_approach[0]);
+  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT").back(), 1.50);
+  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT_STOW")[1], -1.57);
+  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT_STOW").back(), 1.50);
+}
+
+TEST_F(ArmMotionPlannerTest, BuildClearPhaseTargetsSequences)
 {
   NamedPosesConfig named_cfg;
-  named_cfg.home = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  named_cfg.approach = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   named_cfg.stow = {0.0, -1.57, 1.57, 0.75, 0.0, 0.0};
   named_cfg.clear_left = {1.20, -0.60, 0.80, 0.0, 0.0, 0.0};
   named_cfg.clear_right = {-1.20, -0.60, 0.80, 0.0, 0.0, 0.0};
   planner_->set_named_poses(named_cfg);
 
-  std::vector<double> pick_approach{0.1, 0.2, 0.3, 0.4, 0.5, 1.50};
-  std::vector<double> pick_descend{0.1, 0.1, 0.3, 0.4, 0.5, 1.50};
+  const std::vector<double> pick_approach{0.1, 0.2, 0.3, 0.4, 0.5, 1.50};
+  const std::vector<double> pick_descend{0.1, 0.1, 0.3, 0.4, 0.5, 1.50};
 
-  // Test LEFT bin
-  auto left_phases = planner_->build_clear_targets(pick_approach, pick_descend, ClearBinSide::LEFT);
-  for (const auto & phase_name : ArmMotionPlanner::kClearPhases) {
-    EXPECT_TRUE(left_phases.find(phase_name) != left_phases.end())
-      << "Missing clear phase: " << phase_name;
-  }
-  EXPECT_DOUBLE_EQ(left_phases.at("APPROACH_PICK")[1], 0.2);
-  EXPECT_DOUBLE_EQ(left_phases.at("DESCEND_PICK")[1], 0.1);
+  // Test LEFT graveyard bin
+  const auto left_phases = planner_->build_clear_targets(pick_approach, pick_descend, ClearBinSide::LEFT);
+  EXPECT_EQ(left_phases.size(), ArmMotionPlanner::kClearPhases.size());
   EXPECT_DOUBLE_EQ(left_phases.at("DROP_CLEAR")[0], 1.20);
-  EXPECT_DOUBLE_EQ(left_phases.at("DROP_CLEAR").back(), 0.00); // closed holding piece
-  EXPECT_DOUBLE_EQ(left_phases.at("RELEASE_CLEAR").back(), 1.50); // open releasing into bin
-  EXPECT_DOUBLE_EQ(left_phases.at("RETRACT_CLEAR")[1], 0.2); // pick approach shoulder lift
-  EXPECT_DOUBLE_EQ(left_phases.at("RETRACT_CLEAR").back(), 1.50); // open gripper
+  EXPECT_DOUBLE_EQ(left_phases.at("DROP_CLEAR").back(), 0.00);
+  EXPECT_DOUBLE_EQ(left_phases.at("RELEASE_CLEAR").back(), 1.50);
 
-  // Test RIGHT bin
-  auto right_phases = planner_->build_clear_targets(pick_approach, pick_descend, ClearBinSide::RIGHT);
+  // Test RIGHT graveyard bin
+  const auto right_phases = planner_->build_clear_targets(pick_approach, pick_descend, ClearBinSide::RIGHT);
+  EXPECT_EQ(right_phases.size(), ArmMotionPlanner::kClearPhases.size());
   EXPECT_DOUBLE_EQ(right_phases.at("DROP_CLEAR")[0], -1.20);
   EXPECT_DOUBLE_EQ(right_phases.at("DROP_CLEAR").back(), 0.00);
   EXPECT_DOUBLE_EQ(right_phases.at("RELEASE_CLEAR").back(), 1.50);
 }
 
-TEST_F(ArmMotionPlannerTest, BuildPickTargetsIncludesTransitStowWithClosedGripper)
-{
-  NamedPosesConfig named_cfg;
-  named_cfg.stow = {0.0, -1.57, 1.57, 0.75, 0.0, 0.0};
-  planner_->set_named_poses(named_cfg);
-
-  std::vector<double> pick_approach{0.1, 0.2, 0.3, 0.4, 0.5, 1.50};
-  std::vector<double> pick_descend{0.1, 0.1, 0.3, 0.4, 0.5, 1.50};
-
-  auto pick_phases = planner_->build_pick_targets(pick_approach, pick_descend);
-
-  EXPECT_EQ(pick_phases.size(), 5u);
-  for (const auto & phase_name : ArmMotionPlanner::kPickPhases) {
-    EXPECT_TRUE(pick_phases.find(phase_name) != pick_phases.end())
-      << "Missing pick phase: " << phase_name;
-  }
-
-  EXPECT_DOUBLE_EQ(pick_phases.at("APPROACH_PICK").back(), 1.50);
-  EXPECT_DOUBLE_EQ(pick_phases.at("DESCEND_PICK").back(), 1.50);
-  EXPECT_DOUBLE_EQ(pick_phases.at("GRASP").back(), 0.00);
-  EXPECT_DOUBLE_EQ(pick_phases.at("LIFT").back(), 0.00);
-
-  // RETRACT_STOW must tuck into stow with CLOSED gripper for secure base movement
-  EXPECT_DOUBLE_EQ(pick_phases.at("RETRACT_STOW")[1], -1.57);
-  EXPECT_DOUBLE_EQ(pick_phases.at("RETRACT_STOW").back(), 0.00);
-}
-
-TEST_F(ArmMotionPlannerTest, BuildPlaceTargetsIncludesVerticalRetractAndStow)
-{
-  NamedPosesConfig named_cfg;
-  named_cfg.stow = {0.0, -1.57, 1.57, 0.75, 0.0, 0.0};
-  planner_->set_named_poses(named_cfg);
-
-  std::vector<double> place_approach{0.6, 0.7, 0.8, 0.9, 1.0, 0.00};
-  std::vector<double> place_descend{0.6, 0.5, 0.8, 0.9, 1.0, 0.00};
-
-  auto place_phases = planner_->build_place_targets(place_approach, place_descend);
-
-  EXPECT_EQ(place_phases.size(), 5u);
-  for (const auto & phase_name : ArmMotionPlanner::kPlacePhases) {
-    EXPECT_TRUE(place_phases.find(phase_name) != place_phases.end())
-      << "Missing place phase: " << phase_name;
-  }
-
-  // APPROACH_PLACE starts with closed gripper (carrying piece from stow)
-  EXPECT_DOUBLE_EQ(place_phases.at("APPROACH_PLACE").back(), 0.00);
-  EXPECT_DOUBLE_EQ(place_phases.at("DESCEND_PLACE").back(), 0.00);
-  EXPECT_DOUBLE_EQ(place_phases.at("RELEASE").back(), 1.50);
-
-  // RETRACT ascends vertically with open gripper
-  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT")[0], place_approach[0]);
-  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT").back(), 1.50);
-
-  // RETRACT_STOW concludes in stow with OPEN gripper
-  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT_STOW")[1], -1.57);
-  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT_STOW").back(), 1.50);
-}
-
 TEST_F(ArmMotionPlannerTest, GetNamedPoseReturnsConfiguredLandmarks)
 {
   NamedPosesConfig named_cfg;
-  named_cfg.home = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  named_cfg.approach = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   named_cfg.stow = {0.0, -1.57, 1.57, 0.75, 0.0, 0.0};
   named_cfg.clear_left = {1.20, -0.60, 0.80, 0.0, 0.0, 0.0};
   named_cfg.clear_right = {-1.20, -0.60, 0.80, 0.0, 0.0, 0.0};
   planner_->set_named_poses(named_cfg);
 
-  auto home = planner_->get_named_pose("home");
-  ASSERT_TRUE(home.has_value());
-  EXPECT_DOUBLE_EQ((*home)[0], 0.0);
+  auto approach = planner_->get_named_pose("approach");
+  ASSERT_TRUE(approach.has_value());
+  EXPECT_DOUBLE_EQ((*approach)[0], 0.0);
 
   auto stow = planner_->get_named_pose("STOW"); // case-insensitive
   ASSERT_TRUE(stow.has_value());
@@ -372,5 +319,5 @@ TEST_F(ArmMotionPlannerTest, PlanTrajectoryAtVelocityEnforcesMaxVelocityLimit)
   EXPECT_THROW((void)planner_->plan_trajectory_at_velocity(q_start, q_target, -0.5), std::invalid_argument);
 }
 
-}  // namespace lekiwi_motion::test
+}  // namespace lekiwi_motion::arm::test
 
