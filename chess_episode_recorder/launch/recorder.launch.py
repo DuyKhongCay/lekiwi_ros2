@@ -21,40 +21,20 @@ def generate_launch_description():
 
     # 1. Declare Recorder & Bringup Launch Arguments
     params_file_arg = DeclareLaunchArgument(
-        "params_file",
+        "recorder_params_file",
         default_value=default_config_path,
         description="Path to episode recorder YAML configuration file",
     )
-    hardware_type_arg = DeclareLaunchArgument(
-        "hardware_type",
-        default_value="real",
-        description="Hardware interface type: real or mock",
-    )
-    use_sim_time_arg = DeclareLaunchArgument(
-        "use_sim_time",
-        default_value="false",
-        description="Use simulation clock if true",
-    )
-    uarm_teleop_arg = DeclareLaunchArgument(
-        "uarm_teleop",
+    record_arg = DeclareLaunchArgument(
+        "record",
         default_value="true",
-        description="Start uArm leader teleoperation node for follower arm recording",
+        description="Trigger record mode of manipulation action server.",
     )
-    orchestrator_arg = DeclareLaunchArgument(
-        "orchestrator",
-        default_value="true",
-        description="Start LeKiwi orchestration subsystem",
-    )
-    manipulation_arg = DeclareLaunchArgument(
-        "manipulation",
-        default_value="false",
-        description="Manipulation subsystem mode (kinematics, policy, or false; default false for recorder teleop)",
-    )
-    cameras_arg = DeclareLaunchArgument(
-        "cameras",
-        default_value="true",
-        description="Start camera perception streams",
-    )
+    use_sim_time = DeclareLaunchArgument(
+        "use_sim_time", 
+        default_value="false", 
+        description="Use simulation clock"
+        )
     log_level_arg = DeclareLaunchArgument(
         "log_level",
         default_value="INFO",
@@ -67,12 +47,12 @@ def generate_launch_description():
             PathJoinSubstitution([bringup_share, "launch", "robot.launch.py"])
         ),
         launch_arguments={
-            "hardware_type": LaunchConfiguration("hardware_type"),
-            "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "uarm_teleop": LaunchConfiguration("uarm_teleop"),
-            "orchestrator": LaunchConfiguration("orchestrator"),
-            "manipulation": LaunchConfiguration("manipulation"),
-            "cameras": LaunchConfiguration("cameras"),
+            "hardware_type": "real",
+            "use_sim_time": "false",
+            "orchestrator": "true",
+            "manipulation": "kinematics",
+            "cameras": "true",
+            "record": "true",
             "log_level": LaunchConfiguration("log_level"),
         }.items(),
     )
@@ -83,7 +63,7 @@ def generate_launch_description():
         executable="episode_recorder_node",
         name="episode_recorder_node",
         parameters=[
-            LaunchConfiguration("params_file"),
+            LaunchConfiguration("recorder_params_file"),
             {"use_sim_time": LaunchConfiguration("use_sim_time")},
         ],
         output="screen",
@@ -92,12 +72,8 @@ def generate_launch_description():
     return LaunchDescription(
         [
             params_file_arg,
-            hardware_type_arg,
-            use_sim_time_arg,
-            uarm_teleop_arg,
-            orchestrator_arg,
-            manipulation_arg,
-            cameras_arg,
+            record_arg,
+            use_sim_time,
             log_level_arg,
             robot_bringup,
             recorder_node,

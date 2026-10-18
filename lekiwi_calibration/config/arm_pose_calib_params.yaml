@@ -7,7 +7,7 @@ arm_pose_calibrator:
   ros__parameters:
     # Target landmark pose sequence to calibrate in order (Open/Closed Principle)
     target_poses:
-      - "home"
+      - "approach"
       - "stow"
       - "clear_left"
       - "clear_right"

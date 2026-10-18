@@ -20,7 +20,6 @@ EpisodeRecorderNode::EpisodeRecorderNode(const rclcpp::NodeOptions &options)
 {
   init_parameters();
   init_services();
-  init_gamepad();
 
   // Create timer to periodically resolve topic types and create subscriptions
   discovery_timer_ = this->create_wall_timer(
@@ -31,9 +30,6 @@ EpisodeRecorderNode::EpisodeRecorderNode(const rclcpp::NodeOptions &options)
     get_logger(),
     "EpisodeRecorderNode initialized. Base output dir: %s, Experiment: %s",
     base_output_dir_.c_str(), experiment_name_.c_str());
-  RCLCPP_INFO(
-    get_logger(),
-    "Gamepad D-Pad Controls: [UP: Start] [DOWN: Stop] [RIGHT: Save] [LEFT: Discard]");
 }
 
 EpisodeRecorderNode::~EpisodeRecorderNode()
@@ -41,14 +37,6 @@ EpisodeRecorderNode::~EpisodeRecorderNode()
   if (current_state_.load() == EpisodeState::RECORDING) {
     RCLCPP_WARN(get_logger(), "Shutting down while recording. Stopping active episode...");
     stop_episode();
-  }
-
-  std::lock_guard<std::mutex> lock(action_goal_mutex_);
-  if (active_goal_handle_ && active_goal_handle_->is_active()) {
-    auto result = std::make_shared<ExecuteChessMove::Result>();
-    result->success = false;
-    result->message = "EpisodeRecorderNode shutting down. Aborting active goal.";
-    active_goal_handle_->abort(result);
   }
 }
 
@@ -58,8 +46,8 @@ void EpisodeRecorderNode::init_parameters()
   this->declare_parameter<std::string>("experiment_name", "chess_teleop_v1");
   this->declare_parameter<std::string>("task", "chess_pick_and_place");
   this->declare_parameter<std::string>("storage_id", "mcap");
-  this->declare_parameter<std::string>("goal_topic", "/manipulation/active_chess_move");
-  this->declare_parameter<std::string>("action_name", "/manipulation/execute_chess_move");
+  this->declare_parameter<std::string>(
+    "feedback_topic", "/manipulation/execute_chess_move/_action/feedback");
   this->declare_parameter<std::vector<std::string>>(
     "topics",
     std::vector<std::string>{
@@ -72,31 +60,12 @@ void EpisodeRecorderNode::init_parameters()
       "/tf_static",
       "/manipulation/execute_chess_move/_action/feedback"});
 
-  // Gamepad parameters
-  this->declare_parameter<bool>("gamepad.enable", true);
-  this->declare_parameter<std::string>("gamepad.joy_topic", "/joy");
-  this->declare_parameter<std::string>("gamepad.mode", "axes");
-  this->declare_parameter<int>("gamepad.axis_dpad_x", 6);
-  this->declare_parameter<int>("gamepad.axis_dpad_y", 7);
-  this->declare_parameter<int>("gamepad.button_up", 13);
-  this->declare_parameter<int>("gamepad.button_down", 14);
-  this->declare_parameter<int>("gamepad.button_left", 11);
-  this->declare_parameter<int>("gamepad.button_right", 12);
-  this->declare_parameter<double>("gamepad.debounce_duration_sec", 0.35);
-
   root_dir_ = this->get_parameter("root_dir").as_string();
   experiment_name_ = this->get_parameter("experiment_name").as_string();
   task_ = this->get_parameter("task").as_string();
   storage_id_ = this->get_parameter("storage_id").as_string();
-  goal_topic_ = this->get_parameter("goal_topic").as_string();
-  action_name_ = this->get_parameter("action_name").as_string();
+  feedback_topic_ = this->get_parameter("feedback_topic").as_string();
   requested_topics_ = this->get_parameter("topics").as_string_array();
-
-  // Create latched goal subscription for ExecuteChessMove goal context (backward compatibility)
-  auto goal_qos = rclcpp::QoS(1).reliable().transient_local();
-  goal_sub_ = this->create_subscription<lekiwi_interfaces::action::ExecuteChessMove_Goal>(
-    goal_topic_, goal_qos,
-    std::bind(&EpisodeRecorderNode::on_goal_received, this, std::placeholders::_1));
 
   base_output_dir_ = std::filesystem::path(root_dir_);
   if (!experiment_name_.empty()) {
@@ -120,10 +89,6 @@ void EpisodeRecorderNode::init_services()
     "~/start_episode",
     std::bind(&EpisodeRecorderNode::handle_start, this, std::placeholders::_1, std::placeholders::_2));
 
-  srv_stop_ = this->create_service<std_srvs::srv::Trigger>(
-    "~/stop_episode",
-    std::bind(&EpisodeRecorderNode::handle_stop, this, std::placeholders::_1, std::placeholders::_2));
-
   srv_save_ = this->create_service<std_srvs::srv::Trigger>(
     "~/save_episode",
     std::bind(&EpisodeRecorderNode::handle_save, this, std::placeholders::_1, std::placeholders::_2));
@@ -132,137 +97,67 @@ void EpisodeRecorderNode::init_services()
     "~/discard_episode",
     std::bind(&EpisodeRecorderNode::handle_discard, this, std::placeholders::_1, std::placeholders::_2));
 
-  // Initialize Action Server for ExecuteChessMove
-  action_server_ = rclcpp_action::create_server<ExecuteChessMove>(
-    this,
-    action_name_,
-    std::bind(&EpisodeRecorderNode::handle_action_goal, this, std::placeholders::_1, std::placeholders::_2),
-    std::bind(&EpisodeRecorderNode::handle_action_cancel, this, std::placeholders::_1),
-    std::bind(&EpisodeRecorderNode::handle_action_accepted, this, std::placeholders::_1));
+  feedback_sub_ = this->create_subscription<lekiwi_interfaces::action::ExecuteChessMove_FeedbackMessage>(
+    feedback_topic_,
+    rclcpp::SystemDefaultsQoS(),
+    std::bind(&EpisodeRecorderNode::on_feedback_received, this, std::placeholders::_1));
 
-  RCLCPP_INFO(get_logger(), "ExecuteChessMove Action Server ready on: %s", action_name_.c_str());
+  RCLCPP_INFO(get_logger(), "Listening for move instruction on feedback topic: %s", feedback_topic_.c_str());
 }
 
-void EpisodeRecorderNode::init_gamepad()
+void EpisodeRecorderNode::on_feedback_received(
+  const lekiwi_interfaces::action::ExecuteChessMove_FeedbackMessage::ConstSharedPtr msg)
 {
-  GamepadConfig cfg;
-  cfg.enable = this->get_parameter("gamepad.enable").as_bool();
-  cfg.joy_topic = this->get_parameter("gamepad.joy_topic").as_string();
-  cfg.mode = this->get_parameter("gamepad.mode").as_string();
-  cfg.axis_dpad_x = this->get_parameter("gamepad.axis_dpad_x").as_int();
-  cfg.axis_dpad_y = this->get_parameter("gamepad.axis_dpad_y").as_int();
-  cfg.button_up = this->get_parameter("gamepad.button_up").as_int();
-  cfg.button_down = this->get_parameter("gamepad.button_down").as_int();
-  cfg.button_left = this->get_parameter("gamepad.button_left").as_int();
-  cfg.button_right = this->get_parameter("gamepad.button_right").as_int();
-  cfg.debounce_duration_sec = this->get_parameter("gamepad.debounce_duration_sec").as_double();
-
-  gamepad_controller_ = std::make_unique<GamepadController>(cfg);
-
-  if (cfg.enable) {
-    joy_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
-      cfg.joy_topic, 10,
-      std::bind(&EpisodeRecorderNode::on_joy, this, std::placeholders::_1));
-    RCLCPP_INFO(get_logger(), "Gamepad control active on topic: %s (Mode: %s)",
-                cfg.joy_topic.c_str(), cfg.mode.c_str());
-  }
-}
-
-void EpisodeRecorderNode::on_joy(const sensor_msgs::msg::Joy::ConstSharedPtr msg)
-{
-  if (!gamepad_controller_) {
+  if (!msg) {
     return;
   }
-
-  GamepadAction action = gamepad_controller_->process_joy(msg, this->now());
-
-  switch (action) {
-    case GamepadAction::START:
-      RCLCPP_INFO(get_logger(), "[GAMEPAD] Pressed D-Pad UP -> START EPISODE");
-      start_episode();
-      break;
-
-    case GamepadAction::STOP:
-      RCLCPP_INFO(get_logger(), "[GAMEPAD] Pressed D-Pad DOWN -> STOP EPISODE");
-      stop_episode();
-      break;
-
-    case GamepadAction::SAVE:
-      RCLCPP_INFO(get_logger(), "[GAMEPAD] Pressed D-Pad RIGHT -> SAVE EPISODE");
-      save_episode();
-      break;
-
-    case GamepadAction::DISCARD:
-      RCLCPP_INFO(get_logger(), "[GAMEPAD] Pressed D-Pad LEFT -> DISCARD EPISODE");
-      discard_episode();
-      break;
-
-    case GamepadAction::NONE:
-    default:
-      break;
+  std::lock_guard<std::mutex> lock(instruction_mutex_);
+  if (!msg->feedback.instruction.empty()) {
+    current_instruction_ = msg->feedback.instruction;
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "📥 [FEEDBACK CACHED] Task instruction: '%s' (Phase: %s, Progress: %.1f%%)",
+      current_instruction_.c_str(),
+      msg->feedback.current_phase.c_str(),
+      msg->feedback.progress_percent);
   }
-}
-
-void EpisodeRecorderNode::on_goal_received(
-  const lekiwi_interfaces::action::ExecuteChessMove_Goal::ConstSharedPtr msg)
-{
-  std::lock_guard<std::mutex> lock(goal_mutex_);
-  current_instruction_ = msg->instruction;
-  current_pick_point_ = msg->pick_point;
-  current_place_point_ = msg->place_point;
-  current_target_frame_ = msg->target_frame.empty() ? "chessboard_frame" : msg->target_frame;
-  has_goal_context_ = true;
-
-  RCLCPP_INFO(
-    get_logger(),
-    "🎯 Received Action Goal Context: instruction='%s' (frame='%s')",
-    current_instruction_.c_str(), current_target_frame_.c_str());
 }
 
 void EpisodeRecorderNode::discover_and_subscribe_topics()
 {
-  auto names_and_types = this->get_topic_names_and_types();
+  auto topic_names_and_types = this->get_topic_names_and_types();
 
-  for (const auto &topic : requested_topics_) {
-    if (subscriptions_.count(topic) > 0) {
+  for (const auto &req_topic : requested_topics_) {
+    // If already subscribed, skip
+    if (subscriptions_.find(req_topic) != subscriptions_.end()) {
       continue;
     }
 
-    auto it = names_and_types.find(topic);
-    if (it != names_and_types.end() && !it->second.empty()) {
-      std::string type = it->second.front();
-      topic_type_map_[topic] = type;
+    auto it = topic_names_and_types.find(req_topic);
+    if (it != topic_names_and_types.end() && !it->second.empty()) {
+      const std::string topic_type = it->second[0];
+      topic_type_map_[req_topic] = topic_type;
 
-      // Smart QoS resolution: default Reliable, fallback BestEffort if publishers are best_effort
-      auto qos = rclcpp::QoS(rclcpp::KeepLast(50));
-      auto endpoints = this->get_publishers_info_by_topic(topic);
-      bool all_reliable = true;
-      for (const auto &ep : endpoints) {
-        if (ep.qos_profile().get_rmw_qos_profile().reliability != RMW_QOS_POLICY_RELIABILITY_RELIABLE) {
-          all_reliable = false;
-          break;
-        }
-      }
-      if (!all_reliable && !endpoints.empty()) {
-        qos.best_effort();
-      }
+      rclcpp::SubscriptionOptions sub_opts;
+      sub_opts.ignore_local_publications = true;
 
       auto sub = this->create_generic_subscription(
-        topic, type, qos,
-        [this, topic, type](std::shared_ptr<const rclcpp::SerializedMessage> msg) {
-          this->write_serialized_message(topic, type, msg);
-        });
+        req_topic,
+        topic_type,
+        rclcpp::SensorDataQoS(),
+        [this, req_topic, topic_type](std::shared_ptr<const rclcpp::SerializedMessage> msg) {
+          write_serialized_message(req_topic, topic_type, msg);
+        },
+        sub_opts);
 
-      if (sub) {
-        subscriptions_[topic] = sub;
-        RCLCPP_INFO(get_logger(), "Subscribed to '%s' [%s]", topic.c_str(), type.c_str());
-      }
+      subscriptions_[req_topic] = sub;
+      RCLCPP_INFO(get_logger(), "Subscribed to recording topic: %s [%s]",
+                  req_topic.c_str(), topic_type.c_str());
     }
   }
 
+  // If all requested topics are subscribed, slow down or cancel discovery timer
   if (subscriptions_.size() == requested_topics_.size()) {
-    RCLCPP_INFO(get_logger(), "All %zu requested topics discovered and subscribed!",
-                requested_topics_.size());
     discovery_timer_->cancel();
   }
 }
@@ -303,9 +198,12 @@ bool EpisodeRecorderNode::start_episode()
   current_episode_dir_ = make_episode_dir(current_episode_index_);
 
   try {
-    std::filesystem::create_directories(current_episode_dir_);
+    std::filesystem::create_directories(base_output_dir_);
+    if (std::filesystem::exists(current_episode_dir_)) {
+      std::filesystem::remove_all(current_episode_dir_);
+    }
   } catch (const std::exception &e) {
-    RCLCPP_ERROR(get_logger(), "Failed to create directory '%s': %s",
+    RCLCPP_ERROR(get_logger(), "Failed to prepare directories for '%s': %s",
                  current_episode_dir_.c_str(), e.what());
     return false;
   }
@@ -378,13 +276,13 @@ bool EpisodeRecorderNode::stop_episode()
 
 bool EpisodeRecorderNode::save_episode()
 {
-  if (current_state_.load() == EpisodeState::RECORDING) {
-    stop_episode();
-  }
-
   if (current_state_.load() != EpisodeState::STOPPED) {
-    RCLCPP_WARN(get_logger(), "Cannot save: No episode is currently staged/stopped.");
-    return false;
+    if (current_state_.load() == EpisodeState::RECORDING) {
+      stop_episode();
+    } else {
+      RCLCPP_WARN(get_logger(), "Cannot save: No episode has been recorded yet.");
+      return false;
+    }
   }
 
   double duration = (episode_stop_time_ - episode_start_time_).seconds();
@@ -398,18 +296,10 @@ bool EpisodeRecorderNode::save_episode()
     current_episode_index_++;
     current_state_.store(EpisodeState::IDLE);
 
-    // Notify Action Client (Orchestrator) that the move succeeded
+    // Reset instruction cache for next episode
     {
-      std::lock_guard<std::mutex> lock(action_goal_mutex_);
-      if (active_goal_handle_ && active_goal_handle_->is_active()) {
-        auto result = std::make_shared<ExecuteChessMove::Result>();
-        result->success = true;
-        result->message = "Teleop move recorded and saved successfully.";
-        result->execution_time_sec = static_cast<float>(duration);
-        active_goal_handle_->succeed(result);
-        active_goal_handle_ = nullptr;
-        RCLCPP_INFO(get_logger(), "✔ [ACTION SERVER] Successfully reported GOAL COMPLETED to client!");
-      }
+      std::lock_guard<std::mutex> lock(instruction_mutex_);
+      current_instruction_.clear();
     }
 
     return true;
@@ -438,6 +328,11 @@ bool EpisodeRecorderNode::discard_episode()
       RCLCPP_ERROR(get_logger(), "Failed to delete discarded episode: %s", e.what());
       return false;
     }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(instruction_mutex_);
+    current_instruction_.clear();
   }
 
   current_state_.store(EpisodeState::IDLE);
@@ -486,20 +381,11 @@ bool EpisodeRecorderNode::write_episode_info_yaml(
   std::filesystem::path file_path = episode_dir / "episode_info.yaml";
 
   std::string task_str = task_;
-  geometry_msgs::msg::Point pick_pt;
-  geometry_msgs::msg::Point place_pt;
-  std::string frame_str = "chessboard_frame";
-  bool has_ctx = false;
-
   {
-    std::lock_guard<std::mutex> lock(goal_mutex_);
-    if (has_goal_context_ && !current_instruction_.empty()) {
+    std::lock_guard<std::mutex> lock(instruction_mutex_);
+    if (!current_instruction_.empty()) {
       task_str = current_instruction_;
     }
-    pick_pt = current_pick_point_;
-    place_pt = current_place_point_;
-    frame_str = current_target_frame_;
-    has_ctx = has_goal_context_;
   }
 
   try {
@@ -515,14 +401,6 @@ bool EpisodeRecorderNode::write_episode_info_yaml(
     out << YAML::Key << "timestamp_start" << YAML::Value << start_time.seconds();
     out << YAML::Key << "timestamp_end" << YAML::Value << end_time.seconds();
 
-    if (has_ctx) {
-      out << YAML::Key << "target_frame" << YAML::Value << frame_str;
-      out << YAML::Key << "pick_point" << YAML::Value << YAML::Flow << YAML::BeginSeq
-          << pick_pt.x << pick_pt.y << pick_pt.z << YAML::EndSeq;
-      out << YAML::Key << "place_point" << YAML::Value << YAML::Flow << YAML::BeginSeq
-          << place_pt.x << place_pt.y << place_pt.z << YAML::EndSeq;
-    }
-
     out << YAML::Key << "message_counts" << YAML::Value << YAML::BeginMap;
     for (const auto &[topic, count] : message_counts_) {
       out << YAML::Key << topic << YAML::Value << count;
@@ -534,115 +412,37 @@ bool EpisodeRecorderNode::write_episode_info_yaml(
     std::ofstream fout(file_path);
     fout << out.c_str();
     fout.close();
+
+    RCLCPP_INFO(get_logger(), "📝 [METADATA] Generated episode_info.yaml (Task: '%s')", task_str.c_str());
     return true;
   } catch (const std::exception &e) {
-    RCLCPP_ERROR(get_logger(), "Error writing episode_info.yaml: %s", e.what());
+    RCLCPP_ERROR(get_logger(), "Failed to emit YAML metadata: %s", e.what());
     return false;
   }
 }
 
-// Service Handlers
 void EpisodeRecorderNode::handle_start(
   const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
   std::shared_ptr<std_srvs::srv::Trigger::Response> res)
 {
-  if (start_episode()) {
-    res->success = true;
-    res->message = "Started episode: " + current_episode_dir_.string();
-  } else {
-    res->success = false;
-    res->message = "Failed to start episode.";
-  }
-}
-
-void EpisodeRecorderNode::handle_stop(
-  const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
-  std::shared_ptr<std_srvs::srv::Trigger::Response> res)
-{
-  if (stop_episode()) {
-    res->success = true;
-    res->message = "Stopped episode.";
-  } else {
-    res->success = false;
-    res->message = "Failed to stop episode.";
-  }
+  res->success = start_episode();
+  res->message = res->success ? "Episode recording started." : "Failed to start episode.";
 }
 
 void EpisodeRecorderNode::handle_save(
   const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
   std::shared_ptr<std_srvs::srv::Trigger::Response> res)
 {
-  if (save_episode()) {
-    res->success = true;
-    res->message = "Saved episode.";
-  } else {
-    res->success = false;
-    res->message = "Failed to save episode.";
-  }
+  res->success = save_episode();
+  res->message = res->success ? "Episode saved successfully." : "Failed to save episode.";
 }
 
 void EpisodeRecorderNode::handle_discard(
   const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
   std::shared_ptr<std_srvs::srv::Trigger::Response> res)
 {
-  if (discard_episode()) {
-    res->success = true;
-    res->message = "Discarded episode.";
-  } else {
-    res->success = false;
-    res->message = "Failed to discard episode.";
-  }
-}
-
-rclcpp_action::GoalResponse EpisodeRecorderNode::handle_action_goal(
-  const rclcpp_action::GoalUUID & /*uuid*/,
-  std::shared_ptr<const ExecuteChessMove::Goal> goal)
-{
-  std::lock_guard<std::mutex> lock(action_goal_mutex_);
-  if (active_goal_handle_ && active_goal_handle_->is_active()) {
-    RCLCPP_WARN(get_logger(), "Rejecting goal: A teleop episode is already in progress.");
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-
-  {
-    std::lock_guard<std::mutex> glock(goal_mutex_);
-    current_instruction_ = goal->instruction;
-    current_pick_point_ = goal->pick_point;
-    current_place_point_ = goal->place_point;
-    current_target_frame_ = goal->target_frame.empty() ? "chessboard_frame" : goal->target_frame;
-    has_goal_context_ = true;
-  }
-
-  RCLCPP_INFO(
-    get_logger(),
-    "📥 [ACTION GOAL ACCEPTED] Instruction='%s' (from='%s' to='%s', target_frame='%s')",
-    goal->instruction.c_str(), goal->from_square.c_str(), goal->to_square.c_str(),
-    goal->target_frame.c_str());
-
-  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-}
-
-rclcpp_action::CancelResponse EpisodeRecorderNode::handle_action_cancel(
-  const std::shared_ptr<GoalHandleChessMove> /*goal_handle*/)
-{
-  RCLCPP_WARN(get_logger(), "Action cancel requested by client.");
-  if (current_state_.load() == EpisodeState::RECORDING ||
-      current_state_.load() == EpisodeState::STOPPED) {
-    discard_episode();
-  }
-  std::lock_guard<std::mutex> lock(action_goal_mutex_);
-  active_goal_handle_ = nullptr;
-  return rclcpp_action::CancelResponse::ACCEPT;
-}
-
-void EpisodeRecorderNode::handle_action_accepted(
-  const std::shared_ptr<GoalHandleChessMove> goal_handle)
-{
-  std::lock_guard<std::mutex> lock(action_goal_mutex_);
-  active_goal_handle_ = goal_handle;
-  RCLCPP_INFO(
-    get_logger(),
-    "🎯 Goal active. Please teleoperate follower arm, then press D-Pad [UP: Start], [DOWN: Stop], [RIGHT: Save].");
+  res->success = discard_episode();
+  res->message = res->success ? "Episode discarded." : "Failed to discard episode.";
 }
 
 } // namespace chess_episode_recorder

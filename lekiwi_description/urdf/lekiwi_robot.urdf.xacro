@@ -27,8 +27,12 @@
 
   <!-- Include kinematic CAD model and modular subsystems -->
   <xacro:include filename="$(find lekiwi_description)/urdf/duykhongcay_lekiwi.urdf"/>
+  <xacro:include filename="$(find lekiwi_description)/urdf/arm_joints.xacro"/>
   <xacro:include filename="$(find lekiwi_description)/urdf/ros2_control.xacro"/>
   <xacro:include filename="$(find lekiwi_description)/urdf/sensors_calibration.xacro"/>
+
+  <!-- Instantiate calibrated 6-DOF arm joints from SSOT servo calibration file -->
+  <xacro:lekiwi_arm_joints servo_calib_file="$(arg servo_calib_file)"/>
 
   <!-- Apply hand-eye extrinsics calibration for stereo left camera -->
   <xacro:stereo_camera_calibration calib_file="$(arg camera_calib_file)"/>

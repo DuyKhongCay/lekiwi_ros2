@@ -58,7 +58,7 @@ def test_extract_joint_positions_missing_joint() -> None:
 def test_format_arm_poses_yaml_structure() -> None:
     """Verify output YAML structure conforms to manipulation_action_server schema."""
     calibrated_poses = {
-        "home": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "approach": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         "stow": [0.0, -1.57079, 1.57079, 0.75, 0.0, 0.0],
         "clear_left": [1.2, -0.6, 0.8, 0.0, 0.0, 0.0],
         "clear_right": [-1.2, -0.6, 0.8, 0.0, 0.0, 0.0],
@@ -73,7 +73,7 @@ def test_format_arm_poses_yaml_structure() -> None:
 
     assert "manipulation_action_server:" in yaml_str
     assert "named_poses:" in yaml_str
-    assert "home: [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000]" in yaml_str
+    assert "approach: [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000]" in yaml_str
     assert "stow: [0.0000, -1.5708, 1.5708, 0.7500, 0.0000, 0.0000]" in yaml_str
     assert "clear_left: [1.2000, -0.6000, 0.8000, 0.0000, 0.0000, 0.0000]" in yaml_str
     assert "clear_right: [-1.2000, -0.6000, 0.8000, 0.0000, 0.0000, 0.0000]" in yaml_str
@@ -101,7 +101,7 @@ def test_format_arm_poses_yaml_merge_existing() -> None:
     }
 
     calibrated_poses = {
-        "home": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "approach": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     }
 
     yaml_str = format_arm_poses_yaml(
@@ -113,7 +113,7 @@ def test_format_arm_poses_yaml_merge_existing() -> None:
     parsed = yaml.safe_load(yaml_str)
     assert parsed["other_subsystem"]["key"] == 123
     assert parsed["manipulation_action_server"]["ros__parameters"]["max_velocity"] == 1.5
-    assert "home" in parsed["manipulation_action_server"]["ros__parameters"]["named_poses"]
+    assert "approach" in parsed["manipulation_action_server"]["ros__parameters"]["named_poses"]
 
 
 def test_node_fsm_capture_undo_cycle(tmp_path) -> None:
@@ -135,14 +135,14 @@ def test_node_fsm_capture_undo_cycle(tmp_path) -> None:
         js.position = [0.0, -1.0, 1.0, 0.5, 0.0, 1.5]
         node.on_joint_state(js)
 
-        # Initially step 0 (home)
+        # Initially step 0 (approach)
         assert node.current_step_idx == 0
         assert len(node.calibrated_poses) == 0
 
-        # Capture 1: home
+        # Capture 1: approach
         node.capture_active_pose()
         assert node.current_step_idx == 1
-        assert "home" in node.calibrated_poses
+        assert "approach" in node.calibrated_poses
 
         # Capture 2: stow
         node.capture_active_pose()
@@ -153,7 +153,7 @@ def test_node_fsm_capture_undo_cycle(tmp_path) -> None:
         node.undo_last_pose()
         assert node.current_step_idx == 1
         assert "stow" not in node.calibrated_poses
-        assert "home" in node.calibrated_poses
+        assert "approach" in node.calibrated_poses
 
         # Re-capture stow
         node.capture_active_pose()

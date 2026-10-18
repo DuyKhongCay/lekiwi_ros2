@@ -1,28 +1,13 @@
-/**:
+episode_recorder_node:
   ros__parameters:
     # Storage settings
-    root_dir: "/media/usb_storage/lekiwi_episodes"
+    root_dir: "/root/docker_ws/lekiwi_ros2/ros_bag"
     experiment_name: "chess_teleop_v1"
     task: "chess_pick_and_place"
     storage_id: "mcap"
 
-    # Gamepad controls (Flydigi / Xbox controller on /joy)
-    gamepad:
-      enable: true
-      joy_topic: "/joy"
-      debounce_duration_sec: 0.35
-      # Mapping mode: "axes" (Linux xpad default) or "buttons"
-      mode: "axes"
-      axis_dpad_x: 6      # Left: +1.0, Right: -1.0
-      axis_dpad_y: 7      # Up: +1.0, Down: -1.0
-      # Fallback button mappings:
-      button_up: 13
-      button_down: 14
-      button_left: 11
-      button_right: 12
-
-    # Action Goal context topic (ExecuteChessMove_Goal)
-    goal_topic: "/manipulation/active_chess_move"
+    # Feedback topic for active move instruction
+    feedback_topic: "/manipulation/execute_chess_move/_action/feedback"
 
     # Topics to record into each episode MCAP (LeRobot Dataset 3.0 compatible)
     topics:
@@ -39,5 +24,5 @@
       - "/tf"
       - "/tf_static"
 
-      # 4. Manipulation Action Feedback (Phase & progress tracking)
-      - "/manipulation/execute_chess_move/_action/feedback"
+      # # 4. Manipulation Action Feedback (Phase & progress tracking)
+      # - "/manipulation/execute_chess_move/_action/feedback"

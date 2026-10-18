@@ -205,6 +205,14 @@ namespace lekiwi_motion::workspace
      */
     const std::array<double, 2> &link_angles() const noexcept { return link_angles_; }
 
+    /**
+     * @brief Computes tool pitch and roll angles corresponding to a set of 5 arm joint positions.
+     * @param[in] joints 5-element array of active joint positions (rad).
+     * @return std::pair<double, double> where first is tool pitch (rad) and second is tool roll (rad).
+     */
+    [[nodiscard]] std::pair<double, double> compute_tool_angles_from_joints(
+        const std::array<double, 5> & joints) const noexcept;
+
   private:
     /**
      * @brief Extracts geometric offsets, axes, and link lengths from URDF model.
@@ -254,7 +262,7 @@ namespace lekiwi_motion::workspace
    * @param[in] joint_names Ordered vector of the 5 expected arm joint names.
    * @param[out] out_model Output KinematicsModel populated on success.
    * @param[out] error_msg Diagnostic message describing failure cause if return is false.
-   * @param[in] safety_margin_rad Margin subtracted from joint limits (default 0.05 rad).
+   * @param[in] safety_margin_rad Margin subtracted from joint limits (default 0.0 rad).
    * @return True if kinematics chain successfully validated and parsed.
    */
   bool extract_kinematics_from_urdf(
@@ -264,7 +272,7 @@ namespace lekiwi_motion::workspace
       const std::vector<std::string> &joint_names,
       KinematicsModel &out_model,
       std::string &error_msg,
-      double safety_margin_rad = 0.05);
+      double safety_margin_rad = 0.0);
 
   /**
    * @brief Projects a 3D coordinate point from board frame into planar base frame.

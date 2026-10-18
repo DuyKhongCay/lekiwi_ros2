@@ -1,8 +1,0 @@
-# Match Prolific PL2303 USB-to-Serial adapter for uArm Leader (uarm_leader)
-SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", SYMLINK+="ttyUSB_PROLIFIC", SYMLINK+="uarm_leader", MODE="0666"
-
-# # Match QinHeng CH340 USB-to-Serial converter for uArm Leader 2 (uarm_leader_2)
-# SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="ttyUSB_CH340", SYMLINK+="uarm_leader_2", MODE="0666"
-
-# # USB serial adapter identified by its factory serial number. 
-# SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{serial}=="5B14033437", SYMLINK+="lekiwi_serial", MODE="0660", GROUP="dialout"

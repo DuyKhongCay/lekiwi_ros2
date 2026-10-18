@@ -54,6 +54,7 @@ def generate_launch_description() -> LaunchDescription:
             "enable_orchestrator": "false",
             "manipulation": "false",
             "uarm_teleop": "false",
+            "localization": "false",
         }.items(),
     )
 

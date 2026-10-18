@@ -646,54 +646,6 @@
       </geometry>
     </collision>
   </link>
-  <!-- Joint from gripper to moving_jaw_so101_v1 -->
-  <joint name="arm_gripper" type="revolute">
-    <origin xyz="0.0202 0.0186 -0.0234" rpy="1.5708 0.000965842 -0"/>
-    <parent link="gripper"/>
-    <child link="moving_jaw_so101_v1"/>
-    <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-0.0863006" upper="1.65903"/>
-  </joint>
-  <!-- Joint from wrist to gripper -->
-  <joint name="arm_wrist_roll" type="revolute">
-    <origin xyz="-5.18e-10 -0.0611 0.0181" rpy="1.5708 0.0594906 3.14159"/>
-    <parent link="wrist"/>
-    <child link="gripper"/>
-    <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-2.64577" upper="2.76475"/>
-  </joint>
-  <!-- Joint from lower_arm to wrist -->
-  <joint name="arm_wrist_flex" type="revolute">
-    <origin xyz="-0.1349 0.0052 -0" rpy="-0 0 -1.57999"/>
-    <parent link="lower_arm"/>
-    <child link="wrist"/>
-    <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.56161" upper="1.57999"/>
-  </joint>
-  <!-- Joint from upper_arm to lower_arm -->
-  <joint name="arm_elbow_flex" type="revolute">
-    <origin xyz="-0.11257 -0.028 0" rpy="-0 -0 1.57038"/>
-    <parent link="upper_arm"/>
-    <child link="lower_arm"/>
-    <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.65765" upper="1.57121"/>
-  </joint>
-  <!-- Joint from rotation_pitch to upper_arm -->
-  <joint name="arm_shoulder_lift" type="revolute">
-    <origin xyz="-0.0306 -0.0183 -0.0542" rpy="-1.5708 -1.5708 0"/>
-    <parent link="rotation_pitch"/>
-    <child link="upper_arm"/>
-    <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.74533" upper="1.74533"/>
-  </joint>
-  <!-- Joint from base_footprint to rotation_pitch -->
-  <joint name="arm_shoulder_pan" type="revolute">
-    <origin xyz="0.067148 -5e-07 0.1672" rpy="3.14159 0 3.13774"/>
-    <parent link="base_footprint"/>
-    <child link="rotation_pitch"/>
-    <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-1.74919" upper="1.74147"/>
-  </joint>
   <!-- Link omniwheel_7 -->
   <link name="omniwheel_7">
     <inertial>

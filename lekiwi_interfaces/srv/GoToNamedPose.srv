@@ -1,0 +1,6 @@
+# Synchronously transition arm to a calibrated named landmark pose
+string pose_name
+---
+bool success
+string message
+

@@ -4,7 +4,7 @@
 """
 Interactive Gamepad Calibration Node for Arm Landmark Poses.
 
-Calculates and records landmark arm poses (e.g. home, stow, clear_left, clear_right)
+Calculates and records landmark arm poses (e.g. approach, stow, clear_left, clear_right)
 for LeKiwi manipulation_action_server using human-in-the-loop lead-through:
 1. Subscribes to /joint_states and /joy.
 2. Steps sequentially through configured target poses (target_poses ROS parameter).
@@ -28,7 +28,7 @@ from sensor_msgs.msg import JointState, Joy
 from std_srvs.srv import Trigger
 
 # Fallback defaults conforming to SOLID design (resilient fail-safe defaults)
-DEFAULT_TARGET_POSES: List[str] = ["home", "stow", "clear_left", "clear_right"]
+DEFAULT_TARGET_POSES: List[str] = ["approach", "stow", "clear_left", "clear_right"]
 
 DEFAULT_ARM_JOINTS: List[str] = [
     "arm_shoulder_pan",

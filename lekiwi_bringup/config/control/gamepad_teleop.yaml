@@ -1,0 +1,191 @@
+# Unified Gamepad Teleoperation configuration for LeKiwi Mobile Base & Arm
+# Controller: Flydigi / Xbox 360 controller
+#
+# Control Domains:
+# 1. Base Controller: Deadman = RB (Button 5)
+#    - Left Stick (Axes 1, 0): Linear X, Linear Y
+#    - Right Stick (Axis 3): Angular Z (Yaw)
+#
+# 2. Arm Controller: Deadman = LB (Button 4)
+#    - Left Stick (Axes 1, 0): Linear X, Linear Y (Cartesian Jog)
+#    - Right Stick (Axis 4): Linear Z (Cartesian Jog)
+#    - D-Pad Horizontal (Axis 6): Angular Roll (Cartesian Jog)
+#    - D-Pad Vertical (Axis 7): Angular Pitch (Cartesian Jog)
+#    - LB + R3 (Button 10): Toggle Gripper OPEN / CLOSE (/arm/toggle_gripper)
+#    - Start + Y (Buttons [7, 3]): Execute Named Pose "approach"
+#    - Start + A (Buttons [7, 0]): Execute Named Pose "stow"
+#    - Start + X (Buttons [7, 2]): Execute Named Pose "clear_left"
+#    - Start + B (Buttons [7, 1]): Execute Named Pose "clear_right"
+#
+# 3. System Services: Deadman = Back / Select (Button 6)
+#    - Back + A (Button 0): Toggle Base Torque (/set_torque_enabled target 2)
+#    - Back + B (Button 1): Trigger Orchestrator Recover (/orchestrator/recover)
+#    - Back + X (Button 2): Toggle Arm Torque (/set_torque_enabled target 1)
+#    - Back + Y (Button 3): Enable Global EKF (/ekf_filter_node_map/enable)
+#
+# 4. Episode Recorder Services: Deadman = Start / Menu (Button 7 + D-Pad)
+#    - Start + D-Pad Up (Axis 7 > 0): Start Episode (/episode_recorder_node/start_episode)
+#    - Start + D-Pad Down (Axis 7 < 0): Abort Move & Episode (/arm/abort_episode)
+#    - Start + D-Pad Left (Axis 6 > 0): Discard Episode (/episode_recorder_node/discard_episode)
+#    - Start + D-Pad Right (Axis 6 < 0): Save Episode (/arm/save_episode)
+
+joy_linux_node:
+  ros__parameters:
+    dev: "/dev/gamepad"
+    deadzone: 0.05
+    autorepeat_rate: 20.0
+    coalesce_interval: 0.001
+    sticky_buttons: false
+
+joy_teleop:
+  ros__parameters:
+    # ── BASE CONTROLLER (Deadman: RB / Button 5) ─────────────────────────────
+    lekiwi_teleop_base:
+      type: topic
+      interface_type: geometry_msgs/msg/TwistStamped
+      topic_name: /cmd_vel_teleop
+      deadman_buttons: [5]
+      axis_mappings:
+        twist-linear-x:
+          axis: 1
+          scale: 0.1
+          offset: 0.0
+        twist-linear-y:
+          axis: 0
+          scale: 0.1
+          offset: 0.0
+        twist-angular-z:
+          axis: 3
+          scale: 0.5
+          offset: 0.0
+
+    # ── SYSTEM SERVICES (Deadman: Back / Button 6) ───────────────────────────
+    lekiwi_toggle_base_torque:
+      type: service
+      interface_type: lekiwi_interfaces/srv/SetTorqueEnabled
+      service_name: /set_torque_enabled
+      buttons: [6, 0] # Back + A
+      service_request:
+        target: 2     # TARGET_BASE
+        enabled: false
+        toggle: true
+
+    lekiwi_trigger_recover:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+      service_name: /orchestrator/recover
+      buttons: [6, 1] # Back + B
+
+    lekiwi_toggle_arm_torque:
+      type: service
+      interface_type: lekiwi_interfaces/srv/SetTorqueEnabled
+      service_name: /set_torque_enabled
+      buttons: [6, 2] # Back + X
+      service_request:
+        target: 1     # TARGET_ARM
+        enabled: false
+        toggle: true
+
+    lekiwi_enable_ekf:
+      type: service
+      interface_type: std_srvs/srv/Empty
+      service_name: /ekf_filter_node_map/enable
+      buttons: [6, 3] # Back + Y
+
+    # ── EPISODE RECORDER SERVICES (Deadman: Start / Button 7 + D-Pad) ─────────
+    lekiwi_episode_start:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+      service_name: /episode_recorder_node/start_episode
+      buttons: [7, 3]
+      # axes: [7] # D-Pad Up (+1.0)
+
+    lekiwi_episode_abort:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+      service_name: /arm/abort_episode
+      buttons: [7, 0]
+      # axes_negative: [7] # D-Pad Down (-1.0)
+
+    lekiwi_episode_discard:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+
+      service_name: /episode_recorder_node/discard_episode
+      buttons: [7, 2]
+      # axes: [6] # D-Pad Left (+1.0)
+
+    lekiwi_episode_save:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+      service_name: /arm/save_episode
+      buttons: [7, 1]
+      # axes_negative: [6] # D-Pad Right (-1.0)
+
+    # ── ARM CONTROLLER: JOGGING (Deadman: LB / Button 4) ────────────────────
+    lekiwi_teleop_arm:
+      type: topic
+      interface_type: geometry_msgs/msg/TwistStamped
+      topic_name: /cartesian_jog_server_node/cmd_vel
+      deadman_buttons: [4]
+      axis_mappings:
+        twist-linear-x:
+          axis: 1
+          scale: 0.08
+          offset: 0.0
+        twist-linear-y:
+          axis: 0
+          scale: 0.08
+          offset: 0.0
+        twist-linear-z:
+          axis: 4
+          scale: 0.06
+          offset: 0.0
+        twist-angular-x:
+          axis: 6
+          scale: 0.8
+          offset: 0.0
+        twist-angular-y:
+          axis: 7
+          scale: 0.8
+          offset: 0.0
+
+    # ── ARM CONTROLLER: GRIPPER TOGGLE (Deadman: LB / Button 4) ─────────────
+    lekiwi_arm_toggle_gripper:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+      service_name: /arm/toggle_gripper
+      buttons: [4, 10] # LB + R3
+
+    # ── ARM CONTROLLER: NAMED POSES (Deadman: Start / Button 7) ────────────────
+    lekiwi_arm_pose_approach:
+      type: service
+      interface_type: lekiwi_interfaces/srv/GoToNamedPose
+      service_name: /arm/go_to_named_pose
+      buttons: [4, 3] # Start + Y
+      service_request:
+        pose_name: "approach"
+
+    lekiwi_arm_pose_stow:
+      type: service
+      interface_type: lekiwi_interfaces/srv/GoToNamedPose
+      service_name: /arm/go_to_named_pose
+      buttons: [4, 0] # A
+      service_request:
+        pose_name: "stow"
+
+    lekiwi_arm_pose_clear_left:
+      type: service
+      interface_type: lekiwi_interfaces/srv/GoToNamedPose
+      service_name: /arm/go_to_named_pose
+      buttons: [4, 2] # X
+      service_request:
+        pose_name: "clear_left"
+
+    lekiwi_arm_pose_clear_right:
+      type: service
+      interface_type: lekiwi_interfaces/srv/GoToNamedPose
+      service_name: /arm/go_to_named_pose
+      buttons: [4, 1] # B
+      service_request:
+        pose_name: "clear_right"

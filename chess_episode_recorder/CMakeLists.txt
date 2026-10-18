@@ -13,7 +13,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(lekiwi_interfaces REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
@@ -29,7 +28,6 @@ endif()
 
 # Composable component library
 add_library(episode_recorder_component SHARED
-  src/gamepad_controller.cpp
   src/episode_recorder_node.cpp
 )
 target_include_directories(episode_recorder_component PUBLIC
@@ -40,7 +38,6 @@ ament_target_dependencies(episode_recorder_component
   rclcpp
   rclcpp_components
   sensor_msgs
-  geometry_msgs
   std_srvs
   lekiwi_interfaces
   rosbag2_cpp

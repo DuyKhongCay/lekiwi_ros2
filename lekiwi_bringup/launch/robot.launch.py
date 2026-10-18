@@ -98,11 +98,16 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "manipulation",
-            default_value="policy",
+            default_value="kinematics",
             choices=["kinematics", "policy", "false"],
             description="Manipulation subsystem mode: "
             "'kinematics' (mock/real action server + cartesian service, accel=0), "
             "'policy' (LeRobot ACT/SmolVLA, accel=50), or 'false' (disabled)",
+        ),
+        DeclareLaunchArgument(
+            "record",
+            default_value="false",
+            description="Trigger record mode of manipulation action server.",
         ),
         DeclareLaunchArgument(
             "log_level",
@@ -169,6 +174,7 @@ def generate_launch_description():
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "navigation": LaunchConfiguration("navigation"),
             "manipulation": LaunchConfiguration("manipulation"),
+            "record": LaunchConfiguration("record"),
         }.items(),
         condition=IfCondition(LaunchConfiguration("orchestrator")),
     )
