@@ -19,3 +19,4 @@ float32 execution_time_sec     # Trajectory duration [s]
 # Feedback
 string current_phase           # Phase: "APPROACH_PICK", "GRASP", "LIFT", "APPROACH_PLACE", "RELEASE", "RETRACT"
 float32 progress_percent       # Execution progress [0.0..100.0%]
+string instruction             # Active move instruction (e.g., "e2e4")
