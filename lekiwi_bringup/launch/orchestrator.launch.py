@@ -8,6 +8,7 @@ and arm manipulation action server inside a multi-threaded composable container,
 alongside the central autonomous chess mission conductor node.
 """
 
+from launch.conditions import UnlessCondition
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -54,6 +55,11 @@ def generate_launch_description():
         "'kinematics' (hardware trajectory controller), "
         "'policy' (LeRobot ACT/SmolVLA, accel=50), or 'false' (disabled)",
     )
+    record_arg = DeclareLaunchArgument(
+        "record",
+        default_value="false",
+        description="Trigger record mode of manipulation action server.",
+    )
 
     params_file = LaunchConfiguration("params_file")
     use_sim_time = LaunchConfiguration("use_sim_time")
@@ -91,14 +97,19 @@ def generate_launch_description():
                 package="lekiwi_motion",
                 plugin="lekiwi_motion::ManipulationActionServer",
                 name="manipulation_action_server",
-                parameters=[params_file, {"use_sim_time": use_sim_time}],
+                parameters=[
+                    params_file,
+                    {
+                        "use_sim_time": use_sim_time,
+                        "record": LaunchConfiguration("record"),
+                     }],
                 extra_arguments=[{"use_intra_process_comms": True}],
             )
         ],
-        condition=IfCondition(
+        condition=UnlessCondition(
             PythonExpression(
                 [
-                    "'", LaunchConfiguration("manipulation"), "' == 'kinematics'"
+                    "'", LaunchConfiguration("manipulation"), "' == 'policy'"
                 ]
             )
         ),
@@ -126,6 +137,7 @@ def generate_launch_description():
             use_sim_time_arg,
             navigation_arg,
             manipulation_arg,
+            record_arg,
             orchestrator_container,
             load_manipulation_action,
             chess_mission_node,
