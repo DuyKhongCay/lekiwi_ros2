@@ -21,10 +21,11 @@ Panels:
         - /Left Camera1
         - /Left Camera1/Topic1
         - /Right Camera1/Topic1
+        - /Wrist Camera1
         - /Side Camera1
-        - /Image1/Topic1
+        - /2D Chessboard1/Topic1
       Splitter Ratio: 0.5
-    Tree Height: 182
+    Tree Height: 352
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -184,29 +185,13 @@ Visualization Manager:
           Value: false
         icm20948_imu:
           Value: true
-        lower_arm:
-          Value: true
         map:
-          Value: true
-        moving_jaw_so101_v1:
-          Value: true
-        odom:
-          Value: true
-        omniwheel_7:
-          Value: true
-        omniwheel_8:
-          Value: true
-        omniwheel_9:
           Value: true
         rotation_pitch:
           Value: false
         side_camera_optical:
           Value: false
         stereo_left_optical:
-          Value: true
-        upper_arm:
-          Value: true
-        wrist:
           Value: true
         wrist_camera_optical:
           Value: false
@@ -219,33 +204,6 @@ Visualization Manager:
         map:
           chessboard_frame:
             {}
-          odom:
-            base_footprint:
-              baseframe:
-                {}
-              icm20948_imu:
-                {}
-              omniwheel_7:
-                {}
-              omniwheel_8:
-                {}
-              omniwheel_9:
-                {}
-              rotation_pitch:
-                side_camera_optical:
-                  {}
-                upper_arm:
-                  lower_arm:
-                    wrist:
-                      gripper:
-                        gripperframe:
-                          {}
-                        moving_jaw_so101_v1:
-                          {}
-                        wrist_camera_optical:
-                          {}
-              stereo_left_optical:
-                {}
       Update Interval: 0
       Value: true
     - Acceleration properties:
@@ -346,7 +304,7 @@ Visualization Manager:
       Enabled: true
       Name: "3D Chessboard & Pieces"
       Namespaces:
-        chess/pieces: true
+        {}
       Topic:
         Depth: 10
         Durability Policy: Transient Local
@@ -358,7 +316,7 @@ Visualization Manager:
       Enabled: true
       Name: Robot Mission Status HUD
       Namespaces:
-        mission/robot_hud: true
+        {}
       Topic:
         Depth: 1
         Durability Policy: Transient Local
@@ -381,7 +339,7 @@ Visualization Manager:
         Value: /chess/overlay_image/compressed
       Value: true
     - Class: rviz_default_plugins/Image
-      Enabled: false
+      Enabled: true
       Max Value: 1
       Median window: 5
       Min Value: 0
@@ -393,23 +351,23 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /cameras/stereo_right/image_raw/compressed
-      Value: false
+      Value: true
     - Class: rviz_default_plugins/Image
-      Enabled: false
+      Enabled: true
       Max Value: 1
       Median window: 5
       Min Value: 0
       Name: Wrist Camera
-      Normalize Range: false
+      Normalize Range: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: /cameras/usb_wrist/image_raw/compressed
-      Value: false
+      Value: true
     - Class: rviz_default_plugins/Image
-      Enabled: false
+      Enabled: true
       Max Value: 1
       Median window: 5
       Min Value: 0
@@ -421,13 +379,13 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /cameras/usb_side/image_raw/compressed
-      Value: false
+      Value: true
     - Class: rviz_default_plugins/Image
       Enabled: false
       Max Value: 1
       Median window: 5
       Min Value: 0
-      Name: Image
+      Name: 2D Chessboard
       Normalize Range: true
       Topic:
         Depth: 5
@@ -497,34 +455,34 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.5397962331771851
+      Pitch: 0.8397961854934692
       Target Frame: base_footprint
       Value: Orbit (rviz)
-      Yaw: 5.623568534851074
+      Yaw: 5.598568439483643
     Saved: ~
 Window Geometry:
   Displays:
-    collapsed: true
+    collapsed: false
   Height: 1011
   Hide Left Dock: false
-  Hide Right Dock: true
-  Image:
+  Hide Right Dock: false
+  2D Chessboard:
     collapsed: false
   Left Camera:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd0000000200000000000003030000038dfc020000000afb0000001800570072006900730074002000430061006d0065007200610000000043000000bb0000001b00fffffffb00000016004c006500660074002000430061006d0065007200610100000043000003270000001b00fffffffb0000001800520069006700680074002000430061006d00650072006100000001be000001b30000001b00fffffffb0000000c00430061006d0065007200610100000043000003430000000000000000fb0000000a0049006d00610067006500000001ab000000d50000001b00fffffffb0000002e00530074006500720065006f005f006c006500660074002000430061006c006900620072006100740069006f006e01000000430000027b0000000000000000fb0000002e00530074006500720065006f005f006c006500660074002000430061006c006900620072006100740069006f006e0100000043000003430000000000000000fb0000000800540069006d00650100000370000000600000004400fffffffb0000000a0049006d0061006700650000000308000000c80000000000000000fb000000160053006900640065002000430061006d0065007200610000000304000000cc0000001b00ffffff000000010000027100000287fc0200000004fb0000000a005600690065007700730000000043000000b5000000b500fffffffb000000100044006900730070006c00610079007300000000fe000000fe000000d400fffffffb0000001200530065006c0065006300740069006f006e0000000202000000610000006100fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730000000269000000610000006100ffffff000004770000038d00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000003000000000000020800000354fc0200000002fc0000001100000236000000da00fffffffc0100000002fc00000000000001040000005000fffffffc0200000002fb00000016004c006500660074002000430061006d0065007200610100000011000001180000006a00fffffffb0000001a003200440020004300680065007300730062006f006100720064010000014c000001180000006a00fffffffc00000056000001040000005000fffffffc0200000002fb000000160053006900640065002000430061006d0065007200610100000011000001180000006a00fffffffb0000001800570072006900730074002000430061006d006500720061010000014c000001180000006a00fffffffb0000001800520069006700680074002000430061006d0065007200610100000286000001180000006a00ffffff000000010000014000000378fc0200000004fb0000000a005600690065007700730100000011000000960000009200fffffffb000000100044006900730070006c00610079007301000000cf000001e00000014600fffffffb0000001200530065006c0065006300740069006f006e0100000271000000780000007e00fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000316000000780000007e00ffffff000000030000078000000038fc0100000001fb0000000800540069006d00650100000000000007800000019000ffffff00000606000003a400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Right Camera:
     collapsed: false
   Selection:
-    collapsed: true
+    collapsed: false
   Side Camera:
     collapsed: false
   Time:
     collapsed: false
   Tool Properties:
-    collapsed: true
+    collapsed: false
   Views:
-    collapsed: true
+    collapsed: false
   Width: 1920
   Wrist Camera:
     collapsed: false
