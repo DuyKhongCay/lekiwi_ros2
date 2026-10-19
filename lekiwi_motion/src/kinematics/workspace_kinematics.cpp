@@ -414,7 +414,7 @@ namespace lekiwi_motion::workspace
       const double l1 = link_lengths_[0], l2 = link_lengths_[1];
       const double cos_elbow = (rw * rw + zw * zw - l1 * l1 - l2 * l2) / (2.0 * l1 * l2);
 
-      if (cos_elbow < -1.0 - 1e-12 || cos_elbow > 1.0 + 1e-12 || std::hypot(rw, zw) < 1e-12)
+      if (cos_elbow < -kMaxCosElbow || cos_elbow > kMaxCosElbow || std::hypot(rw, zw) < 1e-12)
       {
         continue;
       }

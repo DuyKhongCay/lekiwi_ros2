@@ -158,6 +158,8 @@ namespace lekiwi_motion::workspace
   class SO101AnalyticalSolver : public IIkSolver
   {
   public:
+    static constexpr double kMaxCosElbow = 0.985; ///< Cosine margin (~10 deg) before singularity at full extension.
+
     /**
      * @brief Constructs analytical solver calibrated against URDF kinematic parameters.
      * @param[in] model Parsed and validated KinematicsModel.

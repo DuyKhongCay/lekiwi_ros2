@@ -95,6 +95,7 @@ private:
   double point_dt_s_{0.08};
   double stale_timeout_s_{0.25};
   double lpf_alpha_{0.85};
+  double max_joint_vel_rad_s_{2.0};
   std::string controller_type_{"joint_trajectory"};
 
   std::string base_frame_{"base_footprint"};

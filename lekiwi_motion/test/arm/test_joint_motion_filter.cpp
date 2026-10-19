@@ -80,3 +80,44 @@ TEST(JointMotionFilterTest, ResetClearsHistory)
   }
 }
 
+TEST(JointMotionFilterTest, SyncStateBumpless)
+{
+  arm::JointMotionFilter<6> filter(0.85);
+  const std::array<double, 6> physical{0.1, 0.2, -0.3, 0.4, -0.5, 0.6};
+
+  filter.sync(physical);
+  EXPECT_TRUE(filter.is_initialized());
+
+  for (size_t i = 0; i < 6; ++i) {
+    EXPECT_DOUBLE_EQ(filter.current_positions()[i], physical[i]);
+  }
+
+  // Next update with close position should not spike
+  const std::array<double, 6> next_target{0.101, 0.2, -0.3, 0.4, -0.5, 0.6};
+  const auto state = filter.update(next_target, 0.02);
+
+  // Position moves smoothly from physical[0], not 0.0
+  EXPECT_NEAR(state.positions[0], 0.10085, 1e-4);
+  EXPECT_GT(state.velocities[0], 0.0);
+  EXPECT_LT(state.velocities[0], 0.1);
+}
+
+TEST(JointMotionFilterTest, VelocityRateLimiting)
+{
+  // Filter with alpha=1.0 (pure passthrough) but max_velocity = 2.0 rad/s
+  arm::JointMotionFilter<6> filter(1.0, 2.0);
+
+  const std::array<double, 6> t0{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  filter.update(t0, 0.02);
+
+  // Attempt massive jump: target = 1.0 rad in 0.02s (would be 50 rad/s)
+  const std::array<double, 6> t1{1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  const auto state1 = filter.update(t1, 0.02);
+
+  // Max allowed step = 2.0 * 0.02 = 0.04 rad
+  for (size_t i = 0; i < 6; ++i) {
+    EXPECT_DOUBLE_EQ(state1.positions[i], 0.04);
+    EXPECT_NEAR(state1.velocities[i], 2.0, 1e-6);
+  }
+}
+

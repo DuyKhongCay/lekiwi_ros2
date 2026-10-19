@@ -100,6 +100,7 @@ void CartesianJogServerNode::declare_all_parameters()
   declare_parameter<double>("point_dt_s", 0.08);
   declare_parameter<double>("stale_timeout_s", 0.25);
   declare_parameter<double>("lpf_alpha", 0.85);
+  declare_parameter<double>("max_joint_vel_rad_s", 2.0);
   declare_parameter<std::string>("controller_type", "joint_trajectory");
 
   declare_parameter<std::string>("base_frame", "base_footprint");
@@ -128,6 +129,7 @@ void CartesianJogServerNode::load_parameters()
   point_dt_s_ = std::max(0.01, get_parameter("point_dt_s").as_double());
   stale_timeout_s_ = std::max(0.05, get_parameter("stale_timeout_s").as_double());
   lpf_alpha_ = std::clamp(get_parameter("lpf_alpha").as_double(), 0.0, 1.0);
+  max_joint_vel_rad_s_ = std::max(0.0, get_parameter("max_joint_vel_rad_s").as_double());
   controller_type_ = get_parameter("controller_type").as_string();
   if (controller_type_ != "joint_trajectory" && controller_type_ != "forward_position") {
     RCLCPP_WARN(
@@ -148,6 +150,7 @@ void CartesianJogServerNode::load_parameters()
   robot_description_topic_ = get_parameter("robot_description_topic").as_string();
 
   motion_filter_.set_alpha(lpf_alpha_);
+  motion_filter_.set_max_velocity(max_joint_vel_rad_s_);
 }
 
 bool CartesianJogServerNode::is_kinematics_initialized() const noexcept
@@ -347,10 +350,10 @@ void CartesianJogServerNode::control_loop()
   if (is_busy) {
     if (active_jogging_) {
       active_jogging_ = false;
-      motion_filter_.reset();
     }
     // Bumpless Transfer: Continuous synchronization from physical joint telemetry while suppressed
     jogger_->sync_from_fk(physical_joints);
+    motion_filter_.sync(physical_joints);
     return;
   }
 
@@ -358,10 +361,10 @@ void CartesianJogServerNode::control_loop()
     if (active_jogging_) {
       RCLCPP_INFO(get_logger(), "Cartesian jog stream timed out (> %.2fs). Idle.", stale_timeout_s_);
       active_jogging_ = false;
-      motion_filter_.reset();
     }
     // Bumpless Transfer: Continuous synchronization from physical joint telemetry while idle
     jogger_->sync_from_fk(physical_joints);
+    motion_filter_.sync(physical_joints);
     return;
   }
 
@@ -401,7 +404,8 @@ void CartesianJogServerNode::dispatch_command(
 
     trajectory_msgs::msg::JointTrajectoryPoint pt;
     pt.positions.assign(filtered.positions.begin(), filtered.positions.end());
-    pt.velocities.assign(filtered.velocities.begin(), filtered.velocities.end());
+    // Do not set pt.velocities on single-point streaming trajectory
+    // to allow JointTrajectoryController to fit monotonic, non-inverting spline
     pt.time_from_start = rclcpp::Duration::from_seconds(point_dt_s_);
     traj_msg.points.push_back(std::move(pt));
 
