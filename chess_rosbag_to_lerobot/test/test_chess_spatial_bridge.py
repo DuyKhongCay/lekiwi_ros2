@@ -9,7 +9,7 @@ from chess_rosbag_to_lerobot.chess_spatial_bridge import (
     square_to_metric,
     parse_uci_move,
     extract_move_squares,
-    resolve_pick_place_poses,
+    resolve_pick_place_points,
 )
 
 
@@ -71,21 +71,21 @@ def test_extract_move_squares():
     assert extract_move_squares("Capture black knight on f6 with g5") == ("f6", "g5")
 
 
-def test_resolve_pick_place_poses():
+def test_resolve_pick_place_points():
     cfg = ChessboardConfig(square_size_m=0.040, grasp_clearance_z_m=0.025, origin_at_center=True)
-    pick_pose, place_pose = resolve_pick_place_poses("e2e4", cfg)
+    pick_point, place_point = resolve_pick_place_points("e2e4", cfg)
 
-    assert isinstance(pick_pose, np.ndarray)
-    assert isinstance(place_pose, np.ndarray)
-    assert pick_pose.shape == (3,)
-    assert place_pose.shape == (3,)
+    assert isinstance(pick_point, np.ndarray)
+    assert isinstance(place_point, np.ndarray)
+    assert pick_point.shape == (3,)
+    assert place_point.shape == (3,)
 
     # e2: file 'e' (4) -> +0.020; rank '2' (1) -> (1-3.5)*0.04 = -0.100
-    assert pytest.approx(pick_pose[0], abs=1e-5) == 0.020
-    assert pytest.approx(pick_pose[1], abs=1e-5) == -0.100
-    assert pytest.approx(pick_pose[2], abs=1e-5) == 0.025
+    assert pytest.approx(pick_point[0], abs=1e-5) == 0.020
+    assert pytest.approx(pick_point[1], abs=1e-5) == -0.100
+    assert pytest.approx(pick_point[2], abs=1e-5) == 0.025
 
     # e4: file 'e' (4) -> +0.020; rank '4' (3) -> (3-3.5)*0.04 = -0.020
-    assert pytest.approx(place_pose[0], abs=1e-5) == 0.020
-    assert pytest.approx(place_pose[1], abs=1e-5) == -0.020
-    assert pytest.approx(place_pose[2], abs=1e-5) == 0.025
+    assert pytest.approx(place_point[0], abs=1e-5) == 0.020
+    assert pytest.approx(place_point[1], abs=1e-5) == -0.020
+    assert pytest.approx(place_point[2], abs=1e-5) == 0.025

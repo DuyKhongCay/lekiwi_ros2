@@ -92,7 +92,7 @@ def extract_move_squares(task_text: str) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
-def resolve_pick_place_poses(
+def resolve_pick_place_points(
     task_text: str,
     cfg: ChessboardConfig,
     default_square_from: str = "e2",

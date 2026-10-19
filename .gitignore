@@ -28,6 +28,7 @@ frames_*.pdf
 ### Environments & Dependencies ###
 .env
 .venv
+.pixi/
 env/
 venv/
 env.bak/
