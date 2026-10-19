@@ -51,6 +51,28 @@ namespace lekiwi_chess_master
 {
 
   /**
+   * @brief Theme color palette for rendering the 8x8 chessboard and margin.
+   */
+  struct BoardTheme
+  {
+    cv::Scalar light_tile;
+    cv::Scalar dark_tile;
+    cv::Scalar border_color;
+  };
+
+  inline const BoardTheme kLegalWoodTheme{
+    cv::Scalar(240, 217, 181),  // #F0D9B5 (BGR) Classic light tile
+    cv::Scalar(181, 136, 99),   // #B58863 (BGR) Classic dark tile
+    cv::Scalar(60, 70, 80)
+  };
+
+  inline const BoardTheme kRawSlateTheme{
+    cv::Scalar(240, 230, 220),  // #DCE6F0 (BGR) Cool smoke slate light
+    cv::Scalar(130, 110, 90),   // #5A6E82 (BGR) Deep slate navy
+    cv::Scalar(50, 65, 80)
+  };
+
+  /**
    * @brief Pixel geometric dimensions and layout coordinates for rendering chessboard components.
    */
   struct BoardLayout
@@ -59,7 +81,7 @@ namespace lekiwi_chess_master
     int panel_h{480};      ///< Total image canvas height in pixels.
     int header_h{38};      ///< Vertical height of top status header area.
     int footer_h{38};      ///< Vertical height of bottom FEN banner area.
-    int board_size{384};    ///< Total pixel span of 8x8 tile matrix.
+    int board_size{384};   ///< Total pixel span of 8x8 tile matrix.
     int cell_size{48};     ///< Pixel dimension of an individual square tile.
     int start_x{48};       ///< Top-left horizontal origin coordinate of board grid.
     int start_y{48};       ///< Top-left vertical origin coordinate of board grid.
@@ -78,7 +100,7 @@ namespace lekiwi_chess_master
     bool is_check{false};        ///< True if active side is in check.
     bool is_checkmate{false};    ///< True if position is terminal checkmate.
     bool is_draw{false};         ///< True if position is terminal stalemate or draw.
-    bool is_raw_view{false};     ///< True if rendering direct unprocessed camera vision FEN.
+    bool is_raw_view{false};     ///< Retained for struct backward compatibility.
 
     /**
      * @brief Constructs a BoardDisplayContext snapshot from a ROS 2 ChessGameStatus message.
@@ -94,6 +116,7 @@ namespace lekiwi_chess_master
       ctx.is_check = status.is_check;
       ctx.is_checkmate = status.is_checkmate;
       ctx.is_draw = status.is_draw;
+      ctx.is_raw_view = false;
       return ctx;
     }
   };
@@ -119,18 +142,22 @@ namespace lekiwi_chess_master
     /** @brief Wall timer callback rendering frames when state is flagged dirty. */
     void onRenderTimer();
 
-    /** @brief Orchestrates full render pipeline and emits compressed JPEG message. */
-    void renderAndPublish();
+    /** @brief Orchestrates legal board render and emits compressed JPEG message. */
+    void renderAndPublishLegal();
 
-    /** @brief Compiles current status and parameters into an immutable render snapshot. */
-    BoardDisplayContext buildDisplayContext() const;
+    /** @brief Orchestrates raw vision board render and emits compressed JPEG message. */
+    void renderAndPublishRaw();
 
-    /**
-     * @brief Renders all visual layers (tiles, highlights, sprites, arrows, labels) into canvas.
-     * @param[out] panel Destination OpenCV 3-channel BGR matrix.
-     * @param[in] ctx Game display context containing board layout and active moves.
-     */
-    void render2DBoardPanel(cv::Mat &panel, const BoardDisplayContext &ctx);
+    /** @brief Compresses OpenCV BGR canvas to JPEG and publishes to the designated publisher. */
+    void publishCompressedFrame(
+      rclcpp::Publisher<sensor_msgs::msg::CompressedImage> &pub,
+      const cv::Mat &panel);
+
+    /** @brief Renders the authoritative legal chess board with move annotations. */
+    void renderLegalPanel(cv::Mat &panel, const BoardDisplayContext &ctx);
+
+    /** @brief Renders the raw vision camera FEN board with minimal telemetry. */
+    void renderRawPanel(cv::Mat &panel, const std::string &raw_fen);
 
     /** @brief Computes centered square and board bounds from overall canvas dimensions. */
     static BoardLayout calculateLayout(int width, int height);
@@ -169,40 +196,42 @@ namespace lekiwi_chess_master
     /** @brief Pre-loads and scales piece PNG assets from disk into internal memory cache. */
     void loadPieceSprites(int cell_size, const std::string &pieces_dir);
 
-    /** @brief Renders the alternating 8x8 light and dark checkered board tiles. */
-    void drawBoardTiles(cv::Mat &panel, const BoardLayout &layout) const;
+    /** @brief Helper ensuring sprite cache matches the current cell size. */
+    void ensureSpriteCache(int cell_size);
+
+    /** @brief Renders the alternating 8x8 light and dark checkered board tiles with the chosen theme. */
+    static void drawBoardTiles(cv::Mat &panel, const BoardLayout &layout, const BoardTheme &theme);
 
     /** @brief Highlights previous move squares (green) and engine best move squares (orange). */
-    void drawMoveHighlights(cv::Mat &panel, const std::string &last_move, const std::string &best_move, const BoardLayout &layout) const;
+    static void drawMoveHighlights(cv::Mat &panel, const std::string &last_move, const std::string &best_move, const BoardLayout &layout);
 
     /** @brief Iterates 64-square occupancy array and stamps piece sprites onto canvas. */
     int drawPieceSprites(cv::Mat &panel, const std::array<char, 64> &occupancy_board, const BoardLayout &layout);
 
     /** @brief Draws directional arrows for executed and recommended moves. */
-    void drawMoveArrows(cv::Mat &panel, const std::string &last_move, const std::string &best_move, const BoardLayout &layout) const;
+    static void drawMoveArrows(cv::Mat &panel, const std::string &last_move, const std::string &best_move, const BoardLayout &layout);
 
     /** @brief Renders coordinate labels [a-h] and [1-8] along the perimeter margin. */
-    void drawBoardCoordinates(cv::Mat &panel, const BoardLayout &layout) const;
+    static void drawBoardCoordinates(cv::Mat &panel, const BoardLayout &layout, const cv::Scalar &border_color);
 
-    /**
-     * @brief Draws top header banner and bottom FEN footer with phase-specific styling.
-     * @param[in,out] panel Destination image matrix.
-     * @param[in] ctx Match display context.
-     * @param[in] piece_count Total active pieces detected on board.
-     * @param[in] layout Board layout metrics.
-     */
-    void drawHeaderAndFooter(cv::Mat &panel, const BoardDisplayContext &ctx, int piece_count, const BoardLayout &layout) const;
+    /** @brief Draws top header banner and bottom FEN footer for legal game state. */
+    static void drawLegalHeaderFooter(cv::Mat &panel, const BoardDisplayContext &ctx, int piece_count, const BoardLayout &layout);
+
+    /** @brief Draws top header banner and bottom FEN footer for raw camera vision. */
+    static void drawRawHeaderFooter(cv::Mat &panel, const std::string &raw_fen, int piece_count, const BoardLayout &layout);
 
     // Subscriptions & Publishers
     rclcpp::Subscription<ChessGameStatus>::SharedPtr game_status_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr raw_fen_sub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr board_2d_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr board_2d_raw_pub_;
     rclcpp::TimerBase::SharedPtr render_timer_;
 
     // Parameters
     std::string game_status_topic_{"/chess/game_status"};
     std::string raw_fen_topic_{"/chess/raw_fen"};
     std::string board_2d_topic_{"/chess/board_2d/compressed"};
+    std::string board_2d_raw_topic_{"/chess/board_2d/raw/compressed"};
     int jpeg_quality_{85};
     int board_panel_size_{480};
     bool debug_{false};
@@ -213,7 +242,8 @@ namespace lekiwi_chess_master
     ChessGameStatus latest_status_;
     std::string latest_raw_fen_;
     bool has_status_{false};
-    bool state_dirty_{true};
+    bool legal_state_dirty_{true};
+    bool raw_state_dirty_{false};
 
     std::string pieces_dir_;
     std::map<std::string, cv::Mat> sprite_cache_;
