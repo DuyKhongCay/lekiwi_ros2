@@ -2,7 +2,7 @@ episode_recorder_node:
   ros__parameters:
     # Storage settings
     root_dir: "/root/docker_ws/lekiwi_ros2/ros_bag"
-    experiment_name: "chess_teleop_v1"
+    experiment_name: "chess_teleop_v4"
     task: "chess_pick_and_place"
     storage_id: "mcap"
 
@@ -18,7 +18,7 @@ episode_recorder_node:
 
       # 2. Follower Joint states & Action commands (LeRobot Observation & Action)
       - "/joint_states"
-      - "/arm_trajectory_controller/joint_trajectory"
+      - "/arm_trajectory_controller/controller_state"
 
       # 3. Spatial TF transforms (for offline Cartesian/board reference)
       - "/tf"

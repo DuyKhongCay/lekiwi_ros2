@@ -50,7 +50,7 @@ def generate_launch_description():
             "hardware_type": "real",
             "use_sim_time": "false",
             "orchestrator": "true",
-            "manipulation": "kinematics",
+            "manipulation": "policy",
             "cameras": "true",
             "record": "true",
             "log_level": LaunchConfiguration("log_level"),

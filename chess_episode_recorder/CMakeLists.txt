@@ -71,8 +71,26 @@ install(DIRECTORY config launch
 )
 
 if(BUILD_TESTING)
-  find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(test_smoke test/test_smoke.py)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_episode_recorder_node test/test_episode_recorder_node.cpp)
+  if(TARGET test_episode_recorder_node)
+    target_include_directories(test_episode_recorder_node PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    )
+    target_link_libraries(test_episode_recorder_node
+      episode_recorder_component
+    )
+    ament_target_dependencies(test_episode_recorder_node
+      rclcpp
+      sensor_msgs
+      std_srvs
+      lekiwi_interfaces
+      rosbag2_cpp
+      rosbag2_storage
+      yaml-cpp
+    )
+  endif()
 endif()
 
 ament_package()

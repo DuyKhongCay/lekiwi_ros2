@@ -217,9 +217,16 @@ bool EpisodeRecorderNode::start_episode()
   storage_opts.max_cache_size = 50u * 1024u * 1024u; // 50MB write cache
 
 #ifdef HAS_ROSBAG2_CUSTOM_DATA
+  std::string task_str = task_;
+  {
+    std::lock_guard<std::mutex> lock(instruction_mutex_);
+    if (!current_instruction_.empty()) {
+      task_str = current_instruction_;
+    }
+  }
   storage_opts.custom_data["experiment_name"] = experiment_name_;
   storage_opts.custom_data["episode_index"] = std::to_string(current_episode_index_);
-  storage_opts.custom_data["task"] = task_;
+  storage_opts.custom_data["task"] = task_str;
 #endif
 
   try {
@@ -330,9 +337,16 @@ bool EpisodeRecorderNode::discard_episode()
     }
   }
 
+  // Retain active task instruction for retries.
+  // The operator discards a flawed recording attempt to retry the same chess move.
   {
     std::lock_guard<std::mutex> lock(instruction_mutex_);
-    current_instruction_.clear();
+    if (!current_instruction_.empty()) {
+      RCLCPP_INFO(
+        get_logger(),
+        "🗑 [EPISODE RECORDER] Retaining active task instruction for retry: '%s'",
+        current_instruction_.c_str());
+    }
   }
 
   current_state_.store(EpisodeState::IDLE);
