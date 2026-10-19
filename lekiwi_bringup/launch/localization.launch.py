@@ -124,27 +124,27 @@ def generate_launch_description():
     )
 
     # 5. Magnetometer bias remover component
-    mag_bias_remover_component = ComposableNode(
-        package="magnetometer_pipeline",
-        plugin="magnetometer_pipeline::MagnetometerBiasRemoverNodelet",
-        name="magnetometer_bias_remover",
-        parameters=[
-            default_imu_params,
-            {"use_sim_time": LaunchConfiguration("use_sim_time")},
-        ],
-        remappings=[
-            ("imu/mag", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
-            ("imu/mag_bias", "/imu/mag_bias"),
-            ("imu/mag_unbiased", "/magnetic_field/calibrated"),
-        ],
-        extra_arguments=[{"use_intra_process_comms": True}],
-    )
+    # mag_bias_remover_component = ComposableNode(
+    #     package="magnetometer_pipeline",
+    #     plugin="magnetometer_pipeline::MagnetometerBiasRemoverNodelet",
+    #     name="magnetometer_bias_remover",
+    #     parameters=[
+    #         default_imu_params,
+    #         {"use_sim_time": LaunchConfiguration("use_sim_time")},
+    #     ],
+    #     remappings=[
+    #         ("imu/mag", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
+    #         ("imu/mag_bias", "/imu/mag_bias"),
+    #         ("imu/mag_unbiased", "/magnetic_field/calibrated"),
+    #     ],
+    #     extra_arguments=[{"use_intra_process_comms": True}],
+    # )
 
     # 6. Assemble static composable components list (cameras.launch.py pattern)
     all_localization_components = [
         imu_filter_component,
         imu_transformer_component,
-        mag_bias_remover_component,
+        # mag_bias_remover_component,
     ]
 
     localization_container = ComposableNodeContainer(
@@ -157,41 +157,41 @@ def generate_launch_description():
     )
 
     # 7. Magnetometer bias observer node (Python node delayed until container runs)
-    mag_bias_observer_node = Node(
-        package="magnetometer_pipeline",
-        executable="magnetometer_bias_observer.py",
-        name="mag_bias_observer",
-        output="screen",
-        parameters=[
-            default_imu_params,
-            {
-                "2d_mode": False,
-                "measuring_time": 30.0,
-                "load_from_params": True,
-                "load_from_file": False,
-                "save_to_file": False,
-                "use_sim_time": LaunchConfiguration("use_sim_time"),
-            },
-        ],
-        remappings=[
-            ("imu/mag", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
-            ("imu/mag_bias", "/imu/mag_bias"),
-        ],
-        condition=IfCondition(LaunchConfiguration("use_mag")),
-    )
+    # mag_bias_observer_node = Node(
+    #     package="magnetometer_pipeline",
+    #     executable="magnetometer_bias_observer.py",
+    #     name="mag_bias_observer",
+    #     output="screen",
+    #     parameters=[
+    #         default_imu_params,
+    #         {
+    #             "2d_mode": False,
+    #             "measuring_time": 30.0,
+    #             "load_from_params": True,
+    #             "load_from_file": False,
+    #             "save_to_file": False,
+    #             "use_sim_time": LaunchConfiguration("use_sim_time"),
+    #         },
+    #     ],
+    #     remappings=[
+    #         ("imu/mag", "/lekiwi_magnetometer_broadcaster/magnetic_field"),
+    #         ("imu/mag_bias", "/imu/mag_bias"),
+    #     ],
+    #     condition=IfCondition(LaunchConfiguration("use_mag")),
+    # )
 
-    delayed_mag_bias_observer = RegisterEventHandler(
-        OnProcessStart(
-            target_action=localization_container,
-            on_start=[
-                TimerAction(
-                    period=4.0,
-                    actions=[mag_bias_observer_node],
-                )
-            ],
-        ),
-        condition=IfCondition(LaunchConfiguration("use_mag")),
-    )
+    # delayed_mag_bias_observer = RegisterEventHandler(
+    #     OnProcessStart(
+    #         target_action=localization_container,
+    #         on_start=[
+    #             TimerAction(
+    #                 period=4.0,
+    #                 actions=[mag_bias_observer_node],
+    #             )
+    #         ],
+    #     ),
+    #     condition=IfCondition(LaunchConfiguration("use_mag")),
+    # )
 
     # 8. Assemble LaunchDescription
     return LaunchDescription(
@@ -201,6 +201,6 @@ def generate_launch_description():
             localization_container,
             ekf_local_node,
             ekf_global_node,
-            delayed_mag_bias_observer,
+            # delayed_mag_bias_observer,
         ]
     )

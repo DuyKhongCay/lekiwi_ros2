@@ -49,7 +49,7 @@ def generate_launch_description():
 
     manipulation_arg = DeclareLaunchArgument(
         "manipulation",
-        default_value="kinematics",
+        default_value="policy",
         choices=["kinematics", "policy", "false"],
         description="Manipulation subsystem mode: "
         "'kinematics' (hardware trajectory controller), "
@@ -109,7 +109,7 @@ def generate_launch_description():
         condition=UnlessCondition(
             PythonExpression(
                 [
-                    "'", LaunchConfiguration("manipulation"), "' == 'policy'"
+                    "'", LaunchConfiguration("manipulation"), "' == 'false'"
                 ]
             )
         ),

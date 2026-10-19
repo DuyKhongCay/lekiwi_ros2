@@ -4,6 +4,7 @@ cartesian_jog_server_node:
     point_dt_s: 0.08
     stale_timeout_s: 0.25
     lpf_alpha: 0.85
+    max_joint_vel_rad_s: 2.0
     controller_type: "joint_trajectory"
 
     arm_trajectory_topic: "/arm_trajectory_controller/joint_trajectory"

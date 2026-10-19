@@ -32,14 +32,14 @@
 
     # --- End-Effector Gripper Physical Limits (rad) ---
     gripper:
-      open: 0.35
+      open: 0.39
       closed: -0.10
 
     # --- Shared Manipulation Planning Defaults ---
     planning:
       default_pitch: -1.2217304764
       default_roll: 1.57
-      grasp_z: 0.04
+      grasp_z: 0.035
 
 
 # ==============================================================================
@@ -85,7 +85,7 @@ manipulation_action_server:
     mock_execution: false
     record: false                   # When true, pauses execution at APPROACH_PICK for data collection
     default_velocity: 1.5           # Max joint angular speed ceiling (rad/s)
-    approach_z_offset: 0.04     # Pre-grasp elevation above board surface (m)
+    approach_z_offset: 0.065     # Pre-grasp elevation above board surface (m)
     action_name: "/manipulation/execute_chess_move"
     controller_action_name: "/arm_trajectory_controller/follow_joint_trajectory"
 
@@ -109,7 +109,7 @@ chess_mission_orchestrator:
     robot_color: "b"
     navigation: true
     feasibility_timeout_sec: 5.0
-    action_timeout_sec: 60.0
+    action_timeout_sec: 0.0
     readiness_timeout_sec: 1.0
     pre_grasp_settle_sec: 2.0
 
@@ -138,7 +138,7 @@ chess_mission_orchestrator:
 
     # --- Active Observation & Vantage Point Settings ---
     observation:
-      standoff_distance: 0.569
+      standoff_distance: 0.59
       scan_timeout_sec: 6.0
       angle_offsets:
         relocalize: [-2.831, -2.544, -2.248, -1.910, -1.568, -1.067, -0.667, -0.290, 0.082, 0.484, 0.761, 1.147, 1.530, 1.934, 2.312, 2.699, 3.092]
