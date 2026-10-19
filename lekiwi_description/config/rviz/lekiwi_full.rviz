@@ -4,26 +4,16 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /Global Options1
-        - /Status1
         - /TF1/Frames1
         - /TF1/Tree1
-        - /IMU1
-        - /Odometry1
-        - /Chessboard AprilTag Markers1
         - /Chessboard AprilTag Markers1/Topic1
-        - /Move Feasibility Plan1
         - /Move Feasibility Plan1/Topic1
-        - "/3D Chessboard & Pieces1"
         - "/3D Chessboard & Pieces1/Topic1"
-        - /Robot Mission Status HUD1
         - /Robot Mission Status HUD1/Topic1
-        - /Left Camera1
         - /Left Camera1/Topic1
-        - /Right Camera1/Topic1
-        - /Wrist Camera1
-        - /Side Camera1
         - /2D Chessboard1/Topic1
+        - /2D Chessboard Raw1/Topic1
+        - /Right Camera1/Topic1
       Splitter Ratio: 0.5
     Tree Height: 352
   - Class: rviz_common/Selection
@@ -185,13 +175,29 @@ Visualization Manager:
           Value: false
         icm20948_imu:
           Value: true
+        lower_arm:
+          Value: true
         map:
+          Value: true
+        moving_jaw_so101_v1:
+          Value: true
+        odom:
+          Value: true
+        omniwheel_7:
+          Value: true
+        omniwheel_8:
+          Value: true
+        omniwheel_9:
           Value: true
         rotation_pitch:
           Value: false
         side_camera_optical:
           Value: false
         stereo_left_optical:
+          Value: true
+        upper_arm:
+          Value: true
+        wrist:
           Value: true
         wrist_camera_optical:
           Value: false
@@ -204,6 +210,33 @@ Visualization Manager:
         map:
           chessboard_frame:
             {}
+          odom:
+            base_footprint:
+              baseframe:
+                {}
+              icm20948_imu:
+                {}
+              omniwheel_7:
+                {}
+              omniwheel_8:
+                {}
+              omniwheel_9:
+                {}
+              rotation_pitch:
+                side_camera_optical:
+                  {}
+                upper_arm:
+                  lower_arm:
+                    wrist:
+                      gripper:
+                        gripperframe:
+                          {}
+                        moving_jaw_so101_v1:
+                          {}
+                        wrist_camera_optical:
+                          {}
+              stereo_left_optical:
+                {}
       Update Interval: 0
       Value: true
     - Acceleration properties:
@@ -292,7 +325,11 @@ Visualization Manager:
       Enabled: true
       Name: Move Feasibility Plan
       Namespaces:
-        {}
+        feasibility/base_footprints: true
+        feasibility/hud_status: true
+        feasibility/nav_trajectory: true
+        feasibility/reach_envelope: true
+        feasibility/target_points: true
       Topic:
         Depth: 5
         Durability Policy: Transient Local
@@ -304,7 +341,9 @@ Visualization Manager:
       Enabled: true
       Name: "3D Chessboard & Pieces"
       Namespaces:
-        {}
+        chess/highlights: true
+        chess/move_arrows: true
+        chess/pieces: true
       Topic:
         Depth: 10
         Durability Policy: Transient Local
@@ -316,7 +355,7 @@ Visualization Manager:
       Enabled: true
       Name: Robot Mission Status HUD
       Namespaces:
-        {}
+        mission/robot_hud: true
       Topic:
         Depth: 1
         Durability Policy: Transient Local
@@ -330,7 +369,7 @@ Visualization Manager:
       Median window: 5
       Min Value: 0
       Name: Left Camera
-      Normalize Range: false
+      Normalize Range: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -343,13 +382,55 @@ Visualization Manager:
       Max Value: 1
       Median window: 5
       Min Value: 0
-      Name: Right Camera
+      Name: Side Camera
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /cameras/usb_side/image_raw/compressed
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: 2D Chessboard
       Normalize Range: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
+        Value: /chess/board_2d/compressed
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: 2D Chessboard Raw
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /chess/board_2d/raw/compressed
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Right Camera
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
         Value: /cameras/stereo_right/image_raw/compressed
       Value: true
     - Class: rviz_default_plugins/Image
@@ -366,34 +447,6 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /cameras/usb_wrist/image_raw/compressed
       Value: true
-    - Class: rviz_default_plugins/Image
-      Enabled: true
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: Side Camera
-      Normalize Range: true
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /cameras/usb_side/image_raw/compressed
-      Value: true
-    - Class: rviz_default_plugins/Image
-      Enabled: false
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: 2D Chessboard
-      Normalize Range: true
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /chess/board_2d/compressed
-      Value: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -440,7 +493,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 2.235285758972168
+      Distance: 2.8039424419403076
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -455,22 +508,24 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.8397961854934692
+      Pitch: 0.444796085357666
       Target Frame: base_footprint
       Value: Orbit (rviz)
-      Yaw: 5.598568439483643
+      Yaw: 5.283568382263184
     Saved: ~
 Window Geometry:
+  2D Chessboard:
+    collapsed: false
+  2D Chessboard Raw:
+    collapsed: false
   Displays:
     collapsed: false
   Height: 1011
   Hide Left Dock: false
   Hide Right Dock: false
-  2D Chessboard:
-    collapsed: false
   Left Camera:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd00000003000000000000020800000354fc0200000002fc0000001100000236000000da00fffffffc0100000002fc00000000000001040000005000fffffffc0200000002fb00000016004c006500660074002000430061006d0065007200610100000011000001180000006a00fffffffb0000001a003200440020004300680065007300730062006f006100720064010000014c000001180000006a00fffffffc00000056000001040000005000fffffffc0200000002fb000000160053006900640065002000430061006d0065007200610100000011000001180000006a00fffffffb0000001800570072006900730074002000430061006d006500720061010000014c000001180000006a00fffffffb0000001800520069006700680074002000430061006d0065007200610100000286000001180000006a00ffffff000000010000014000000378fc0200000004fb0000000a005600690065007700730100000011000000960000009200fffffffb000000100044006900730070006c00610079007301000000cf000001e00000014600fffffffb0000001200530065006c0065006300740069006f006e0100000271000000780000007e00fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000316000000780000007e00ffffff000000030000078000000038fc0100000001fb0000000800540069006d00650100000000000007800000019000ffffff00000606000003a400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000003000000000000027800000343fc0200000001fc00000043000003430000005d00fffffffc0100000002fc0000000000000139000000a600fffffffc0200000003fb00000016004c006500660074002000430061006d0065007200610100000043000001130000001b00fffffffb0000001a003200440020004300680065007300730062006f006100720064010000015c000001110000001b00fffffffb0000001800520069006700680074002000430061006d0065007200610100000273000001130000001b00fffffffc0000013f00000139000000ca00fffffffc0200000003fb000000160053006900640065002000430061006d0065007200610100000043000001130000001b00fffffffb00000022003200440020004300680065007300730062006f0061007200640020005200610077010000015c000001110000001b00fffffffb0000001800570072006900730074002000430061006d0065007200610100000273000001130000001b00ffffff00000001000002f200000343fc0200000004fb0000000a005600690065007700730100000043000000b5000000b500fffffffb000000100044006900730070006c00610079007301000000fe000001a8000000d400fffffffb0000001200530065006c0065006300740069006f006e01000002ac0000006a0000006100fffffffb0000001e0054006f006f006c002000500072006f0070006500720074006900650073010000031c0000006a0000006100ffffff000000030000078000000044fc0100000001fb0000000800540069006d00650100000000000007800000030300ffffff0000020a0000034300000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Right Camera:
     collapsed: false
   Selection:
