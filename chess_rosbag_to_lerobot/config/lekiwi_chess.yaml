@@ -6,7 +6,7 @@ fps: 25
 reference_topic: "/cameras/usb_wrist/image_raw/compressed"
 
 # Default freshness window (seconds) if a feature does not override it
-default_max_age_s: 0.08
+default_max_age_s: 0.04
 
 # Fallback task instruction if not present in episode custom_data
 task: "Chess pick and place move"
@@ -15,8 +15,8 @@ task: "Chess pick and place move"
 chessboard:
   board_frame: "chessboard_frame"
   base_frame: "base_footprint"
-  square_size_m: 0.040        # 40mm square size
-  grasp_clearance_z_m: 0.025  # Height above board surface for grasp pose
+  square_size_m: 0.037        # square size
+  grasp_clearance_z_m: 0.035  # Height above board surface for grasp point
   origin_at_center: true      # (0, 0, 0) is at center of the 8x8 chessboard
 
 # Standard 6-DOF joint names for LeKiwi Arm (lekiwi_manipulation SSOT)
@@ -42,7 +42,7 @@ features:
     stamp_src: "bag"
     shape: [384, 384, 3]
 
-  - key: "observation.images.board"
+  - key: "observation.images.overhead"
     topic: "/cameras/stereo_right/image_raw/compressed"
     msg_type: "sensor_msgs/msg/CompressedImage"
     stamp_src: "bag"
@@ -58,17 +58,15 @@ features:
 
   # --- 3. Action command (Forward Controller or Teleop) ---
   - key: "action"
-    topic: "/arm_forward_controller/commands"
-    msg_type: "std_msgs/msg/Float64MultiArray"
+    topic: "/arm_trajectory_controller/controller_state"
+    msg_type: "control_msgs/msg/JointTrajectoryControllerState"
     stamp_src: "bag"
     max_age_s: 0.04
     names: *arm_joints
 
   # --- 4. Chess Context: 3D pick & place target coordinates ---
-  - key: "observation.chess.pick_pose"
-    msg_type: "spatial/pick_pose"
-    shape: [3]  # [x, y, z] relative to chessboard_frame or base_footprint
+  # LeRobot Environment State conditioning (vector 6D: [pick_point(3), place_point(3)]) for ACT / Diffusion Policy
+  - key: "observation.environment_state"
+    msg_type: "spatial/environment_state"
+    shape: [6]  # [pick_x, pick_y, pick_z, place_x, place_y, place_z] relative to base_footprint / chessboard_frame
 
-  - key: "observation.chess.place_pose"
-    msg_type: "spatial/place_pose"
-    shape: [3]  # [x, y, z] relative to chessboard_frame or base_footprint

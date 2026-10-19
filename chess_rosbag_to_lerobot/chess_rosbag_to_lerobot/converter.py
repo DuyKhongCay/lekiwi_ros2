@@ -27,7 +27,7 @@ from chess_rosbag_to_lerobot.bag_reader import (
     open_reader,
 )
 from chess_rosbag_to_lerobot.buffers import LastBuffer
-from chess_rosbag_to_lerobot.chess_spatial_bridge import resolve_pick_place_poses
+from chess_rosbag_to_lerobot.chess_spatial_bridge import resolve_pick_place_points
 from chess_rosbag_to_lerobot.config import Config, FeatureSpec
 from chess_rosbag_to_lerobot.decoders import decode, get_lerobot_dtype
 from chess_rosbag_to_lerobot.tf_replayer import TfReplayer
@@ -77,11 +77,17 @@ def build_lerobot_features(cfg: Config, use_videos: bool = True) -> Dict[str, An
                 "names": ["height", "width", "channels"],
             }
         elif spec.msg_type.startswith("spatial/"):
-            # Chess spatial coordinates [x, y, z]
+            # Chess spatial environment state (pick_point [3] + place_point [3] = [6])
+            shape = tuple(int(x) for x in spec.shape) if spec.shape else (6,)
+            names = (
+                ["pick_x", "pick_y", "pick_z", "place_x", "place_y", "place_z"]
+                if shape == (6,)
+                else None
+            )
             features[spec.key] = {
                 "dtype": "float32",
-                "shape": (3,),
-                "names": ["x", "y", "z"],
+                "shape": shape,
+                "names": names,
             }
         else:
             names = list(spec.names) if spec.names is not None else None
@@ -153,7 +159,7 @@ def convert_one_bag(
         )
 
     # 6. Pre-calculate chess spatial pick and place vectors
-    pick_metric, place_metric = resolve_pick_place_poses(task_str, cfg.chessboard)
+    pick_metric, place_metric = resolve_pick_place_points(task_str, cfg.chessboard)
 
     frame_count = 0
     dropped_count = 0
@@ -183,26 +189,26 @@ def convert_one_bag(
             frame["task"] = task_str
 
             # Add Chess Spatial features
-            pick_pose = pick_metric.copy()
-            place_pose = place_metric.copy()
+            pick_point = pick_metric.copy()
+            place_point = place_metric.copy()
             if cfg.chessboard.base_frame != cfg.chessboard.board_frame:
                 transformed_pick = tf_replayer.transform_point(
-                    pick_pose, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
+                    pick_point, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
                 )
                 if transformed_pick is not None:
-                    pick_pose = transformed_pick
+                    pick_point = transformed_pick
 
                 transformed_place = tf_replayer.transform_point(
-                    place_pose, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
+                    place_point, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
                 )
                 if transformed_place is not None:
-                    place_pose = transformed_place
+                    place_point = transformed_place
+
+            env_state = np.concatenate([pick_point, place_point]).astype(np.float32)
 
             for f_spec in cfg.features:
-                if f_spec.key == "observation.chess.pick_pose":
-                    frame[f_spec.key] = pick_pose
-                elif f_spec.key == "observation.chess.place_pose":
-                    frame[f_spec.key] = place_pose
+                if f_spec.key == "observation.environment_state":
+                    frame[f_spec.key] = env_state
 
             # Sample remaining buffered features
             drop = False

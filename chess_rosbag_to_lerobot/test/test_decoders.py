@@ -11,6 +11,8 @@ from chess_rosbag_to_lerobot.config import FeatureSpec
 from chess_rosbag_to_lerobot.decoders import (
     decode_compressed_image,
     decode_joint_state,
+    decode_joint_trajectory,
+    decode_controller_state,
     decode_float64_multiarray,
     decode_string,
 )
@@ -92,3 +94,85 @@ def test_decode_string():
     spec = FeatureSpec(key="observation.chess.fen", msg_type="std_msgs/msg/String")
     s = decode_string(msg, spec)
     assert s.startswith("rnbqkbnr")
+
+
+def test_decode_joint_trajectory():
+    joint_names = [
+        "arm_shoulder_pan",
+        "arm_shoulder_lift",
+        "arm_elbow_flex",
+        "arm_wrist_flex",
+        "arm_wrist_roll",
+        "arm_gripper",
+    ]
+    pt = SimpleNamespace(
+        positions=[0.5, 0.1, 0.4, 0.2, -0.3],  # 5 joints (e.g. without gripper)
+    )
+    msg = SimpleNamespace(
+        joint_names=[
+            "arm_gripper",
+            "arm_shoulder_pan",
+            "arm_wrist_roll",
+            "arm_shoulder_lift",
+            "arm_elbow_flex",
+        ],
+        points=[pt],
+    )
+    spec = FeatureSpec(
+        key="action",
+        msg_type="trajectory_msgs/msg/JointTrajectory",
+        names=joint_names,
+    )
+
+    arr = decode_joint_trajectory(msg, spec)
+    assert isinstance(arr, np.ndarray)
+    assert arr.shape == (6,)
+    assert arr.dtype == np.float32
+
+    # arm_shoulder_pan: idx 1 -> 0.1
+    # arm_shoulder_lift: idx 3 -> 0.2
+    # arm_elbow_flex: idx 4 -> -0.3
+    # arm_wrist_flex: missing -> 0.0
+    # arm_wrist_roll: idx 2 -> 0.4
+    # arm_gripper: idx 0 -> 0.5
+    expected = np.array([0.1, 0.2, -0.3, 0.0, 0.4, 0.5], dtype=np.float32)
+    np.testing.assert_allclose(arr, expected, atol=1e-5)
+
+
+def test_decode_controller_state():
+    joint_names = [
+        "arm_shoulder_pan",
+        "arm_shoulder_lift",
+        "arm_elbow_flex",
+        "arm_wrist_flex",
+        "arm_wrist_roll",
+        "arm_gripper",
+    ]
+    ref = SimpleNamespace(
+        positions=[0.5, 0.1, 0.4, 0.2, -0.3],  # 5 joints
+    )
+    msg = SimpleNamespace(
+        joint_names=[
+            "arm_gripper",
+            "arm_shoulder_pan",
+            "arm_wrist_roll",
+            "arm_shoulder_lift",
+            "arm_elbow_flex",
+        ],
+        reference=ref,
+    )
+    spec = FeatureSpec(
+        key="action",
+        msg_type="control_msgs/msg/JointTrajectoryControllerState",
+        names=joint_names,
+    )
+
+    arr = decode_controller_state(msg, spec)
+    assert isinstance(arr, np.ndarray)
+    assert arr.shape == (6,)
+    assert arr.dtype == np.float32
+
+    expected = np.array([0.1, 0.2, -0.3, 0.0, 0.4, 0.5], dtype=np.float32)
+    np.testing.assert_allclose(arr, expected, atol=1e-5)
+
+

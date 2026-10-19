@@ -14,22 +14,21 @@ def test_load_config_lekiwi_chess():
     assert cfg.robot_type == "lekiwi"
     assert cfg.fps == 25
     assert cfg.reference_topic == "/cameras/usb_wrist/image_raw/compressed"
-    assert cfg.default_max_age_s == 0.08
+    assert cfg.default_max_age_s == 0.04
 
     # Chessboard check
     assert cfg.chessboard.board_frame == "chessboard_frame"
     assert cfg.chessboard.base_frame == "base_footprint"
-    assert cfg.chessboard.square_size_m == 0.040
+    assert cfg.chessboard.square_size_m == 0.037
 
     # Features check
     feature_keys = [f.key for f in cfg.features]
     assert "observation.images.wrist" in feature_keys
     assert "observation.images.side" in feature_keys
-    assert "observation.images.board" in feature_keys
+    assert "observation.images.overhead" in feature_keys
     assert "observation.state" in feature_keys
     assert "action" in feature_keys
-    assert "observation.chess.pick_pose" in feature_keys
-    assert "observation.chess.place_pose" in feature_keys
+    assert "observation.environment_state" in feature_keys
 
 
 def test_cli_parser():
