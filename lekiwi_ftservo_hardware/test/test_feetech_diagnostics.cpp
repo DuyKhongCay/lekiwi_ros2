@@ -15,13 +15,54 @@
 namespace lekiwi_ftservo_hardware
 {
 
-  TEST(FeetechDiagnosticsTest, HandlesUnconfiguredOrNullSnapshot)
+  TEST(FeetechDiagnosticsTest, HandlesDisconnectedStateWithDtc)
   {
     diagnostic_updater::DiagnosticStatusWrapper stat;
-    FeetechDiagnostics::evaluate(nullptr, "/dev/ttyUSB0", 1000000, 9, false, stat);
+    FeetechDiagnostics::evaluate(
+        nullptr, "/dev/lekiwi_serial", 1000000, 9, true,
+        sts::BusState::DISCONNECTED, sts::dtc::kDtcDeviceNodeMissing, 0.0, stat);
 
     EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::ERROR);
-    EXPECT_EQ(stat.message, "STS Serial bus offline or unconfigured");
+    EXPECT_NE(stat.message.find("DTC 101"), std::string::npos);
+    EXPECT_NE(stat.message.find("DISCONNECTED"), std::string::npos);
+  }
+
+  TEST(FeetechDiagnosticsTest, HandlesStandbyState)
+  {
+    diagnostic_updater::DiagnosticStatusWrapper stat;
+    FeetechDiagnostics::evaluate(
+        nullptr, "/dev/lekiwi_serial", 1000000, 9, false,
+        sts::BusState::STANDBY, sts::dtc::kDtcNone, 0.0, stat);
+
+    EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::OK);
+    EXPECT_NE(stat.message.find("STANDBY"), std::string::npos);
+  }
+
+  TEST(FeetechDiagnosticsTest, HandlesDegradedLinkWithHighPer)
+  {
+    JointStateSnapshot snapshot;
+    snapshot.valid = true;
+    snapshot.last_read_time = std::chrono::steady_clock::now();
+    snapshot.update_count = 100;
+    snapshot.read_error_count = 18;
+
+    JointTelemetry joint1;
+    joint1.name = "joint1";
+    joint1.id = 1;
+    joint1.voltage_v = 12.0;
+    joint1.temperature_c = 35.0;
+    joint1.current_a = 0.5;
+    joint1.status_flags = 0;
+    snapshot.telemetry = {joint1};
+
+    diagnostic_updater::DiagnosticStatusWrapper stat;
+    FeetechDiagnostics::evaluate(
+        &snapshot, "/dev/lekiwi_serial", 1000000, 1, true,
+        sts::BusState::DEGRADED, sts::dtc::kDtcHighPacketErrorRate, 18.0, stat);
+
+    EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
+    EXPECT_NE(stat.message.find("DEGRADED"), std::string::npos);
+    EXPECT_NE(stat.message.find("High packet error rate"), std::string::npos);
   }
 
   TEST(FeetechDiagnosticsTest, ReportsHealthySnapshot)
@@ -43,7 +84,9 @@ namespace lekiwi_ftservo_hardware
     snapshot.telemetry = {joint1};
 
     diagnostic_updater::DiagnosticStatusWrapper stat;
-    FeetechDiagnostics::evaluate(&snapshot, "/dev/ttyUSB0", 1000000, 1, true, stat);
+    FeetechDiagnostics::evaluate(
+        &snapshot, "/dev/lekiwi_serial", 1000000, 1, true,
+        sts::BusState::OPERATIONAL, sts::dtc::kDtcNone, 0.0, stat);
 
     EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::OK);
     EXPECT_EQ(stat.message, "All 1 STS servos healthy");
@@ -65,7 +108,9 @@ namespace lekiwi_ftservo_hardware
     joint.voltage_v = 8.5;
     snapshot.telemetry = {joint};
     diagnostic_updater::DiagnosticStatusWrapper stat_low;
-    FeetechDiagnostics::evaluate(&snapshot, "/dev/ttyUSB0", 1000000, 1, true, stat_low);
+    FeetechDiagnostics::evaluate(
+        &snapshot, "/dev/lekiwi_serial", 1000000, 1, true,
+        sts::BusState::OPERATIONAL, sts::dtc::kDtcNone, 0.0, stat_low);
     EXPECT_EQ(stat_low.level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
     EXPECT_NE(stat_low.message.find("Low supply voltage"), std::string::npos);
 
@@ -73,7 +118,9 @@ namespace lekiwi_ftservo_hardware
     joint.voltage_v = 14.2;
     snapshot.telemetry = {joint};
     diagnostic_updater::DiagnosticStatusWrapper stat_high;
-    FeetechDiagnostics::evaluate(&snapshot, "/dev/ttyUSB0", 1000000, 1, true, stat_high);
+    FeetechDiagnostics::evaluate(
+        &snapshot, "/dev/lekiwi_serial", 1000000, 1, true,
+        sts::BusState::OPERATIONAL, sts::dtc::kDtcNone, 0.0, stat_high);
     EXPECT_EQ(stat_high.level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
     EXPECT_NE(stat_high.message.find("High supply voltage"), std::string::npos);
   }
@@ -94,14 +141,18 @@ namespace lekiwi_ftservo_hardware
     joint.temperature_c = 62.0;
     snapshot.telemetry = {joint};
     diagnostic_updater::DiagnosticStatusWrapper stat_warm;
-    FeetechDiagnostics::evaluate(&snapshot, "/dev/ttyUSB0", 1000000, 1, true, stat_warm);
+    FeetechDiagnostics::evaluate(
+        &snapshot, "/dev/lekiwi_serial", 1000000, 1, true,
+        sts::BusState::OPERATIONAL, sts::dtc::kDtcNone, 0.0, stat_warm);
     EXPECT_EQ(stat_warm.level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
 
     // 2. Overheat (72C >= 70C limit) -> ERROR
     joint.temperature_c = 72.0;
     snapshot.telemetry = {joint};
     diagnostic_updater::DiagnosticStatusWrapper stat_hot;
-    FeetechDiagnostics::evaluate(&snapshot, "/dev/ttyUSB0", 1000000, 1, true, stat_hot);
+    FeetechDiagnostics::evaluate(
+        &snapshot, "/dev/lekiwi_serial", 1000000, 1, true,
+        sts::BusState::OPERATIONAL, sts::dtc::kDtcNone, 0.0, stat_hot);
     EXPECT_EQ(stat_hot.level, diagnostic_msgs::msg::DiagnosticStatus::ERROR);
     EXPECT_NE(stat_hot.message.find("Overheat"), std::string::npos);
   }
@@ -121,7 +172,9 @@ namespace lekiwi_ftservo_hardware
 
     snapshot.telemetry = {joint};
     diagnostic_updater::DiagnosticStatusWrapper stat_err;
-    FeetechDiagnostics::evaluate(&snapshot, "/dev/ttyUSB0", 1000000, 1, true, stat_err);
+    FeetechDiagnostics::evaluate(
+        &snapshot, "/dev/lekiwi_serial", 1000000, 1, true,
+        sts::BusState::OPERATIONAL, sts::dtc::kDtcNone, 0.0, stat_err);
     EXPECT_EQ(stat_err.level, diagnostic_msgs::msg::DiagnosticStatus::ERROR);
     EXPECT_NE(stat_err.message.find("Hardware Flag"), std::string::npos);
 
@@ -130,7 +183,9 @@ namespace lekiwi_ftservo_hardware
     snapshot.telemetry = {joint};
     snapshot.last_read_time = std::chrono::steady_clock::now() - std::chrono::milliseconds(300);
     diagnostic_updater::DiagnosticStatusWrapper stat_stale;
-    FeetechDiagnostics::evaluate(&snapshot, "/dev/ttyUSB0", 1000000, 1, true, stat_stale);
+    FeetechDiagnostics::evaluate(
+        &snapshot, "/dev/lekiwi_serial", 1000000, 1, true,
+        sts::BusState::OPERATIONAL, sts::dtc::kDtcNone, 0.0, stat_stale);
     EXPECT_EQ(stat_stale.level, diagnostic_msgs::msg::DiagnosticStatus::ERROR);
     EXPECT_NE(stat_stale.message.find("stale"), std::string::npos);
   }
@@ -150,7 +205,9 @@ namespace lekiwi_ftservo_hardware
 
     snapshot.telemetry = {joint};
     diagnostic_updater::DiagnosticStatusWrapper stat;
-    FeetechDiagnostics::evaluate(&snapshot, "/dev/ttyUSB0", 1000000, 1, true, stat);
+    FeetechDiagnostics::evaluate(
+        &snapshot, "/dev/lekiwi_serial", 1000000, 1, true,
+        sts::BusState::OPERATIONAL, sts::dtc::kDtcNone, 0.0, stat);
     EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
     EXPECT_NE(stat.message.find("Low supply voltage"), std::string::npos);
     EXPECT_NE(stat.message.find("high temperature"), std::string::npos);

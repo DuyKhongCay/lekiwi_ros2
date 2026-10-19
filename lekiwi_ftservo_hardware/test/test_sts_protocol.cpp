@@ -27,13 +27,18 @@ namespace lekiwi_ftservo_hardware
     EXPECT_EQ(sts::protocol::kInstructionSyncRead, 0x82);
     EXPECT_EQ(sts::protocol::kInstructionSyncWrite, 0x83);
     EXPECT_EQ(sts::protocol::kPreambleSearchLimit, 64U);
+    EXPECT_EQ(sts::protocol::kMaxResyncAttempts, 5U);
     EXPECT_EQ(sts::protocol::kDiagnosticPayloadSize, 15U);
     EXPECT_EQ(sts::protocol::kFastStatePayloadSize, 4U);
 
     EXPECT_EQ(sts::default_config::kPerServoReadTimeoutMs, 2);
+    EXPECT_EQ(sts::default_config::kBusTurnaroundDrainMs, 2);
     EXPECT_EQ(sts::default_config::kCommandWatchdogTimeoutMs, 100);
     EXPECT_EQ(sts::default_config::kMaxConsecutiveErrorsBeforeInvalid, 5U);
-    EXPECT_EQ(sts::default_config::kMaxConsecutiveErrorsBeforeReconnect, 100U);
+    EXPECT_EQ(sts::default_config::kMaxConsecutiveErrorsBeforePortDrop, 10U);
+    EXPECT_EQ(sts::default_config::kPerWindowSize, 100U);
+    EXPECT_DOUBLE_EQ(sts::default_config::kPerDegradedThreshold, 15.0);
+    EXPECT_DOUBLE_EQ(sts::default_config::kPerRecoverThreshold, 5.0);
 
     EXPECT_DOUBLE_EQ(sts::default_config::kDefaultVelocityScale, 0.0015339807878856412);
     EXPECT_DOUBLE_EQ(sts::default_config::kDefaultMaxVelocity, 5.0);
@@ -212,6 +217,29 @@ namespace lekiwi_ftservo_hardware
     // 2. Mismatched vectors should fail
     EXPECT_FALSE(proto.sync_write_velocity({1, 2}, {100}, &error));
     EXPECT_FALSE(error.empty());
+  }
+
+  /**
+   * @brief Verifies that repeated open/close cycles clean up safely without leaking open state.
+   */
+  TEST(StsProtocolTest, RepeatedOpenCloseCycleSafety)
+  {
+    StsProtocol proto;
+    std::string error;
+
+    // Opening non-existent port fails cleanly
+    EXPECT_FALSE(proto.open("/dev/non_existent_tty_test_123", 1000000, 20, &error));
+    EXPECT_FALSE(proto.is_open());
+    EXPECT_FALSE(proto.is_port_alive());
+
+    // Calling close() multiple times is idempotent
+    EXPECT_NO_THROW(proto.close());
+    EXPECT_NO_THROW(proto.close());
+    EXPECT_FALSE(proto.is_open());
+
+    // Subsequent open attempt must NOT fail with "Serial port already open"
+    EXPECT_FALSE(proto.open("/dev/non_existent_tty_test_123", 1000000, 20, &error));
+    EXPECT_EQ(error.find("Serial port already open"), std::string::npos);
   }
 
 } // namespace lekiwi_ftservo_hardware

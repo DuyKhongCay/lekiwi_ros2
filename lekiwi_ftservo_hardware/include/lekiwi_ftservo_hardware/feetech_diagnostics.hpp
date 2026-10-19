@@ -41,6 +41,9 @@ namespace lekiwi_ftservo_hardware
         int baud_rate,
         size_t configured_joints_count,
         bool is_worker_running,
+        sts::BusState bus_state,
+        uint32_t active_dtc,
+        double per_rate,
         diagnostic_updater::DiagnosticStatusWrapper &stat);
   };
 

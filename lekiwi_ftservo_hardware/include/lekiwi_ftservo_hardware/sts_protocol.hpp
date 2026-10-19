@@ -110,6 +110,27 @@ namespace lekiwi_ftservo_hardware
         void close() noexcept;
 
         /**
+         * @brief Returns true if the underlying serial port is currently open.
+         */
+        [[nodiscard]] bool is_open() const noexcept;
+
+        /**
+         * @brief Validates if the file descriptor and serial device connection are actively alive.
+         */
+        [[nodiscard]] bool is_port_alive() const noexcept;
+
+        /**
+         * @brief Non-blocking POSIX verification of a persistent device node.
+         *
+         * Checks existence, character device type (S_ISCHR), and read/write accessibility.
+         *
+         * @param[in] path Path to verify (e.g. `/dev/lekiwi_serial`).
+         * @param[out] error Output string capturing diagnostics on failure.
+         * @return true If valid character device node exists and is accessible.
+         */
+        static bool verify_device_node(const std::string &path, std::string *error = nullptr) noexcept;
+
+        /**
          * @brief Writes a block of contiguous bytes to a specific servo register and verifies ACK.
          *
          * @param[in] id Target servo ID (1..253).
@@ -332,7 +353,7 @@ namespace lekiwi_ftservo_hardware
          */
         static bool baud_rate_from_int(int baud_rate, LibSerial::BaudRate *result);
 
-        LibSerial::SerialPort port_;
+        std::unique_ptr<LibSerial::SerialPort> port_;
         int timeout_ms_{20};
 
         /// Pre-allocated TX frame buffer to guarantee zero dynamic heap allocation during cyclic operations.

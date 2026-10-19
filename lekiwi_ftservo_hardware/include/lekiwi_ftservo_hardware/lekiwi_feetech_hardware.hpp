@@ -57,6 +57,12 @@ namespace lekiwi_ftservo_hardware
         hardware_interface::CallbackReturn on_cleanup(
             const rclcpp_lifecycle::State &previous_state) override;
 
+        hardware_interface::CallbackReturn on_shutdown(
+            const rclcpp_lifecycle::State &previous_state) override;
+
+        hardware_interface::CallbackReturn on_error(
+            const rclcpp_lifecycle::State &previous_state) override;
+
         hardware_interface::return_type read(
             const rclcpp::Time &time, const rclcpp::Duration &period) override;
 

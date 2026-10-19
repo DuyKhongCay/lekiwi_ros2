@@ -83,14 +83,38 @@ namespace lekiwi_ftservo_hardware
     bool deactivate(std::string *error) noexcept;
 
     /**
-     * @brief Stops the background worker thread if running and joins it.
+     * @brief Stops the background worker thread, joins it, and sends zero velocity (0 ticks) to active velocity joints.
      */
     void stop() noexcept;
 
     /**
-     * @brief Closes serial port and cleans up all allocated protocol resources.
+     * @brief Stops worker thread, brakes velocity joints, disables torque across all servos, and closes serial port.
      */
     void cleanup() noexcept;
+
+    /**
+     * @brief Returns the current lifecycle state of the bus Finite State Machine.
+     */
+    [[nodiscard]] sts::BusState get_bus_state() const noexcept
+    {
+      return bus_state_.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * @brief Returns the active Diagnostic Trouble Code (DTC).
+     */
+    [[nodiscard]] uint32_t get_active_dtc() const noexcept
+    {
+      return active_dtc_.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * @brief Returns the sliding-window Packet Error Rate (0.0 to 100.0 %).
+     */
+    [[nodiscard]] double get_current_per() const noexcept
+    {
+      return current_per_.load(std::memory_order_relaxed);
+    }
 
     /**
      * @brief Returns true if background worker thread is actively running.
@@ -176,6 +200,26 @@ namespace lekiwi_ftservo_hardware
      */
     void run_io_loop() noexcept;
 
+    /**
+     * @brief Transitions the bus FSM to a new state and sets the associated DTC.
+     */
+    void transition_to(sts::BusState new_state, uint32_t dtc = sts::dtc::kDtcNone) noexcept;
+
+    /**
+     * @brief Re-initializes all volatile STS servo RAM registers (Mode, Acceleration, Torque off).
+     */
+    bool rearm_servo_hardware(std::string *error) noexcept;
+
+    /**
+     * @brief Seeds command buffers from real encoder feedback before enabling torque.
+     */
+    bool execute_anti_jerk_resync(JointStateSnapshot &snapshot, std::string *error) noexcept;
+
+    /**
+     * @brief Records cycle read success/failure in the sliding PER window.
+     */
+    void record_cycle_result(bool success) noexcept;
+
     JointTopology topology_;
     std::string usb_port_;
     int baud_rate_{sts::default_config::kDefaultBaudRate};
@@ -184,6 +228,17 @@ namespace lekiwi_ftservo_hardware
     std::unique_ptr<StsProtocol> protocol_;
     std::thread io_worker_thread_;
     std::atomic<bool> io_running_{false};
+
+    std::atomic<sts::BusState> bus_state_{sts::BusState::DISCONNECTED};
+    std::atomic<uint32_t> active_dtc_{sts::dtc::kDtcNone};
+    std::atomic<double> current_per_{0.0};
+    std::chrono::steady_clock::time_point last_state_transition_{};
+    std::chrono::milliseconds reconnect_backoff_ms_{sts::default_config::kReconnectBackoffInitialMs};
+
+    std::array<uint8_t, sts::default_config::kPerWindowSize> per_window_{};
+    size_t per_window_idx_{0};
+    size_t per_error_count_{0};
+    size_t per_window_filled_{0};
 
     mutable realtime_tools::RealtimeBuffer<JointStateSnapshot> rt_state_buffer_;
     std::vector<std::atomic<double>> command_buffer_;
@@ -194,9 +249,8 @@ namespace lekiwi_ftservo_hardware
 
     std::atomic<int64_t> last_command_timestamp_ns_{0};
     std::atomic<uint64_t> consecutive_read_errors_{0};
-    std::chrono::steady_clock::time_point last_reconnect_attempt_{};
 
-    mutable std::mutex serial_mutex_;
+    mutable std::recursive_mutex serial_mutex_;
   };
 
 } // namespace lekiwi_ftservo_hardware

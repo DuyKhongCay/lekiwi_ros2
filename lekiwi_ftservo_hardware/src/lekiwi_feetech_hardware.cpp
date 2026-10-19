@@ -20,7 +20,7 @@ namespace lekiwi_ftservo_hardware
   {
     if (worker_)
     {
-      worker_->stop();
+      worker_->cleanup();
     }
   }
 
@@ -214,6 +214,32 @@ namespace lekiwi_ftservo_hardware
     return hardware_interface::CallbackReturn::SUCCESS;
   }
 
+  hardware_interface::CallbackReturn LeKiwiFeetechHardwareInterface::on_shutdown(
+      const rclcpp_lifecycle::State &)
+  {
+    RCLCPP_INFO(rclcpp::get_logger("LeKiwiFeetechHardware"),
+                "Shutting down hardware interface: commanding zero velocity and releasing torque...");
+    if (worker_)
+    {
+      worker_->cleanup();
+    }
+    updater_.reset();
+    return hardware_interface::CallbackReturn::SUCCESS;
+  }
+
+  hardware_interface::CallbackReturn LeKiwiFeetechHardwareInterface::on_error(
+      const rclcpp_lifecycle::State &)
+  {
+    RCLCPP_ERROR(rclcpp::get_logger("LeKiwiFeetechHardware"),
+                 "Hardware error encountered: forcing emergency brake and cleaning up bus worker...");
+    if (worker_)
+    {
+      worker_->cleanup();
+    }
+    updater_.reset();
+    return hardware_interface::CallbackReturn::SUCCESS;
+  }
+
   hardware_interface::return_type LeKiwiFeetechHardwareInterface::read(
       const rclcpp::Time &, const rclcpp::Duration &)
   {
@@ -323,6 +349,9 @@ namespace lekiwi_ftservo_hardware
   {
     const JointStateSnapshot *snapshot = worker_ ? worker_->read_state_non_rt() : nullptr;
     const bool is_running = worker_ ? worker_->is_running() : false;
+    const sts::BusState bus_state = worker_ ? worker_->get_bus_state() : sts::BusState::DISCONNECTED;
+    const uint32_t active_dtc = worker_ ? worker_->get_active_dtc() : sts::dtc::kDtcNone;
+    const double per_rate = worker_ ? worker_->get_current_per() : 0.0;
 
     FeetechDiagnostics::evaluate(
         snapshot,
@@ -330,6 +359,9 @@ namespace lekiwi_ftservo_hardware
         baud_rate_,
         topology_.size(),
         is_running,
+        bus_state,
+        active_dtc,
+        per_rate,
         stat);
   }
 

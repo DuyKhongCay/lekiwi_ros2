@@ -21,14 +21,40 @@ namespace lekiwi_ftservo_hardware
       const int baud_rate,
       const size_t configured_joints_count,
       const bool is_worker_running,
+      const sts::BusState bus_state,
+      const uint32_t active_dtc,
+      const double per_rate,
       diagnostic_updater::DiagnosticStatusWrapper &stat)
   {
+    stat.add("Bus FSM State", sts::to_string(bus_state));
+    stat.add("Active DTC", std::to_string(active_dtc) + " - " + sts::dtc::description(active_dtc));
+    stat.addf("Sliding PER (1s)", "%.2f %%", per_rate);
+    stat.add("Serial Port", usb_port);
+    stat.add("Baud Rate", baud_rate);
+    stat.add("Worker Running", is_worker_running ? "True" : "False");
+
+    if (bus_state == sts::BusState::DISCONNECTED)
+    {
+      stat.summaryf(
+          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+          "[DTC %u] %s: %s",
+          active_dtc, sts::to_string(bus_state), sts::dtc::description(active_dtc));
+      return;
+    }
+
+    if (bus_state == sts::BusState::STANDBY)
+    {
+      stat.summary(
+          diagnostic_msgs::msg::DiagnosticStatus::OK,
+          "STANDBY: Hardware configured and ready for activation");
+      return;
+    }
+
     if (snapshot == nullptr || !snapshot->valid || snapshot->telemetry.empty())
     {
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "STS Serial bus offline or unconfigured");
-      stat.add("USB Port", usb_port);
-      stat.add("Baud Rate", baud_rate);
-      stat.add("Worker Running", is_worker_running ? "True" : "False");
+      stat.summaryf(
+          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+          "[DTC %u] STS Serial bus offline or unconfigured", active_dtc);
       return;
     }
 
@@ -107,6 +133,12 @@ namespace lekiwi_ftservo_hardware
       }
       stat.summaryf(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Servo errors: %s", err_str.c_str());
     }
+    else if (bus_state == sts::BusState::DEGRADED)
+    {
+      stat.summaryf(
+          diagnostic_msgs::msg::DiagnosticStatus::WARN,
+          "[DTC %u] Link DEGRADED: High packet error rate (%.1f %%)", active_dtc, per_rate);
+    }
     else if (low_voltage || high_voltage || !warn_joints.empty())
     {
       std::string warn_msg;
@@ -139,8 +171,6 @@ namespace lekiwi_ftservo_hardware
     }
 
     // 2. Add Key-Value Metrics
-    stat.add("Serial Port", usb_port);
-    stat.add("Baud Rate", baud_rate);
     stat.add("Active Servos Count", std::to_string(telem_list.size()) + " / " + std::to_string(configured_joints_count));
     stat.add("Worker I/O Loops", total_updates);
     stat.add("Worker Read Errors", total_errors);

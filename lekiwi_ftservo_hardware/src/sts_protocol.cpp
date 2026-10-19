@@ -16,6 +16,8 @@
 #include <sstream>
 #include <thread>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "lekiwi_ftservo_hardware/velocity_codec.hpp"
@@ -92,50 +94,95 @@ namespace lekiwi_ftservo_hardware
     }
   }
 
+  bool StsProtocol::verify_device_node(const std::string &path, std::string *error) noexcept
+  {
+    if (path.empty())
+    {
+      set_error(error, "Empty serial device path specified");
+      return false;
+    }
+    struct stat st{};
+    if (::stat(path.c_str(), &st) != 0)
+    {
+      set_error(error, "Device path does not exist: " + path + " (" + std::strerror(errno) + ")");
+      return false;
+    }
+    if (!S_ISCHR(st.st_mode))
+    {
+      set_error(error, "Path exists but is not a valid character device: " + path);
+      return false;
+    }
+    if (::access(path.c_str(), R_OK | W_OK) != 0)
+    {
+      set_error(error, "Permission denied accessing serial port: " + path + " (" + std::strerror(errno) + ")");
+      return false;
+    }
+    return true;
+  }
+
+  bool StsProtocol::is_open() const noexcept
+  {
+    try
+    {
+      return (port_ != nullptr && port_->IsOpen());
+    }
+    catch (const std::exception &)
+    {
+      return false;
+    }
+  }
+
+  bool StsProtocol::is_port_alive() const noexcept
+  {
+    try
+    {
+      if (!port_ || !port_->IsOpen())
+      {
+        return false;
+      }
+      const int fd = port_->GetFileDescriptor();
+      if (fd < 0)
+      {
+        return false;
+      }
+      return (::fcntl(fd, F_GETFL) != -1 || errno != EBADF);
+    }
+    catch (const std::exception &)
+    {
+      return false;
+    }
+  }
+
   bool StsProtocol::open(
       const std::string &device, const int baud_rate, const int timeout_ms, std::string *error)
   {
+    close();
+
     LibSerial::BaudRate serial_baud{};
     if (!baud_rate_from_int(baud_rate, &serial_baud) || timeout_ms <= 0)
     {
       set_error(error, "Unsupported baud rate or non-positive serial timeout");
       return false;
     }
-    // Reject non-TTY paths before LibSerial can leave an invalid device open.
-    const int descriptor = ::open(device.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if (descriptor < 0)
+
+    if (!verify_device_node(device, error))
     {
-      set_error(error, "Could not access Feetech serial bus");
       return false;
     }
-    const bool is_tty = ::isatty(descriptor) == 1;
-    (void)::close(descriptor);
-    if (!is_tty)
-    {
-      set_error(error, "Feetech serial bus is not a TTY device");
-      return false;
-    }
+
     try
     {
-      port_.Open(device);
-      port_.SetBaudRate(serial_baud);
-      port_.FlushInputBuffer();
-      port_.FlushOutputBuffer();
+      port_ = std::make_unique<LibSerial::SerialPort>();
+      port_->Open(device);
+      port_->SetBaudRate(serial_baud);
+      port_->FlushInputBuffer();
+      port_->FlushOutputBuffer();
       timeout_ms_ = timeout_ms;
       return true;
     }
     catch (const std::exception &exception)
     {
-      try
-      {
-        if (port_.IsOpen())
-        {
-          port_.Close();
-        }
-      }
-      catch (const std::exception &)
-      {
-      }
+      close();
       set_error(error, std::string("Could not open Feetech serial bus: ") + exception.what());
       return false;
     }
@@ -143,15 +190,19 @@ namespace lekiwi_ftservo_hardware
 
   void StsProtocol::close() noexcept
   {
-    try
+    if (port_)
     {
-      if (port_.IsOpen())
+      try
       {
-        port_.Close();
+        if (port_->IsOpen())
+        {
+          port_->Close();
+        }
       }
-    }
-    catch (const std::exception &)
-    {
+      catch (const std::exception &)
+      {
+      }
+      port_.reset();
     }
   }
 
@@ -159,9 +210,9 @@ namespace lekiwi_ftservo_hardware
   {
     try
     {
-      if (port_.IsOpen())
+      if (port_ && port_->IsOpen())
       {
-        port_.FlushInputBuffer();
+        port_->FlushInputBuffer();
       }
     }
     catch (const std::exception &)
@@ -173,7 +224,7 @@ namespace lekiwi_ftservo_hardware
       const uint8_t id, const uint8_t instruction, const uint8_t *parameters,
       const size_t param_len, std::string *error)
   {
-    if (!port_.IsOpen())
+    if (!port_ || !port_->IsOpen())
     {
       set_error(error, "Feetech serial port is closed");
       return false;
@@ -196,7 +247,7 @@ namespace lekiwi_ftservo_hardware
     const size_t total_len = param_len + 6U;
     tx_buffer_[total_len - 1] = compute_checksum(&tx_buffer_[2], param_len + 3U);
 
-    const int fd = port_.GetFileDescriptor();
+    const int fd = port_->GetFileDescriptor();
     if (fd < 0)
     {
       set_error(error, "Invalid serial port file descriptor");
@@ -226,6 +277,11 @@ namespace lekiwi_ftservo_hardware
           }
           std::this_thread::yield();
           continue;
+        }
+        if (errno == ENODEV || errno == EBADF || errno == EIO || errno == EPIPE)
+        {
+          set_error(error, std::string("Device disconnected or broken pipe: ") + std::strerror(errno));
+          return false;
         }
         set_error(error, std::string("Feetech packet write failed: ") + std::strerror(errno));
         return false;
@@ -257,69 +313,92 @@ namespace lekiwi_ftservo_hardware
       const uint8_t expected_id, const size_t expected_data_size, std::vector<uint8_t> *data,
       std::string *error, const int timeout_ms, uint8_t *status_byte)
   {
+    if (!port_ || !port_->IsOpen())
+    {
+      set_error(error, "Feetech serial port is closed");
+      return false;
+    }
+
     const size_t effective_timeout = static_cast<size_t>(
         (timeout_ms > 0) ? timeout_ms : timeout_ms_);
 
     try
     {
-      unsigned char previous = 0;
-      unsigned char current = 0;
-      bool found_header = false;
-      for (size_t index = 0; index < sts::protocol::kPreambleSearchLimit; ++index)
+      for (size_t resync_attempt = 0; resync_attempt < sts::protocol::kMaxResyncAttempts; ++resync_attempt)
       {
-        port_.ReadByte(current, effective_timeout);
-        if (previous == kHeader && current == kHeader)
+        unsigned char previous = 0;
+        unsigned char current = 0;
+        bool found_header = false;
+        for (size_t index = 0; index < sts::protocol::kPreambleSearchLimit; ++index)
         {
-          found_header = true;
-          break;
+          port_->ReadByte(current, effective_timeout);
+          if (previous == kHeader && current == kHeader)
+          {
+            found_header = true;
+            break;
+          }
+          previous = current;
         }
-        previous = current;
-      }
-      if (!found_header)
-      {
-        set_error(error, "Feetech response header was not received");
-        return false;
-      }
-      unsigned char id = 0;
-      unsigned char length = 0;
-      unsigned char status = 0;
-      port_.ReadByte(id, effective_timeout);
-      port_.ReadByte(length, effective_timeout);
-      port_.ReadByte(status, effective_timeout);
-      if (id != expected_id || length != expected_data_size + 2U)
-      {
-        set_error(error, "Feetech response has unexpected ID or size");
-        return false;
-      }
-      if (status_byte != nullptr)
-      {
-        *status_byte = static_cast<uint8_t>(status);
-      }
-      // For write operations (payload == 0), a non-zero status indicates write rejection
-      if (expected_data_size == 0U && status != 0U)
-      {
-        set_error(error, "Feetech write rejected with hardware status error");
-        return false;
-      }
-      data->assign(expected_data_size, 0U);
-      for (auto &byte : *data)
-      {
-        port_.ReadByte(byte, effective_timeout);
-      }
-      unsigned char received_checksum = 0;
-      port_.ReadByte(received_checksum, effective_timeout);
+        if (!found_header)
+        {
+          set_error(error, "Feetech response header was not received");
+          return false;
+        }
+        unsigned char id = 0;
+        unsigned char length = 0;
+        unsigned char status = 0;
+        port_->ReadByte(id, effective_timeout);
+        port_->ReadByte(length, effective_timeout);
+        port_->ReadByte(status, effective_timeout);
+        if (id != expected_id || length != expected_data_size + 2U)
+        {
+          // Defensive frame resynchronization: drain remaining bytes of unwanted frame
+          // Length covers status (1 byte) + data (N bytes) + checksum (1 byte).
+          // Since status was already consumed, remaining bytes = length - 1.
+          if (length >= 2U && length <= 64U)
+          {
+            for (size_t discard_idx = 0; discard_idx < static_cast<size_t>(length - 1U); ++discard_idx)
+            {
+              unsigned char dummy = 0;
+              port_->ReadByte(dummy, effective_timeout);
+            }
+            continue; // Scan forward for next preamble
+          }
+          set_error(error, "Feetech response has unexpected ID or size");
+          return false;
+        }
+        if (status_byte != nullptr)
+        {
+          *status_byte = static_cast<uint8_t>(status);
+        }
+        // For write operations (payload == 0), a non-zero status indicates write rejection
+        if (expected_data_size == 0U && status != 0U)
+        {
+          set_error(error, "Feetech write rejected with hardware status error");
+          return false;
+        }
+        data->assign(expected_data_size, 0U);
+        for (auto &byte : *data)
+        {
+          port_->ReadByte(byte, effective_timeout);
+        }
+        unsigned char received_checksum = 0;
+        port_->ReadByte(received_checksum, effective_timeout);
 
-      uint8_t sum = static_cast<uint8_t>(id + length + status);
-      for (const auto byte : *data)
-      {
-        sum = static_cast<uint8_t>(sum + byte);
+        uint8_t sum = static_cast<uint8_t>(id + length + status);
+        for (const auto byte : *data)
+        {
+          sum = static_cast<uint8_t>(sum + byte);
+        }
+        if (static_cast<uint8_t>(~sum) != received_checksum)
+        {
+          set_error(error, "Feetech response checksum mismatch");
+          return false;
+        }
+        return true;
       }
-      if (static_cast<uint8_t>(~sum) != received_checksum)
-      {
-        set_error(error, "Feetech response checksum mismatch");
-        return false;
-      }
-      return true;
+      set_error(error, "Feetech response resynchronization attempts exhausted");
+      return false;
     }
     catch (const std::exception &exception)
     {
@@ -388,6 +467,8 @@ namespace lekiwi_ftservo_hardware
       uint8_t *stat_ptr = (statuses != nullptr) ? &(*statuses)[i] : nullptr;
       if (!read_status(ids[i], count, &(*data)[i], error, sts::default_config::kPerServoReadTimeoutMs, stat_ptr))
       {
+        // Allow remaining half-duplex slaves to complete transmission before flushing
+        std::this_thread::sleep_for(std::chrono::milliseconds(sts::default_config::kBusTurnaroundDrainMs));
         flush_input();
         return false;
       }

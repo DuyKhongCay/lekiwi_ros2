@@ -65,6 +65,11 @@ if(BUILD_TESTING)
   target_compile_features(test_feetech_diagnostics PUBLIC cxx_std_20)
   target_include_directories(test_feetech_diagnostics PRIVATE include)
   target_link_libraries(test_feetech_diagnostics lekiwi_feetech_hardware)
+
+  ament_add_gtest(test_feetech_bus_worker test/test_feetech_bus_worker.cpp)
+  target_compile_features(test_feetech_bus_worker PUBLIC cxx_std_20)
+  target_include_directories(test_feetech_bus_worker PRIVATE include)
+  target_link_libraries(test_feetech_bus_worker lekiwi_feetech_hardware)
 endif()
 
 ament_export_targets(lekiwi_ftservo_hardwareTargets HAS_LIBRARY_TARGET)
