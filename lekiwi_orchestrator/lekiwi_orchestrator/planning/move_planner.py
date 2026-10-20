@@ -19,8 +19,8 @@ from typing import Any, ClassVar
 from geometry_msgs.msg import Point, PoseStamped
 from lekiwi_interfaces.srv import CheckMoveFeasibility
 
-from lekiwi_orchestrator.fsm import MotionExecutionState
-from lekiwi_orchestrator.mission_types import ChessMoveGoal
+from lekiwi_orchestrator.core.fsm import MotionExecutionState
+from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
 
 class StepKind(str, Enum):
     """Enumeration of atomic move execution step types."""

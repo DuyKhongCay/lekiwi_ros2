@@ -9,7 +9,7 @@ import pytest
 import rclpy
 from lekiwi_interfaces.msg import PerceptionContext
 from lekiwi_interfaces.srv import SetPerceptionContext
-from lekiwi_orchestrator.perception_context import PerceptionContextManager
+from lekiwi_orchestrator.supervision.perception_context import PerceptionContextManager
 from rclpy.node import Node
 
 

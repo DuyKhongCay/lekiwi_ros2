@@ -5,8 +5,8 @@
 
 import pytest
 from builtin_interfaces.msg import Time
-from lekiwi_orchestrator.fsm import MacroMissionState
-from lekiwi_orchestrator.health_supervisor import (
+from lekiwi_orchestrator.core.fsm import MacroMissionState
+from lekiwi_orchestrator.supervision.health_supervisor import (
     OrchestratorStateSnapshot,
     StatusMarkerBuilder,
     VisualizerConfig,

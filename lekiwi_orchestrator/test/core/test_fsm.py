@@ -6,7 +6,7 @@
 import itertools
 
 from lekiwi_interfaces.msg import PerceptionContext
-from lekiwi_orchestrator.fsm import (
+from lekiwi_orchestrator.core.fsm import (
     MacroMissionState,
     MotionExecutionState,
     is_mission_transition_allowed,

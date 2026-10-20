@@ -1,15 +1,16 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-"""LeKiwi Orchestration package for autonomous chess mobile manipulation."""
+"""LeKiwi Orchestration package for autonomous chess mobile manipulation.
 
-from lekiwi_orchestrator.board_geometry import (
-    RankedViewpoint,
-    normalize_angle,
-    rank_by_azimuth,
-    yaw_to_quaternion,
-)
-from lekiwi_orchestrator.fsm import (
+Facade exposing all symbols across the 4 architectural layers:
+- core (FSM, mission models, parameters, utilities)
+- planning (board geometry, move decomposition, active observation navigation)
+- execution (motion clients, move sequencers, turn workflow hosts)
+- supervision (health supervisor, perception lifecycle gating, orchestrator node)
+"""
+
+from lekiwi_orchestrator.core.fsm import (
     ALLOWED_MISSION_TRANSITIONS,
     ALLOWED_MOTION_TRANSITIONS,
     ALLOWED_PERCEPTION_TRANSITIONS,
@@ -23,19 +24,20 @@ from lekiwi_orchestrator.fsm import (
     is_motion_transition_allowed,
     is_perception_transition_allowed,
 )
-from lekiwi_orchestrator.health_supervisor import (
-    HealthSupervisor,
-    HealthSupervisorConfig,
-    OrchestratorStateSnapshot,
-    StatusMarkerBuilder,
-    VisualizerConfig,
-)
-from lekiwi_orchestrator.mission_types import (
+from lekiwi_orchestrator.core.mission_types import (
     ActionResult,
     ChessMoveGoal,
     ObservationIntent,
 )
-from lekiwi_orchestrator.motion_client import (
+from lekiwi_orchestrator.core.parameters import OrchestratorParameters
+from lekiwi_orchestrator.core.utils import (
+    create_pose2d_stamped,
+    get_header_stamp_sec,
+    get_node_now_sec,
+    normalize_angle,
+    yaw_to_quaternion,
+)
+from lekiwi_orchestrator.execution.motion_client import (
     FakeMotionClient,
     FeasibilityClient,
     ManipulationClient,
@@ -43,25 +45,36 @@ from lekiwi_orchestrator.motion_client import (
     NavigationClient,
     RosMotionClient,
 )
-from lekiwi_orchestrator.move_planner import (
-    MovePlanBuilder,
-    MoveStep,
-    StepKind,
-)
-from lekiwi_orchestrator.move_sequencer import MoveSequencer
-from lekiwi_orchestrator.obs_navigator import ObsNavigator
-from lekiwi_orchestrator.orchestrator_node import (
-    ChessMissionOrchestrator,
-    OrchestratorSubsystems,
-)
-from lekiwi_orchestrator.parameters import OrchestratorParameters
-from lekiwi_orchestrator.perception_context import PerceptionContextManager
-from lekiwi_orchestrator.turn_workflow import (
+from lekiwi_orchestrator.execution.move_sequencer import MoveSequencer
+from lekiwi_orchestrator.execution.turn_workflow import (
     GameStatusHandler,
     MoveWorkflow,
     PostMoveVerifier,
     TurnHost,
 )
+from lekiwi_orchestrator.planning.board_geometry import (
+    RankedViewpoint,
+    rank_by_azimuth,
+)
+from lekiwi_orchestrator.planning.move_planner import (
+    MovePlanBuilder,
+    MoveStep,
+    StepKind,
+)
+from lekiwi_orchestrator.planning.obs_navigator import ObsNavigator
+from lekiwi_orchestrator.supervision.health_supervisor import (
+    HealthSupervisor,
+    HealthSupervisorConfig,
+    OrchestratorStateSnapshot,
+    StatusMarkerBuilder,
+    VisualizerConfig,
+)
+from lekiwi_orchestrator.supervision.orchestrator_node import (
+    ChessMissionOrchestrator,
+    OrchestratorSubsystems,
+    main,
+)
+from lekiwi_orchestrator.supervision.perception_context import PerceptionContextManager
 
 __all__ = [
     # FSM
@@ -79,9 +92,7 @@ __all__ = [
     "is_perception_transition_allowed",
     # Geometry
     "RankedViewpoint",
-    "normalize_angle",
     "rank_by_azimuth",
-    "yaw_to_quaternion",
     # Mission Types
     "ActionResult",
     "ChessMoveGoal",
@@ -118,4 +129,11 @@ __all__ = [
     # Orchestrator Node
     "ChessMissionOrchestrator",
     "OrchestratorSubsystems",
+    "main",
+    # Utilities
+    "get_node_now_sec",
+    "get_header_stamp_sec",
+    "normalize_angle",
+    "yaw_to_quaternion",
+    "create_pose2d_stamped",
 ]

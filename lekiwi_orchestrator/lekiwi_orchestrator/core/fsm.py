@@ -69,17 +69,20 @@ ALLOWED_MISSION_TRANSITIONS: dict[MacroMissionState, set[MacroMissionState]] = {
         MacroMissionState.WAITING_FOR_PLAYER_MOVE,
         MacroMissionState.EVALUATING_BEST_MOVE,
         MacroMissionState.GAME_OVER,
+        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.EVALUATING_BEST_MOVE: {
         MacroMissionState.EVALUATING_BEST_MOVE,
         MacroMissionState.CHECKING_REACHABILITY,
         MacroMissionState.GAME_OVER,
+        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.CHECKING_REACHABILITY: {
         MacroMissionState.CHECKING_REACHABILITY,
         MacroMissionState.EXECUTING_MOVE_PIPELINE,
+        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.EXECUTING_MOVE_PIPELINE: {
@@ -92,17 +95,20 @@ ALLOWED_MISSION_TRANSITIONS: dict[MacroMissionState, set[MacroMissionState]] = {
     MacroMissionState.POST_MOVE_VERIFYING: {
         MacroMissionState.POST_MOVE_VERIFYING,
         MacroMissionState.TURN_COMPLETED,
+        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.TURN_COMPLETED: {
         MacroMissionState.TURN_COMPLETED,
         MacroMissionState.WAITING_FOR_PLAYER_MOVE,
         MacroMissionState.GAME_OVER,
+        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.GAME_OVER: {
         MacroMissionState.GAME_OVER,
         MacroMissionState.BOOT_INITIALIZING,  # Reset game upon new match
+        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
     },
     MacroMissionState.ERROR_FALLBACK: {
         MacroMissionState.ERROR_FALLBACK,
@@ -256,6 +262,16 @@ def is_mission_transition_allowed(
     Guards against illegal FSM jumps to enforce safety invariants.
     """
     return requested_state in ALLOWED_MISSION_TRANSITIONS.get(current_state, set())
+
+
+def is_navigating_motion_state(state: MotionExecutionState) -> bool:
+    """True if robot motion state is actively driving chassis via Nav2."""
+    return state in (
+        MotionExecutionState.NAV_TO_CLEAR,
+        MotionExecutionState.NAV_TO_PICK,
+        MotionExecutionState.NAV_TO_PLACE,
+        MotionExecutionState.NAV_TO_OBS,
+    )
 
 
 def is_motion_transition_allowed(

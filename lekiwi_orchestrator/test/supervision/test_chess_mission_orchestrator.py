@@ -8,59 +8,30 @@ from __future__ import annotations
 import pytest
 import rclpy
 from geometry_msgs.msg import Point
+from nav_msgs.msg import Odometry
 from lekiwi_interfaces.msg import (
     ChessGameStatus,
     PerceptionContext,
 )
 from lekiwi_interfaces.srv import CheckMoveFeasibility
-from lekiwi_orchestrator.fsm import (
+from lekiwi_orchestrator.core.fsm import (
     MacroMissionState,
     MotionExecutionState,
 )
-from lekiwi_orchestrator.mission_types import (
+from lekiwi_orchestrator.core.mission_types import (
     ActionResult,
     ChessMoveGoal,
 )
-from lekiwi_orchestrator.motion_client import (
+from lekiwi_orchestrator.execution.motion_client import (
     FakeMotionClient,
     MotionClient,
 )
-from lekiwi_orchestrator.orchestrator_node import (
+from lekiwi_orchestrator.supervision.orchestrator_node import (
     ChessMissionOrchestrator,
 )
 from rclpy.parameter import Parameter
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
-
-
-class TrackingDispatcher(MotionClient):
-    """Local test tracking dispatcher for orchestrator tests."""
-
-    def __init__(self):
-        self.nav_goals = []
-        self.manip_goals = []
-        self.cancelled = False
-
-    def check_feasibility(self, goal, timeout_sec=5.0, on_success=None, on_error=None):
-        return True
-
-    def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None):
-        self.nav_goals.append(target_pose)
-        if on_completed:
-            on_completed(ActionResult(success=True, message="OK", execution_time_sec=0.1))
-        return True
-
-    def send_manipulation_goal(self, goal, timeout_sec=60.0, on_feedback=None, on_completed=None):
-        self.manip_goals.append(goal)
-        if on_completed:
-            on_completed(ActionResult(success=True, message="OK", execution_time_sec=0.1))
-        return True
-
-    def cancel_active_goal(self):
-        self.cancelled = True
-
-    def destroy(self):
-        pass
 
 
 @pytest.fixture(scope="module")
@@ -170,7 +141,7 @@ def test_feasibility_timeout_watchdog(ros_context):
 
 def test_action_timeout_watchdog_cancels_goal(ros_context):
     """Verify action failure triggers ERROR_FALLBACK and recovery cancels active motion goals."""
-    dispatcher = TrackingDispatcher()
+    dispatcher = FakeMotionClient()
     node = ChessMissionOrchestrator(motion_client=dispatcher)
     try:
         node._on_nav_ready(Bool(data=True))
@@ -222,7 +193,7 @@ def test_self_healing_recover_service(ros_context):
 )
 def test_workflow_dispatch_sequences(ros_context, plan_type, is_capture):
     """Verify move workflow dispatching across standard and complex capture sequences."""
-    dispatcher = TrackingDispatcher()
+    dispatcher = FakeMotionClient()
     node = ChessMissionOrchestrator(
         parameter_overrides=[Parameter("navigation", value=(plan_type != CheckMoveFeasibility.Response.PLAN_ZERO_NAV))],
         motion_client=dispatcher,
@@ -256,7 +227,7 @@ def test_workflow_dispatch_sequences(ros_context, plan_type, is_capture):
 
 def test_recovery_retains_and_resumes_interrupted_move(ros_context):
     """Verify recovery retains interrupted move and resumes execution if board FEN unchanged."""
-    dispatcher = TrackingDispatcher()
+    dispatcher = FakeMotionClient()
     node = ChessMissionOrchestrator(motion_client=dispatcher)
     try:
         node._on_nav_ready(Bool(data=True))
@@ -358,6 +329,71 @@ def test_post_move_verification_watchdog_timeout_repositions(ros_context):
         node.destroy_node()
 
 
+def test_post_move_verification_repositioning_does_not_trip_disturbance(ros_context):
+    """Verify that active base repositioning during POST_MOVE_VERIFYING does not trip disturbance into ERROR_FALLBACK."""
+    repositioned_poses = []
+    nav_completed_holder = []
+
+    class AsyncRepositionDispatcher(FakeMotionClient):
+        def __init__(self):
+            super().__init__(None)
+
+        def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None):
+            repositioned_poses.append(target_pose)
+            self._is_navigating = True
+            if on_completed:
+                nav_completed_holder.append(on_completed)
+            return True
+
+    dispatcher = AsyncRepositionDispatcher()
+    node = ChessMissionOrchestrator(motion_client=dispatcher)
+    try:
+        # Arm disturbance monitor with global odom
+        node._health_supervisor.on_global_odom(Odometry())
+        node._on_nav_ready(Bool(data=True))
+
+        node.transition_to(MacroMissionState.EVALUATING_BEST_MOVE)
+        node.transition_to(MacroMissionState.CHECKING_REACHABILITY)
+        node.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE)
+        node._on_move_pipeline_completed()
+        assert node.mission_state == MacroMissionState.POST_MOVE_VERIFYING
+        assert not node.post_move_verifier.is_repositioning
+
+        # Watchdog timeout fires -> dispatches repositioning goal
+        node._on_post_move_watchdog_timeout()
+        assert len(repositioned_poses) == 1
+        assert node.post_move_verifier.is_repositioning
+
+        # Verify snapshot accurately reflects active navigation during repositioning
+        snapshot = node._get_orchestrator_snapshot()
+        assert snapshot.is_navigating
+        assert snapshot.motion_state == MotionExecutionState.NAV_TO_OBS
+
+        # Thân xe lăn bánh với vận tốc lớn (v = 0.20 m/s, wz = -0.34 rad/s)
+        odom_moving = Odometry()
+        odom_moving.twist.twist.linear.x = 0.20
+        odom_moving.twist.twist.angular.z = -0.34
+        node._health_supervisor.on_local_odom(odom_moving)
+
+        # Disturbance must NOT be tripped, state must NOT drop into ERROR_FALLBACK
+        assert not node._health_supervisor.is_operator_latched
+        assert node.mission_state == MacroMissionState.POST_MOVE_VERIFYING
+
+        # Complete Nav2 action
+        assert len(nav_completed_holder) == 1
+        dispatcher._is_navigating = False
+        nav_completed_holder[0](ActionResult(success=True, message="Reached viewpoint"))
+
+        # Chassis settled -> repositioning finishes
+        assert not node.post_move_verifier.is_repositioning
+        snapshot_after = node._get_orchestrator_snapshot()
+        assert not snapshot_after.is_navigating
+        assert snapshot_after.motion_state == MotionExecutionState.IDLE
+        assert node.mission_state == MacroMissionState.POST_MOVE_VERIFYING
+    finally:
+        node.destroy_node()
+
+
 def test_post_move_verification_ignores_illegal_vision(ros_context):
     """Verify that is_board_stable=True with is_legal_move=False does NOT finalize turn."""
     node = ChessMissionOrchestrator()
@@ -391,5 +427,66 @@ def test_execute_chess_move_invalid_uci_fallback(ros_context):
         node.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
         node._dispatch_move_workflow("xyz")
         assert node.mission_state == MacroMissionState.ERROR_FALLBACK
+    finally:
+        node.destroy_node()
+
+
+def test_disturbance_interrupt_and_one_button_recovery(ros_context):
+    """Verify disturbance interrupt latches operator, and one-button recovery restores pipeline."""
+    dispatcher = FakeMotionClient()
+    node = ChessMissionOrchestrator(motion_client=dispatcher)
+    try:
+        node._on_nav_ready(Bool(data=True))
+        node._on_grasp_ready(Bool(data=True))
+        node.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+
+        # Start a chess move
+        node._dispatch_move_workflow("e7e5")
+        assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
+        assert node.current_move_details.uci == "e7e5"
+
+        # Simulate disturbance interrupt (e.g. uncommanded motion or chassis displacement)
+        node._on_disturbance_detected("uncommanded_motion")
+        assert node.mission_state == MacroMissionState.ERROR_FALLBACK
+        assert node.pending_recovery_move is not None
+        assert node.pending_recovery_move.uci == "e7e5"
+        assert dispatcher.cancelled
+
+        # Latch operator intervention and verify auto-recovery is inhibited
+        node.health_supervisor.set_operator_latched(True)
+        node.health_supervisor.schedule_auto_recovery_if_enabled()
+        assert node.health_supervisor._recovery_timer is None
+
+        # Operator triggers One-Button Recovery (/orchestrator/recover)
+        req = Trigger.Request()
+        resp = Trigger.Response()
+        res = node._handle_recover_service(req, resp)
+        assert res.success
+        assert not node.health_supervisor.is_operator_latched
+        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+        assert node.perception_context == PerceptionContext.TF_TRACKING_AND_NAV
+
+        # Upon camera relocalization and nav ready, pending move is resumed
+        node._on_nav_ready(Bool(data=True))
+        assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
+        assert node.current_move_details.uci == "e7e5"
+    finally:
+        node.destroy_node()
+
+
+def test_recovery_from_non_error_state(ros_context):
+    """Verify operator recovery can be initiated directly from any operational state."""
+    node = ChessMissionOrchestrator()
+    try:
+        node._on_nav_ready(Bool(data=True))
+        node.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+
+        # Trigger recovery directly from WAITING_FOR_PLAYER_MOVE
+        req = Trigger.Request()
+        resp = Trigger.Response()
+        res = node._handle_recover_service(req, resp)
+        assert res.success
+        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
     finally:
         node.destroy_node()

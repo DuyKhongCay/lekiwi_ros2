@@ -22,11 +22,11 @@ import tf2_geometry_msgs
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 
-from lekiwi_orchestrator.board_geometry import rank_by_azimuth
-from lekiwi_orchestrator.mission_types import ActionResult, ObservationIntent
+from lekiwi_orchestrator.core.mission_types import ActionResult, ObservationIntent
+from lekiwi_orchestrator.planning.board_geometry import RankedViewpoint, rank_by_azimuth
 
 if TYPE_CHECKING:
-    from lekiwi_orchestrator.motion_client import NavigationClient
+    from lekiwi_orchestrator.execution.motion_client import NavigationClient
 
 
 class ObsNavigator:
@@ -77,7 +77,12 @@ class ObsNavigator:
             ),
         }
 
-        self._viewpoint_indices: dict[ObservationIntent, int] = {
+        self._active_tours: dict[ObservationIntent, list[RankedViewpoint]] = {
+            ObservationIntent.POST_MOVE_VERIFY: [],
+            ObservationIntent.RELOCALIZE: [],
+        }
+
+        self._tour_indices: dict[ObservationIntent, int] = {
             ObservationIntent.POST_MOVE_VERIFY: 0,
             ObservationIntent.RELOCALIZE: 0,
         }
@@ -89,14 +94,14 @@ class ObsNavigator:
 
     @property
     def viewpoint_index(self) -> int:
-        """Return the current candidate viewpoint index for post-move verification under lock."""
+        """Return the current candidate viewpoint tour index for post-move verification under lock."""
         with self._lock:
-            return self._viewpoint_indices[ObservationIntent.POST_MOVE_VERIFY]
+            return self._tour_indices[ObservationIntent.POST_MOVE_VERIFY]
 
     def get_viewpoint_index(self, intent: ObservationIntent) -> int:
-        """Return the active viewpoint index for the specified observation intent."""
+        """Return the active viewpoint tour index for the specified observation intent."""
         with self._lock:
-            return self._viewpoint_indices.get(intent, 0)
+            return self._tour_indices.get(intent, 0)
 
     def get_max_attempts(self, intent: ObservationIntent) -> int:
         """Return the total number of candidate angular offsets for the specified intent."""
@@ -105,18 +110,28 @@ class ObsNavigator:
     def has_exhausted_viewpoints(self, intent: ObservationIntent) -> bool:
         """Return True if all configured angular offsets for the intent have been attempted."""
         with self._lock:
-            return self._viewpoint_indices.get(intent, 0) >= self.get_max_attempts(
-                intent
-            )
+            tour = self._active_tours.get(intent, [])
+            idx = self._tour_indices.get(intent, 0)
+            if not tour:
+                return idx >= self.get_max_attempts(intent)
+            return idx >= len(tour)
 
-    def reset_viewpoint_index(self, intent: ObservationIntent | None = None) -> None:
-        """Reset observation viewpoint index for a specific intent or all intents."""
+    def get_active_tour(self, intent: ObservationIntent) -> list[RankedViewpoint]:
+        """Return a copy of the active planned tour for the specified intent."""
+        with self._lock:
+            return list(self._active_tours.get(intent, []))
+
+    def reset_tour(self, intent: ObservationIntent | None = None) -> None:
+        """Reset observation tour session for a specific intent or all intents."""
         with self._lock:
             if intent is not None:
-                self._viewpoint_indices[intent] = 0
+                self._active_tours[intent] = []
+                self._tour_indices[intent] = 0
             else:
-                for k in self._viewpoint_indices:
-                    self._viewpoint_indices[k] = 0
+                for k in self._active_tours:
+                    self._active_tours[k] = []
+                for k in self._tour_indices:
+                    self._tour_indices[k] = 0
 
     def cancel(self) -> None:
         """Cancel any ongoing navigation action dispatched by this observer."""
@@ -167,41 +182,56 @@ class ObsNavigator:
 
         return (self._standoff_distance, 0.0)
 
+    def _init_tour(
+        self,
+        intent: ObservationIntent,
+        start_bx: float,
+        start_by: float,
+    ) -> list[RankedViewpoint]:
+        """Compute the shortest path tour through all candidate viewpoints and lock it as active session."""
+        offsets = self._angle_offsets_map.get(intent, [0.0])
+        if not offsets:
+            with self._lock:
+                self._active_tours[intent] = []
+                self._tour_indices[intent] = 0
+            return []
+
+        tour = rank_by_azimuth(
+            curr_x=start_bx,
+            curr_y=start_by,
+            candidate_offsets=offsets,
+            standoff_radius=self._standoff_distance,
+            board_frame=self._board_frame,
+            fallback_yaw=0.0,
+        )
+        with self._lock:
+            self._active_tours[intent] = list(tour)
+            self._tour_indices[intent] = 0
+        return tour
+
     def compute_observation_pose_for_base(
         self,
         base_pose: PoseStamped | None,
         intent: ObservationIntent = ObservationIntent.POST_MOVE_VERIFY,
     ) -> PoseStamped | None:
-        """Compute the closest calibrated observation viewpoint from angle_offsets for a base pose.
+        """Compute the initial calibrated observation viewpoint for a base pose.
 
-        Projects the base interaction coordinates onto the standoff circle S^1, ranks candidate
-        viewpoints by geodesic distance, and selects the closest whitelisted viewpoint (index 0).
-        Advances `viewpoint_indices[intent]` to 1 so that subsequent timeout repositioning picks
-        the next distinct vantage point.
+        Plans a shortest tour session starting from the base pose, returns the first viewpoint (index 0),
+        and advances `_tour_indices[intent]` to 1 so that subsequent timeout repositioning picks
+        the next vantage points in the locked tour.
         """
         if base_pose is not None:
             bx, by = self.pose_to_board_xy(base_pose)
         else:
             bx, by = self.get_current_board_position()
 
-        offsets = self._angle_offsets_map.get(intent, [0.0])
-        if not offsets:
+        tour = self._init_tour(intent, bx, by)
+        if not tour:
             return None
 
-        ranked = rank_by_azimuth(
-            curr_x=bx,
-            curr_y=by,
-            candidate_offsets=offsets,
-            standoff_radius=self._standoff_distance,
-            board_frame=self._board_frame,
-            fallback_yaw=0.0,
-        )
-        if not ranked:
-            return None
-
-        primary_vp = ranked[0]
+        primary_vp = tour[0]
         with self._lock:
-            self._viewpoint_indices[intent] = 1
+            self._tour_indices[intent] = 1
 
         return self.transform_board_pose_to_map(primary_vp.pose_in_board)
 
@@ -237,27 +267,27 @@ class ObsNavigator:
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
-        """Rank candidate observation viewpoints by geodesic distance and dispatch navigation."""
-        offsets = self._angle_offsets_map.get(intent, [0.0])
-        if not offsets:
-            return False
-
-        ranked = rank_by_azimuth(
-            curr_x=curr_bx,
-            curr_y=curr_by,
-            candidate_offsets=offsets,
-            standoff_radius=self._standoff_distance,
-            board_frame=self._board_frame,
-            fallback_yaw=0.0,
-        )
-        if not ranked:
-            return False
-
+        """Dispatch navigation along the locked tour sequentially without modulo wrap-around."""
         with self._lock:
-            idx = self._viewpoint_indices[intent]
-            self._viewpoint_indices[intent] += 1
+            tour = self._active_tours.get(intent, [])
+            idx = self._tour_indices.get(intent, 0)
 
-        selected_vp = ranked[idx % len(ranked)]
+        if not tour:
+            tour = self._init_tour(intent, curr_bx, curr_by)
+            with self._lock:
+                idx = self._tour_indices.get(intent, 0)
+
+        if idx >= len(tour):
+            intent_name = getattr(intent, "value", str(intent))
+            self._node.get_logger().info(
+                f"[ACTIVE PERCEPTION] All {len(tour)} viewpoints for {intent_name} have been exhausted."
+            )
+            return False
+
+        selected_vp = tour[idx]
+        with self._lock:
+            self._tour_indices[intent] = idx + 1
+
         target_pose_map = self.transform_board_pose_to_map(selected_vp.pose_in_board)
         if target_pose_map is None:
             self._node.get_logger().error(
@@ -268,7 +298,7 @@ class ObsNavigator:
         intent_name = getattr(intent, "value", str(intent))
         self._node.get_logger().info(
             f"[ACTIVE PERCEPTION] Repositioning base for {intent_name} "
-            f"viewpoint #{idx + 1}/{len(offsets)} (azimuth={math.degrees(selected_vp.angle_offset):.1f} deg, "
+            f"viewpoint #{idx + 1}/{len(tour)} (azimuth={math.degrees(selected_vp.angle_offset):.1f} deg, "
             f"arc_dist={selected_vp.arc_cost:.3f}m) to ({target_pose_map.pose.position.x:.3f}, {target_pose_map.pose.position.y:.3f})..."
         )
 

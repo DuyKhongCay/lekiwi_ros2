@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from builtin_interfaces.msg import Time
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from nav_msgs.msg import Odometry
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -29,13 +30,15 @@ from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 
-from lekiwi_orchestrator.fsm import (
+from lekiwi_orchestrator.core.fsm import (
     MISSION_STATE_NAMES,
     MOTION_STATE_NAMES,
     PERCEPTION_CONTEXT_NAMES,
     MacroMissionState,
     MotionExecutionState,
+    is_navigating_motion_state,
 )
+from lekiwi_orchestrator.core.utils import get_header_stamp_sec, get_node_now_sec
 
 
 # ==============================================================================
@@ -52,6 +55,7 @@ class OrchestratorStateSnapshot:
     last_goal_move: str | None = None
     execution_stage: str | None = None
     motion_state: MotionExecutionState = MotionExecutionState.IDLE
+    is_navigating: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,19 @@ class VisualizerConfig:
     hud_z_offset: float = 0.35
     font_scale: float = 0.025
     ns: str = "mission/robot_hud"
+
+
+_HUD_STATE_COLORS: dict[MacroMissionState, tuple[float, float, float, float]] = {
+    MacroMissionState.BOOT_INITIALIZING: (1.0, 0.8, 0.0, 1.0),
+    MacroMissionState.WAITING_FOR_TF_READY: (1.0, 0.8, 0.0, 1.0),
+    MacroMissionState.WAITING_FOR_PLAYER_MOVE: (0.2, 0.8, 1.0, 1.0),
+    MacroMissionState.EVALUATING_BEST_MOVE: (0.95, 0.9, 0.2, 1.0),
+    MacroMissionState.CHECKING_REACHABILITY: (0.95, 0.9, 0.2, 1.0),
+    MacroMissionState.EXECUTING_MOVE_PIPELINE: (0.1, 1.0, 0.3, 1.0),
+    MacroMissionState.TURN_COMPLETED: (0.0, 1.0, 0.8, 1.0),
+    MacroMissionState.ERROR_FALLBACK: (1.0, 0.1, 0.1, 1.0),
+}
+_HUD_DEFAULT_COLOR: tuple[float, float, float, float] = (0.85, 0.85, 0.85, 1.0)
 
 
 class StatusMarkerBuilder:
@@ -78,70 +95,59 @@ class StatusMarkerBuilder:
         return self._config
 
     @staticmethod
-    def _format_hud_content(
-        snapshot: OrchestratorStateSnapshot,
-        nav_ready: bool,
-        robot_color: str,
-    ) -> tuple[tuple[float, float, float, float], str]:
+    def _format_hud_active_text(
+        snapshot: OrchestratorStateSnapshot, state_str: str, color_name: str
+    ) -> str:
         state = snapshot.mission_state
-        state_str = MISSION_STATE_NAMES.get(state, "UNKNOWN")
-        color_name = "White" if robot_color.lower().startswith("w") else "Black"
-
-        if state in (MacroMissionState.BOOT_INITIALIZING, MacroMissionState.WAITING_FOR_TF_READY):
-            return (
-                1.0,
-                0.8,
-                0.0,
-                1.0,
-            ), f"[{state_str}]\nWaiting for Nav Ready | Robot: {color_name}"
-
-        if state == MacroMissionState.WAITING_FOR_PLAYER_MOVE:
-            nav_status = "Ready" if nav_ready else "Unready"
-            return (
-                (0.2, 0.8, 1.0, 1.0),
-                f"[IDLE] Waiting for Opponent\nRobot: {color_name} | Nav: {nav_status}",
-            )
-
         if state in (
             MacroMissionState.EVALUATING_BEST_MOVE,
             MacroMissionState.CHECKING_REACHABILITY,
         ):
             target_str = snapshot.last_goal_move or "Evaluating"
-            return (
-                0.95,
-                0.9,
-                0.2,
-                1.0,
-            ), f"[{state_str}]\nTarget: {target_str} ({color_name})"
+            return f"[{state_str}]\nTarget: {target_str} ({color_name})"
+        stage_str = snapshot.execution_stage or "Executing"
+        move_str = snapshot.last_goal_move or "Unknown"
+        return f"[EXECUTING] Move: {move_str} ({color_name})\nStage: {stage_str}"
 
-        if state == MacroMissionState.EXECUTING_MOVE_PIPELINE:
-            stage_str = snapshot.execution_stage or "Executing"
-            move_str = snapshot.last_goal_move or "Unknown"
-            return (
-                0.1,
-                1.0,
-                0.3,
-                1.0,
-            ), f"[EXECUTING] Move: {move_str} ({color_name})\nStage: {stage_str}"
+    @staticmethod
+    def _format_hud_text(
+        snapshot: OrchestratorStateSnapshot,
+        nav_ready: bool,
+        color_name: str,
+    ) -> str:
+        state = snapshot.mission_state
+        state_str = MISSION_STATE_NAMES.get(state, "UNKNOWN")
+        nav_status = "Ready" if nav_ready else "Lost"
 
+        if state in (MacroMissionState.BOOT_INITIALIZING, MacroMissionState.WAITING_FOR_TF_READY):
+            return f"[{state_str}]\nWaiting for Nav Ready | Robot: {color_name}"
+        if state == MacroMissionState.WAITING_FOR_PLAYER_MOVE:
+            idle_nav = "Ready" if nav_ready else "Unready"
+            return f"[IDLE] Waiting for Opponent\nRobot: {color_name} | Nav: {idle_nav}"
+        if state in (
+            MacroMissionState.EVALUATING_BEST_MOVE,
+            MacroMissionState.CHECKING_REACHABILITY,
+            MacroMissionState.EXECUTING_MOVE_PIPELINE,
+        ):
+            return StatusMarkerBuilder._format_hud_active_text(
+                snapshot, state_str, color_name
+            )
         if state == MacroMissionState.TURN_COMPLETED:
-            return (
-                0.0,
-                1.0,
-                0.8,
-                1.0,
-            ), f"[COMPLETED] Turn Finalized\nRobot: {color_name}"
-
+            return f"[COMPLETED] Turn Finalized\nRobot: {color_name}"
         if state == MacroMissionState.ERROR_FALLBACK:
-            nav_status = "Ready" if nav_ready else "Lost"
-            return (
-                1.0,
-                0.1,
-                0.1,
-                1.0,
-            ), f"[ERROR] System in Error Fallback\nNav: {nav_status}"
+            return f"[ERROR] System in Error Fallback\nNav: {nav_status}"
+        return f"[{state_str}]\nRobot: {color_name}"
 
-        return (0.85, 0.85, 0.85, 1.0), f"[{state_str}]\nRobot: {color_name}"
+    @staticmethod
+    def _format_hud_content(
+        snapshot: OrchestratorStateSnapshot,
+        nav_ready: bool,
+        robot_color: str,
+    ) -> tuple[tuple[float, float, float, float], str]:
+        color_name = "White" if robot_color.lower().startswith("w") else "Black"
+        color = _HUD_STATE_COLORS.get(snapshot.mission_state, _HUD_DEFAULT_COLOR)
+        text = StatusMarkerBuilder._format_hud_text(snapshot, nav_ready, color_name)
+        return color, text
 
     def build(
         self,
@@ -217,6 +223,11 @@ class HealthSupervisorConfig:
     enable_visualizer: bool = True
     visualizer_topic: str = "~/status_markers"
     visualizer_config: VisualizerConfig = field(default_factory=VisualizerConfig)
+    local_odom_topic: str = "/odometry/local"
+    global_odom_topic: str = "/odometry/global"
+    uncommanded_linear_thresh: float = 0.03
+    uncommanded_angular_thresh: float = 0.08
+    uncommanded_confirm_duration_sec: float = 0.20
 
 
 
@@ -235,23 +246,44 @@ class HealthSupervisor:
         on_critical_tf_loss_cb: Callable[[], None] | None = None,
         on_auto_recovery_cb: Callable[[], None] | None = None,
         on_reset_recovery_system_cb: Callable[[str], bool] | None = None,
+        on_disturbance_detected_cb: Callable[[str], None] | None = None,
     ) -> None:
         self._node = node
-        self._config = config or HealthSupervisorConfig()
-        self._state_lock = state_lock or threading.RLock()
+        self._config = config if config is not None else HealthSupervisorConfig()
+        self._state_lock = state_lock if state_lock is not None else threading.RLock()
         self._cb_group_sub = cb_group_sub
 
-        self._on_nav_ready_transition_cb = on_nav_ready_transition_cb or (
-            lambda _: None
+        self._on_nav_ready_transition_cb = (
+            on_nav_ready_transition_cb
+            if on_nav_ready_transition_cb is not None
+            else lambda _: None
         )
-        self._on_critical_tf_loss_cb = on_critical_tf_loss_cb or (lambda: None)
-        self._on_auto_recovery_cb = on_auto_recovery_cb or (lambda: None)
-        self._on_reset_recovery_system_cb = on_reset_recovery_system_cb or (
-            lambda _: True
+        self._on_critical_tf_loss_cb = (
+            on_critical_tf_loss_cb
+            if on_critical_tf_loss_cb is not None
+            else lambda: None
         )
-        self._state_provider = state_provider or (
-            lambda: OrchestratorStateSnapshot(
-                mission_state=MacroMissionState.BOOT_INITIALIZING, perception_context=0
+        self._on_auto_recovery_cb = (
+            on_auto_recovery_cb
+            if on_auto_recovery_cb is not None
+            else lambda: None
+        )
+        self._on_reset_recovery_system_cb = (
+            on_reset_recovery_system_cb
+            if on_reset_recovery_system_cb is not None
+            else lambda _: True
+        )
+        self._on_disturbance_detected_cb = (
+            on_disturbance_detected_cb
+            if on_disturbance_detected_cb is not None
+            else lambda _: None
+        )
+        self._state_provider = (
+            state_provider
+            if state_provider is not None
+            else lambda: OrchestratorStateSnapshot(
+                mission_state=MacroMissionState.BOOT_INITIALIZING,
+                perception_context=0,
             )
         )
 
@@ -271,12 +303,33 @@ class HealthSupervisor:
         self.last_nav_heartbeat: float | None = None
         self.last_grasp_heartbeat: float | None = None
         self.recovery_attempts = 0
+        self._operator_intervention_latched = False
+        self._uncommanded_motion_since_sec: float | None = None
+        self._startup_ekf_received = False
+        self._last_linear_speed = 0.0
+        self._last_angular_speed = 0.0
 
         # Timers
         self._recovery_timer = None
         self._readiness_timer = self._node.create_timer(
             min(0.2, self._config.readiness_timeout_sec / 2),
             self.expire_readiness,
+            callback_group=self._cb_group_sub,
+        )
+
+        # Disturbance Subscriptions
+        self._sub_local_odom = self._node.create_subscription(
+            Odometry,
+            self._config.local_odom_topic,
+            self.on_local_odom,
+            10,
+            callback_group=self._cb_group_sub,
+        )
+        self._sub_global_odom = self._node.create_subscription(
+            Odometry,
+            self._config.global_odom_topic,
+            self.on_global_odom,
+            10,
             callback_group=self._cb_group_sub,
         )
 
@@ -300,21 +353,7 @@ class HealthSupervisor:
 
     def _get_now_sec(self) -> float:
         """Return current timestamp in seconds using node clock, fallback to monotonic."""
-        try:
-            if hasattr(self._node, "get_clock"):
-                clk = self._node.get_clock()
-                if clk is not None:
-                    now = clk.now()
-                    if hasattr(now, "nanoseconds") and isinstance(now.nanoseconds, (int, float)):
-                        return float(now.nanoseconds) * 1e-9
-                    if hasattr(now, "seconds_nanoseconds") and callable(now.seconds_nanoseconds):
-                        res = now.seconds_nanoseconds()
-                        if isinstance(res, tuple) and len(res) == 2 and isinstance(res[0], (int, float)):
-                            sec, nsec = res
-                            return float(sec) + float(nsec) * 1e-9
-        except Exception:
-            pass
-        return time.monotonic()
+        return get_node_now_sec(self._node)
 
 
     @property
@@ -371,6 +410,98 @@ class HealthSupervisor:
             transition_cb(True)
         if critical_loss_cb is not None:
             critical_loss_cb()
+
+    @property
+    def is_operator_latched(self) -> bool:
+        """Check if physical disturbance / operator intervention latch is active."""
+        with self._state_lock:
+            return self._operator_intervention_latched
+
+    def set_operator_latched(self, latched: bool) -> None:
+        """Update operator intervention latch state and clear pending debounce window."""
+        with self._state_lock:
+            self._operator_intervention_latched = latched
+            self._uncommanded_motion_since_sec = None
+
+    @property
+    def is_startup_ekf_received(self) -> bool:
+        """Check if initial global EKF odometry has been received."""
+        with self._state_lock:
+            return self._startup_ekf_received
+
+    @property
+    def is_chassis_stationary(self) -> bool:
+        """Check if chassis velocity is currently within uncommanded motion thresholds."""
+        with self._state_lock:
+            return (
+                self._last_linear_speed <= self._config.uncommanded_linear_thresh
+                and self._last_angular_speed <= self._config.uncommanded_angular_thresh
+            )
+
+    def on_global_odom(self, msg: Odometry) -> None:
+        """Handle first global odometry message to disengage startup disturbance protection."""
+        sub_to_destroy = None
+        with self._state_lock:
+            if not self._startup_ekf_received:
+                self._startup_ekf_received = True
+                sub_to_destroy = self._sub_global_odom
+                self._sub_global_odom = None
+                self._node.get_logger().info(
+                    "[STARTUP] First /odometry/global received (EKF active). "
+                    "Startup disturbance gate opened; active monitoring enabled."
+                )
+
+        if sub_to_destroy is not None:
+            self._node.destroy_subscription(sub_to_destroy)
+
+    def on_local_odom(self, msg: Odometry) -> None:
+        """Monitor local odometry for sustained uncommanded chassis motion."""
+        vx = msg.twist.twist.linear.x
+        vy = msg.twist.twist.linear.y
+        wz = msg.twist.twist.angular.z
+        speed = math.hypot(vx, vy)
+        now_sec = get_header_stamp_sec(msg, fallback_sec=self._get_now_sec())
+
+        disturbance_cb: Callable[[str], None] | None = None
+        with self._state_lock:
+            self._last_linear_speed = speed
+            self._last_angular_speed = abs(wz)
+            if not self._startup_ekf_received:
+                return
+
+            snapshot = self._state_provider()
+            is_commanded_nav = (
+                is_navigating_motion_state(snapshot.motion_state)
+                or snapshot.is_navigating
+            )
+            exceeds_threshold = (
+                speed > self._config.uncommanded_linear_thresh
+                or abs(wz) > self._config.uncommanded_angular_thresh
+            )
+
+            if is_commanded_nav or not exceeds_threshold:
+                self._uncommanded_motion_since_sec = None
+                return
+
+            if self._uncommanded_motion_since_sec is None:
+                self._uncommanded_motion_since_sec = now_sec
+
+            elapsed_sec = max(0.0, now_sec - self._uncommanded_motion_since_sec)
+            if (
+                elapsed_sec >= self._config.uncommanded_confirm_duration_sec
+                and not self._operator_intervention_latched
+            ):
+                self._node.get_logger().warn(
+                    f"[DISTURBANCE] Sustained uncommanded chassis motion detected "
+                    f"(v={speed:.3f}m/s, w={wz:.3f}rad/s for {elapsed_sec:.3f}s)! "
+                    "Robot might have been lifted, kicked, or displaced."
+                )
+                self._operator_intervention_latched = True
+                self._uncommanded_motion_since_sec = None
+                disturbance_cb = self._on_disturbance_detected_cb
+
+        if disturbance_cb is not None:
+            disturbance_cb("uncommanded_motion")
 
     def on_grasp_ready_msg(
         self,
@@ -436,6 +567,13 @@ class HealthSupervisor:
             return
 
         with self._state_lock:
+            if self._operator_intervention_latched:
+                self._node.get_logger().error(
+                    "[RECOVERY INHIBITED] Physical disturbance / Teleop override is latched! "
+                    "Automatic recovery halted. Manual intervention (/orchestrator/recover) required."
+                )
+                return
+
             if self.recovery_attempts >= self._config.max_recovery_attempts:
                 self._node.get_logger().error(
                     f"Max auto-recovery attempts ({self._config.max_recovery_attempts}) exceeded! "
@@ -489,12 +627,16 @@ class HealthSupervisor:
         self._node.get_logger().info(
             f"[RECOVERY] Manual recovery service called while in state: {MISSION_STATE_NAMES.get(state, 'UNKNOWN')}"
         )
+        with self._state_lock:
+            self._operator_intervention_latched = False
+            self._uncommanded_motion_since_sec = None
+
         success = self._on_reset_recovery_system_cb("operator service request")
         response.success = success
         response.message = (
             "System recovered to WAITING_FOR_TF_READY"
             if success
-            else f"Recovery rejected: node is not in ERROR_FALLBACK (current: {MISSION_STATE_NAMES.get(state, 'UNKNOWN')})"
+            else f"Recovery failed from state: {MISSION_STATE_NAMES.get(state, 'UNKNOWN')}"
         )
         return response
 
@@ -555,6 +697,7 @@ class HealthSupervisor:
             KeyValue(key="last_goal_move", value=str(last_goal)),
             KeyValue(key="execution_stage", value=str(stage_name)),
             KeyValue(key="recovery_attempts", value=str(attempts)),
+            KeyValue(key="startup_ekf_received", value=str(self._startup_ekf_received)),
         ]
 
         diag_array = DiagnosticArray()
@@ -587,6 +730,12 @@ class HealthSupervisor:
         if self._marker_pub is not None:
             self._node.destroy_publisher(self._marker_pub)
             self._marker_pub = None
+        if self._sub_local_odom is not None:
+            self._node.destroy_subscription(self._sub_local_odom)
+            self._sub_local_odom = None
+        if self._sub_global_odom is not None:
+            self._node.destroy_subscription(self._sub_global_odom)
+            self._sub_global_odom = None
 
 
 __all__ = [

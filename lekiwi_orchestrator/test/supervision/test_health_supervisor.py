@@ -14,8 +14,9 @@ from unittest.mock import MagicMock
 
 import pytest
 from diagnostic_msgs.msg import DiagnosticStatus
-from lekiwi_orchestrator.fsm import MacroMissionState
-from lekiwi_orchestrator.health_supervisor import (
+from nav_msgs.msg import Odometry
+from lekiwi_orchestrator.core.fsm import MacroMissionState, MotionExecutionState
+from lekiwi_orchestrator.supervision.health_supervisor import (
     HealthSupervisor,
     HealthSupervisorConfig,
     OrchestratorStateSnapshot,
@@ -39,9 +40,18 @@ def dummy_snapshot() -> OrchestratorStateSnapshot:
 def mock_node():
     node = MagicMock()
     clock = MagicMock()
-    time_msg = Time()
-    time_msg.sec = 100
-    clock.now.return_value.to_msg.return_value = time_msg
+    start_mono = time.monotonic()
+
+    def _now():
+        now_mock = MagicMock()
+        elapsed = time.monotonic() - start_mono
+        now_mock.nanoseconds = int((100.0 + elapsed) * 1e9)
+        time_msg = Time()
+        time_msg.sec = int(100.0 + elapsed)
+        now_mock.to_msg.return_value = time_msg
+        return now_mock
+
+    clock.now.side_effect = _now
     node.get_clock.return_value = clock
     return node
 
@@ -260,7 +270,7 @@ def test_parameters_invalid_readiness_timeout():
     import rclpy
     from rclpy.node import Node
     from rclpy.parameter import Parameter
-    from lekiwi_orchestrator.parameters import OrchestratorParameters
+    from lekiwi_orchestrator.core.parameters import OrchestratorParameters
 
     if not rclpy.ok():
         rclpy.init()
@@ -275,4 +285,245 @@ def test_parameters_invalid_readiness_timeout():
             OrchestratorParameters(test_node)
     finally:
         test_node.destroy_node()
+
+
+def _make_odom(
+    vx: float = 0.0,
+    vy: float = 0.0,
+    wz: float = 0.0,
+    stamp_sec: float = 100.0,
+) -> Odometry:
+    msg = Odometry()
+    msg.header.stamp.sec = int(stamp_sec)
+    msg.header.stamp.nanosec = int((stamp_sec - int(stamp_sec)) * 1e9)
+    msg.twist.twist.linear.x = float(vx)
+    msg.twist.twist.linear.y = float(vy)
+    msg.twist.twist.angular.z = float(wz)
+    return msg
+
+
+def test_uncommanded_motion_disturbance_and_inhibit_recovery(mock_node):
+    """Verify non-zero chassis velocity while stationary triggers disturbance and inhibits auto-recovery."""
+    disturbance_cb = MagicMock()
+    idle_snapshot = OrchestratorStateSnapshot(
+        mission_state=MacroMissionState.CHECKING_REACHABILITY,
+        perception_context=0,
+        motion_state=MotionExecutionState.IDLE,
+    )
+    monitor = HealthSupervisor(
+        node=mock_node,
+        config=HealthSupervisorConfig(
+            uncommanded_linear_thresh=0.03,
+            uncommanded_confirm_duration_sec=0.20,
+        ),
+        state_provider=lambda: idle_snapshot,
+        on_disturbance_detected_cb=disturbance_cb,
+    )
+    try:
+        # 1. Startup phase: before global odom, motion is ignored (startup gate)
+        assert not monitor.is_startup_ekf_received
+        odom_moving = _make_odom(vx=0.5, stamp_sec=100.0)
+        monitor.on_local_odom(odom_moving)
+        assert not disturbance_cb.called
+        assert not monitor.is_operator_latched
+
+        # 2. Global odom received: unlatches startup gate and destroys subscription
+        assert monitor._sub_global_odom is not None
+        monitor.on_global_odom(Odometry())
+        assert monitor.is_startup_ekf_received
+        assert monitor._sub_global_odom is None
+
+        # 3. Zero velocity odometry does not trigger disturbance and reports stationary
+        odom_zero = _make_odom(vx=0.0, wz=0.0, stamp_sec=100.0)
+        monitor.on_local_odom(odom_zero)
+        assert not disturbance_cb.called
+        assert not monitor.is_operator_latched
+        assert monitor.is_chassis_stationary
+
+        # 4. Instantaneous spike (< 0.20s) is absorbed without latching
+        monitor.on_local_odom(_make_odom(vx=0.5, stamp_sec=100.05))
+        assert not monitor.is_operator_latched
+        assert not disturbance_cb.called
+
+        # 5. Sustained speed exceeding threshold (>= 0.20s) triggers disturbance
+        monitor.on_local_odom(_make_odom(vx=0.5, stamp_sec=100.25))
+        assert not monitor.is_chassis_stationary
+        assert disturbance_cb.called
+        assert disturbance_cb.call_args[0][0] == "uncommanded_motion"
+        assert monitor.is_operator_latched
+
+        # 6. Auto-recovery timer scheduling is strictly inhibited when latched
+        monitor.schedule_auto_recovery_if_enabled()
+        assert monitor._recovery_timer is None
+    finally:
+        monitor.destroy()
+
+
+def test_recover_service_unlatches_operator_from_any_state(mock_node, dummy_snapshot):
+    """Verify manual recovery service unlatches operator and resets system."""
+    reset_cb = MagicMock(return_value=True)
+    monitor = HealthSupervisor(
+        node=mock_node,
+        config=HealthSupervisorConfig(),
+        state_provider=lambda: dummy_snapshot,
+        on_reset_recovery_system_cb=reset_cb,
+    )
+    try:
+        monitor.set_operator_latched(True)
+        assert monitor.is_operator_latched
+
+        req = Trigger.Request()
+        res = Trigger.Response()
+        resp = monitor.handle_recover_service(req, res, current_state=MacroMissionState.EXECUTING_MOVE_PIPELINE)
+
+        assert resp.success
+        assert reset_cb.called
+        assert not monitor.is_operator_latched
+    finally:
+        monitor.destroy()
+
+
+def test_valid_navigation_motion_exempt_from_disturbance(mock_node):
+    """Verify that commanded chassis motion during navigation (is_navigating=True or NAV motion state) is exempt from disturbance."""
+    disturbance_cb = MagicMock()
+    current_snap = {"snap": OrchestratorStateSnapshot(
+        mission_state=MacroMissionState.POST_MOVE_VERIFYING,
+        perception_context=0,
+        motion_state=MotionExecutionState.IDLE,
+        is_navigating=False,
+    )}
+    monitor = HealthSupervisor(
+        node=mock_node,
+        config=HealthSupervisorConfig(
+            uncommanded_linear_thresh=0.03,
+            uncommanded_confirm_duration_sec=0.20,
+        ),
+        state_provider=lambda: current_snap["snap"],
+        on_disturbance_detected_cb=disturbance_cb,
+    )
+    try:
+        # Arm monitor with global odom
+        monitor.on_global_odom(Odometry())
+        assert monitor.is_startup_ekf_received
+
+        # 1. When is_navigating=True, moving odom does not trigger disturbance
+        current_snap["snap"] = OrchestratorStateSnapshot(
+            mission_state=MacroMissionState.POST_MOVE_VERIFYING,
+            perception_context=0,
+            motion_state=MotionExecutionState.IDLE,
+            is_navigating=True,
+        )
+        monitor.on_local_odom(_make_odom(vx=0.25, stamp_sec=10.0))
+        monitor.on_local_odom(_make_odom(vx=0.25, stamp_sec=10.25))
+        assert not disturbance_cb.called
+        assert not monitor.is_operator_latched
+
+        # 2. When motion_state is NAV_TO_OBS, moving odom does not trigger disturbance
+        current_snap["snap"] = OrchestratorStateSnapshot(
+            mission_state=MacroMissionState.POST_MOVE_VERIFYING,
+            perception_context=0,
+            motion_state=MotionExecutionState.NAV_TO_OBS,
+            is_navigating=False,
+        )
+        monitor.on_local_odom(_make_odom(vx=0.25, stamp_sec=10.5))
+        monitor.on_local_odom(_make_odom(vx=0.25, stamp_sec=10.75))
+        assert not disturbance_cb.called
+        assert not monitor.is_operator_latched
+
+        # 3. When IDLE and not navigating, sustained moving odom DOES trigger disturbance
+        current_snap["snap"] = OrchestratorStateSnapshot(
+            mission_state=MacroMissionState.POST_MOVE_VERIFYING,
+            perception_context=0,
+            motion_state=MotionExecutionState.IDLE,
+            is_navigating=False,
+        )
+        monitor.on_local_odom(_make_odom(vx=0.25, stamp_sec=11.0))
+        assert not disturbance_cb.called
+        assert not monitor.is_operator_latched
+
+        monitor.on_local_odom(_make_odom(vx=0.25, stamp_sec=11.25))
+        assert disturbance_cb.called
+        assert monitor.is_operator_latched
+    finally:
+        monitor.destroy()
+
+
+def test_transient_angular_spike_during_picking_piece_ignored(mock_node):
+    """Verify transient arm reaction angular spike (< 0.20s) during manipulation does not trigger disturbance."""
+    disturbance_cb = MagicMock()
+    snapshot = OrchestratorStateSnapshot(
+        mission_state=MacroMissionState.EXECUTING_MOVE_PIPELINE,
+        perception_context=0,
+        motion_state=MotionExecutionState.IDLE,
+        execution_stage="PICKING_PIECE",
+        is_navigating=False,
+    )
+    monitor = HealthSupervisor(
+        node=mock_node,
+        config=HealthSupervisorConfig(
+            uncommanded_angular_thresh=0.08,
+            uncommanded_confirm_duration_sec=0.20,
+        ),
+        state_provider=lambda: snapshot,
+        on_disturbance_detected_cb=disturbance_cb,
+    )
+    try:
+        monitor.on_global_odom(Odometry())
+        assert monitor.is_startup_ekf_received
+
+        # Arm gripper closing induces sudden -0.30 rad/s angular kick lasting 60ms
+        monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=10.00))
+        monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=10.06))
+
+        assert not disturbance_cb.called
+        assert not monitor.is_operator_latched
+
+        # Vibration dampens out back to rest
+        monitor.on_local_odom(_make_odom(wz=0.01, stamp_sec=10.10))
+        assert not disturbance_cb.called
+        assert not monitor.is_operator_latched
+
+        # Another brief spike (40ms) later still does not trigger
+        monitor.on_local_odom(_make_odom(wz=-0.25, stamp_sec=10.20))
+        monitor.on_local_odom(_make_odom(wz=0.00, stamp_sec=10.24))
+        assert not disturbance_cb.called
+        assert not monitor.is_operator_latched
+    finally:
+        monitor.destroy()
+
+
+def test_sustained_motion_during_picking_piece_triggers_disturbance(mock_node):
+    """Verify sustained chassis motion (>= 0.20s) during manipulation triggers disturbance and latches."""
+    disturbance_cb = MagicMock()
+    snapshot = OrchestratorStateSnapshot(
+        mission_state=MacroMissionState.EXECUTING_MOVE_PIPELINE,
+        perception_context=0,
+        motion_state=MotionExecutionState.IDLE,
+        execution_stage="PICKING_PIECE",
+        is_navigating=False,
+    )
+    monitor = HealthSupervisor(
+        node=mock_node,
+        config=HealthSupervisorConfig(
+            uncommanded_angular_thresh=0.08,
+            uncommanded_confirm_duration_sec=0.20,
+        ),
+        state_provider=lambda: snapshot,
+        on_disturbance_detected_cb=disturbance_cb,
+    )
+    try:
+        monitor.on_global_odom(Odometry())
+        assert monitor.is_startup_ekf_received
+
+        # Sustained displacement: wz = -0.30 rad/s lasting 250ms
+        monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=10.00))
+        assert not disturbance_cb.called
+        assert not monitor.is_operator_latched
+
+        monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=10.25))
+        assert disturbance_cb.called
+        assert disturbance_cb.call_args[0][0] == "uncommanded_motion"
+        assert monitor.is_operator_latched
+    finally:
+        monitor.destroy()
 
