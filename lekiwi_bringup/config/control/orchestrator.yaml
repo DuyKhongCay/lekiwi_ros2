@@ -54,7 +54,8 @@ system_readiness_node:
     max_transform_age_sec: 0.30
     nav_odom_max_age_sec: 0.50
     max_stop_velocity: 0.03
-    max_stop_angular_vel: 0.08
+    max_stop_angular_vel: 0.20
+    stationary_unlatch_debounce_sec: 0.25
     require_global_ekf_seed: true
     local_odom_topic: "/odometry/local"
     global_odom_topic: "/odometry/global"
@@ -111,7 +112,7 @@ chess_mission_orchestrator:
     feasibility_timeout_sec: 5.0
     action_timeout_sec: 0.0
     readiness_timeout_sec: 1.0
-    pre_grasp_settle_sec: 2.0
+    chassis_settle_timeout_sec: 2.0
 
     # --- Self-Healing & Recovery Settings ---
     recovery:
@@ -131,6 +132,15 @@ chess_mission_orchestrator:
       check_feasibility: "/workspace/check_move_feasibility"
       recover: "/orchestrator/recover"
       set_perception_context: "/orchestrator/set_perception_context"
+      system_reset_readiness: "/system/reset_readiness"
+      ekf_reset: "/ekf_filter_node_map/reset"
+
+    disturbance:
+      local_odom_topic: "/odometry/local"
+      global_odom_topic: "/odometry/global"
+      uncommanded_linear_thresh: 0.10
+      uncommanded_angular_thresh: 0.25
+      uncommanded_confirm_duration_sec: 0.20
 
     actions:
       navigate_to_pose: "/navigate_to_pose"
@@ -138,8 +148,8 @@ chess_mission_orchestrator:
 
     # --- Active Observation & Vantage Point Settings ---
     observation:
-      standoff_distance: 0.59
-      scan_timeout_sec: 6.0
+      standoff_distance: 0.58
+      scan_timeout_sec: 5.0
       angle_offsets:
         relocalize: [-2.831, -2.544, -2.248, -1.910, -1.568, -1.067, -0.667, -0.290, 0.082, 0.484, 0.761, 1.147, 1.530, 1.934, 2.312, 2.699, 3.092]
         post_move_verify: [-2.352, -2.176, -1.827, -1.333, -0.991, 0.999, 1.325, 1.879, 2.270]
