@@ -77,6 +77,8 @@ public:
     const std::string & target_frame,
     double gripper_state) const;
 
+  [[nodiscard]] bool is_waiting_record() const noexcept { return is_waiting_record_.load(std::memory_order_acquire); }
+
 private:
   struct ApproachDescendPair
   {
@@ -103,7 +105,8 @@ private:
   {
     NONE,
     SAVE,
-    ABORT
+    ABORT,
+    CANCEL
   };
 
   void declare_and_init_parameters();
@@ -145,6 +148,7 @@ private:
     const std::shared_ptr<Trigger::Response> & response);
 
   void notify_record_signal(RecordCoordinationSignal signal) noexcept;
+  void discard_active_recording_async() noexcept;
 
   // Action Server Callbacks & Move Orchestration
   rclcpp_action::GoalResponse handle_goal(

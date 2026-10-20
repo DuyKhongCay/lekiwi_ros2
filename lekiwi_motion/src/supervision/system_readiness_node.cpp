@@ -54,6 +54,7 @@ namespace lekiwi_motion
     declare("nav_odom_max_age_sec", 0.50, "Max age for local odometry in nav readiness (sec)");
     declare("max_stop_velocity", 0.03, "Max linear speed to be considered stationary (m/s)");
     declare("max_stop_angular_vel", 0.08, "Max angular speed to be considered stationary (rad/s)");
+    declare("stationary_unlatch_debounce_sec", 0.25, "Minimum sustained motion duration to break stationary latch (sec)");
     declare("check_frequency_hz", 10.0, "Frequency of readiness evaluation loop (Hz)");
     declare("require_global_ekf_seed", true, "Require global EKF to converge at least once before nav ready");
 
@@ -75,6 +76,7 @@ namespace lekiwi_motion
     config.nav_odom_max_age_sec = get_parameter("nav_odom_max_age_sec").as_double();
     config.max_stop_velocity = get_parameter("max_stop_velocity").as_double();
     config.max_stop_angular_vel = get_parameter("max_stop_angular_vel").as_double();
+    config.stationary_unlatch_debounce_sec = get_parameter("stationary_unlatch_debounce_sec").as_double();
     config.require_global_ekf_seed = get_parameter("require_global_ekf_seed").as_bool();
     config.arm_joints = get_parameter("arm_joints").as_string_array();
 
@@ -128,12 +130,14 @@ namespace lekiwi_motion
     auto latched_qos = rclcpp::QoS(1).reliable().transient_local();
     nav_ready_pub_ = create_publisher<std_msgs::msg::Bool>("/system/nav_ready", latched_qos);
     grasp_ready_pub_ = create_publisher<std_msgs::msg::Bool>("/system/grasp_ready", latched_qos);
+    is_stationary_pub_ = create_publisher<std_msgs::msg::Bool>("/system/is_stationary", latched_qos);
 
     // Publish initial false state
     std_msgs::msg::Bool initial_false;
     initial_false.data = false;
     nav_ready_pub_->publish(initial_false);
     grasp_ready_pub_->publish(initial_false);
+    is_stationary_pub_->publish(initial_false);
 
     // Services
     nav_readiness_srv_ = create_service<std_srvs::srv::Trigger>(
@@ -147,6 +151,12 @@ namespace lekiwi_motion
         [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
                std::shared_ptr<std_srvs::srv::Trigger::Response> res)
         { handle_grasp_query(req, res); });
+
+    reset_readiness_srv_ = create_service<std_srvs::srv::Trigger>(
+        "/system/reset_readiness",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+               std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+        { handle_reset_query(req, res); });
 
     // Diagnostics
     diagnostic_updater_.setHardwareID("lekiwi_system_readiness");
@@ -264,6 +274,10 @@ namespace lekiwi_motion
     grasp_msg.data = last_report_.grasp_ready;
     grasp_ready_pub_->publish(grasp_msg);
 
+    std_msgs::msg::Bool stationary_msg;
+    stationary_msg.data = last_report_.is_stationary;
+    is_stationary_pub_->publish(stationary_msg);
+
     // 4. Diagnostics
     diagnostic_updater_.force_update();
   }
@@ -321,6 +335,37 @@ namespace lekiwi_motion
   {
     res->success = last_report_.grasp_ready;
     res->message = last_report_.grasp_ready ? "Grasp precision is ready" : "Grasp not ready: " + last_report_.grasp_blocker_reason;
+  }
+
+  void SystemReadinessNode::handle_reset_query(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+  {
+    RCLCPP_WARN(get_logger(),
+        "[System Readiness] Reset requested! Purging TF buffer, EKF seeds, cached odom snapshots, and stationary latch.");
+    tf_buffer_->clear();
+    evaluator_.reset_global_ekf_seed();
+    global_odom_snapshot_ = GlobalOdomSnapshot{};
+
+    last_published_nav_ready_ = false;
+    last_published_grasp_ready_ = false;
+    last_report_.nav_ready = false;
+    last_report_.grasp_ready = false;
+    last_report_.stationary_latched = false;
+    last_report_.drift_type = DriftType::NOT_SEEDED;
+    last_report_.grasp_blocker_reason = "System readiness explicitly reset";
+
+    std_msgs::msg::Bool false_msg;
+    false_msg.data = false;
+    nav_ready_pub_->publish(false_msg);
+    grasp_ready_pub_->publish(false_msg);
+
+    std_msgs::msg::Bool stat_msg;
+    stat_msg.data = last_report_.is_stationary;
+    is_stationary_pub_->publish(stat_msg);
+
+    res->success = true;
+    res->message = "Readiness state, global EKF seed, and TF buffer successfully reset";
   }
 
 } // namespace lekiwi_motion

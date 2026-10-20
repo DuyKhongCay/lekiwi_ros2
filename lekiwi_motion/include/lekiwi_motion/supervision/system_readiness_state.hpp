@@ -142,6 +142,7 @@ namespace lekiwi_motion
     double nav_odom_max_age_sec{0.50};       ///< Max age for local wheel odometry (s).
     double max_stop_velocity{0.03};          ///< Linear speed threshold below which robot is stationary (m/s).
     double max_stop_angular_vel{0.08};       ///< Angular speed threshold below which robot is stationary (rad/s).
+    double stationary_unlatch_debounce_sec{0.25}; ///< Minimum sustained motion duration to break stationary latch (s).
     bool require_global_ekf_seed{true};      ///< Require global EKF convergence at least once before nav ready.
     std::vector<std::string> arm_joints{
         "arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex",
@@ -242,6 +243,8 @@ namespace lekiwi_motion
     EvaluatorConfig config_;          ///< Active configuration thresholds.
     bool global_ekf_seeded_{false};   ///< Latched status indicating initial EKF convergence.
     bool stationary_latched_{false};  ///< Latch preserving grasp readiness while robot stays motionless.
+    bool was_stationary_{false};      ///< Previous evaluated stationary state.
+    double non_stationary_since_sec_{-1.0}; ///< Timestamp when velocity first exceeded stop bounds (-1 if stationary).
   };
 
 } // namespace lekiwi_motion

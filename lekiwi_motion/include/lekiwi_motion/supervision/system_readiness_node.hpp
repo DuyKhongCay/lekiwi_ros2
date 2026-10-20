@@ -129,6 +129,15 @@ namespace lekiwi_motion
             const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
             std::shared_ptr<std_srvs::srv::Trigger::Response> res);
 
+        /**
+         * @brief Service callback resetting readiness state, EKF seeds, stationary latches, and TF cache.
+         * @param[in] req Trigger service request.
+         * @param[out] res Trigger service response populated with reset confirmation.
+         */
+        void handle_reset_query(
+            const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+            std::shared_ptr<std_srvs::srv::Trigger::Response> res);
+
         /// TF2 buffer and listener for transform chain verification.
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -141,13 +150,15 @@ namespace lekiwi_motion
         rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr global_odom_sub_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_sub_;
 
-        /// Heartbeat publishers for nav and grasp readiness flags.
+        /// Heartbeat publishers for nav, grasp readiness, and stationary flags.
         rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr nav_ready_pub_;
         rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr grasp_ready_pub_;
+        rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr is_stationary_pub_;
 
-        /// Query services for synchronous readiness interrogation.
+        /// Query and management services for readiness supervision.
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr nav_readiness_srv_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr grasp_readiness_srv_;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_readiness_srv_;
 
         /// Periodic timer driving evaluation loop.
         rclcpp::TimerBase::SharedPtr eval_timer_;
