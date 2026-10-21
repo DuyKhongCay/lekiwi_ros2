@@ -87,6 +87,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Delete existing dataset directory before converting",
     )
+    parser.add_argument(
+        "--task-types",
+        nargs="+",
+        choices=["move", "clear", "pick", "place"],
+        default=None,
+        help="Filter episodes by manipulation primitive(s) ('move', 'clear', 'pick', 'place')",
+    )
     return parser
 
 
@@ -98,6 +105,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg = load_config(args.config)
         logger.info("Loaded configuration from %s (robot=%s, fps=%d)", args.config, cfg.robot_type, cfg.fps)
 
+        if args.task_types is not None:
+            cfg.include_task_types = [t.lower() for t in args.task_types]
+            logger.info("Overriding include_task_types from CLI: %s", cfg.include_task_types)
+
         convert_all_bags(
             cfg=cfg,
             input_dir=args.input_dir,
@@ -108,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
             push_to_hub=args.push_hub,
             collect_p95=args.sync_p95,
             overwrite=args.overwrite,
+            allowed_task_types=cfg.include_task_types,
         )
         return 0
 

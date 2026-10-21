@@ -12,7 +12,10 @@ import numpy as np
 try:
     import imageio.v3 as iio
 except ImportError:
-    import imageio as iio
+    try:
+        import imageio as iio
+    except ImportError:
+        iio = None
 
 from chess_rosbag_to_lerobot.config import FeatureSpec
 
@@ -71,7 +74,12 @@ def _ensure_shape(arr: np.ndarray, spec: FeatureSpec) -> np.ndarray:
 def decode_compressed_image(msg: Any, spec: FeatureSpec) -> np.ndarray:
     """Decode JPEG/PNG compressed image into HWC uint8 RGB numpy array."""
     buf = bytes(msg.data)
-    img = iio.imread(io.BytesIO(buf))
+    if iio is not None:
+        img = iio.imread(io.BytesIO(buf))
+    else:
+        from PIL import Image
+        with Image.open(io.BytesIO(buf)) as pil_img:
+            img = np.array(pil_img)
 
     if img.ndim == 2:  # Grayscale -> 3 channel
         img = np.stack([img, img, img], axis=-1)

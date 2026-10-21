@@ -11,13 +11,23 @@ default_max_age_s: 0.04
 # Fallback task instruction if not present in episode custom_data
 task: "Chess pick and place move"
 
+# Allowed task primitives to convert: "move", "clear", "pick", "place"
+include_task_types:
+  - "move"
+  - "clear"
+  - "pick"
+  - "place"
+
 # Chessboard geometry settings (Single Source of Truth matching chessboard_pose_estimator)
 chessboard:
   board_frame: "chessboard_frame"
   base_frame: "base_footprint"
   square_size_m: 0.037        # square size
   grasp_clearance_z_m: 0.035  # Height above board surface for grasp point
-  origin_at_center: true      # (0, 0, 0) is at center of the 8x8 chessboard
+  landmarks:
+    stow: [0.0704, -0.1882, 0.1757]
+    clear_left: [-0.0029, 0.1435, 0.1702]
+    clear_right: [-0.0027, -0.1451, 0.1633]
 
 # Standard 6-DOF joint names for LeKiwi Arm (lekiwi_manipulation SSOT)
 joint_names: &arm_joints
@@ -64,9 +74,9 @@ features:
     max_age_s: 0.04
     names: *arm_joints
 
-  # --- 4. Chess Context: 3D pick & place target coordinates ---
-  # LeRobot Environment State conditioning (vector 6D: [pick_point(3), place_point(3)]) for ACT / Diffusion Policy
+  # --- 4. Chess Context: 10D Multi-Primitive Spatial conditioning ---
+  # LeRobot Environment State vector: [source(3), target(3), is_move, is_clear, is_pick, is_place]
   - key: "observation.environment_state"
     msg_type: "spatial/environment_state"
-    shape: [6]  # [pick_x, pick_y, pick_z, place_x, place_y, place_z] relative to base_footprint / chessboard_frame
+    shape: [10]
 
