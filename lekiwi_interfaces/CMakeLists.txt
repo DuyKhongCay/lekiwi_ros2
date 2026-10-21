@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ResetMotorBus.srv"
   "srv/CheckMoveFeasibility.srv"
   "srv/GoToNamedPose.srv"
+  "srv/SetFen.srv"
   "action/ComputeBestMove.action"
   "action/ExecuteChessMove.action"
   DEPENDENCIES std_msgs geometry_msgs sensor_msgs
