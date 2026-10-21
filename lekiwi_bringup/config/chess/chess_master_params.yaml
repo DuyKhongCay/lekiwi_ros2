@@ -11,6 +11,7 @@
     # Game State Tracker & Auto-play parameters
     raw_fen_topic: "/chess/raw_fen"
     game_status_topic: "/chess/game_status"
+    set_fen_service: "/chess/set_fen"
     debounce_frames: 3
     auto_trigger_engine: true     # Enable self-play in dev phase; disable when orchestrator manages turns
     robot_color: "black"          # Robot player piece color ("black" or "white")

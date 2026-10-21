@@ -162,4 +162,107 @@ namespace lekiwi_chess_master::domain
     return details;
   }
 
+  bool validate_and_parse_fen(
+      std::string_view fen_str,
+      chess::Board &out_board,
+      std::string &out_error)
+  {
+    // 1. Trim leading and trailing whitespace
+    while (!fen_str.empty() && std::isspace(static_cast<unsigned char>(fen_str.front())))
+    {
+      fen_str.remove_prefix(1);
+    }
+    while (!fen_str.empty() && std::isspace(static_cast<unsigned char>(fen_str.back())))
+    {
+      fen_str.remove_suffix(1);
+    }
+
+    if (fen_str.empty())
+    {
+      out_error = "FEN string is empty";
+      return false;
+    }
+
+    // 2. Validate placement token syntax (8 ranks, each summing to 8 squares)
+    auto space_idx = fen_str.find(' ');
+    std::string_view placement = (space_idx != std::string_view::npos)
+                                     ? fen_str.substr(0, space_idx)
+                                     : fen_str;
+
+    int rank_count = 1;
+    int current_rank_squares = 0;
+    for (char c : placement)
+    {
+      if (c == '/')
+      {
+        if (current_rank_squares != 8)
+        {
+          out_error = "Invalid rank in piece placement: rank does not sum to 8 squares";
+          return false;
+        }
+        rank_count++;
+        current_rank_squares = 0;
+      }
+      else if (c >= '1' && c <= '8')
+      {
+        current_rank_squares += (c - '0');
+      }
+      else if (std::string_view("PNBRQKpnbrqk").find(c) != std::string_view::npos)
+      {
+        current_rank_squares += 1;
+      }
+      else
+      {
+        out_error = std::string("Invalid character in piece placement: '") + c + "'";
+        return false;
+      }
+    }
+    if (rank_count != 8 || current_rank_squares != 8)
+    {
+      out_error = "Piece placement must have exactly 8 ranks of 8 squares";
+      return false;
+    }
+
+    // 3. Attempt to load into scratch chess::Board
+    chess::Board scratch;
+    if (!scratch.setFen(fen_str))
+    {
+      out_error = "Failed to parse FEN in chess engine library";
+      return false;
+    }
+
+    // 4. Enforce exactly 1 White King and 1 Black King
+    if (scratch.pieces(chess::PieceType::KING, chess::Color::WHITE).count() != 1)
+    {
+      out_error = "Position must have exactly one White king";
+      return false;
+    }
+    if (scratch.pieces(chess::PieceType::KING, chess::Color::BLACK).count() != 1)
+    {
+      out_error = "Position must have exactly one Black king";
+      return false;
+    }
+
+    // 5. Enforce pawns cannot be on 1st or 8th rank
+    auto rank_1_8 = chess::Bitboard(chess::Rank::RANK_1) | chess::Bitboard(chess::Rank::RANK_8);
+    auto all_pawns = scratch.pieces(chess::PieceType::PAWN);
+    if ((all_pawns & rank_1_8) != 0ull)
+    {
+      out_error = "Pawns cannot be placed on the 1st or 8th rank";
+      return false;
+    }
+
+    // 6. Enforce that inactive side is not under check
+    chess::Color inactive_color = ~scratch.sideToMove();
+    chess::Square inactive_king = scratch.kingSq(inactive_color);
+    if (scratch.isAttacked(inactive_king, scratch.sideToMove()))
+    {
+      out_error = "Opposing king is under attack (illegal state for player to move)";
+      return false;
+    }
+
+    out_board = scratch;
+    return true;
+  }
+
 } // namespace lekiwi_chess_master::domain
