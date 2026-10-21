@@ -550,6 +550,19 @@ void ManipulationActionServer::execute_move(const std::shared_ptr<GoalHandleChes
     return;
   }
 
+  if (ctx.goal->is_capture) {
+    const std::string & instruction = ctx.goal->instruction;
+    const bool has_left = instruction.find("left") != std::string::npos;
+    const bool has_right = instruction.find("right") != std::string::npos;
+    if (!has_left && !has_right) {
+      abort_move(
+        ctx,
+        "Capture instruction must explicitly specify 'left' or 'right' onboard bin: " + instruction,
+        0.0);
+      return;
+    }
+  }
+
   const auto [phase_names, phase_targets] = build_active_phase_plan(
     ctx.goal, is_pure_pick, is_pure_place, waypoints->pick, waypoints->place);
 
@@ -693,8 +706,15 @@ ManipulationActionServer::build_active_phase_plan(
 {
   std::lock_guard<std::mutex> lock(planner_mutex_);
   if (goal->is_capture) {
-    const arm::ClearBinSide bin_side = (goal->pick_point.y >= 0.0) ?
-      arm::ClearBinSide::LEFT : arm::ClearBinSide::RIGHT;
+    arm::ClearBinSide bin_side = arm::ClearBinSide::LEFT;
+    if (goal->instruction.find("right") != std::string::npos) {
+      bin_side = arm::ClearBinSide::RIGHT;
+    } else if (goal->instruction.find("left") != std::string::npos) {
+      bin_side = arm::ClearBinSide::LEFT;
+    } else {
+      throw std::invalid_argument(
+        "Capture move instruction must explicitly specify 'left' or 'right' bin: " + goal->instruction);
+    }
     return {
       arm::ArmMotionPlanner::kClearPhases,
       arm_motion_planner_.build_clear_targets(pick_pair->approach, pick_pair->descend, bin_side)

@@ -158,7 +158,7 @@ TEST_F(ArmMotionPlannerTest, BuildPickAndPlacePhaseTargetsSequences)
   const std::vector<double> place_approach{0.6, 0.7, 0.8, 0.9, 1.0, 0.00};
   const std::vector<double> place_descend{0.6, 0.5, 0.8, 0.9, 1.0, 0.00};
 
-  // 1. Direct Pick-and-Place (8 phases)
+  // 1. Direct Pick-and-Place (9 phases, concludes in transit stow with closed gripper)
   const auto pnp_phases = planner_->build_phase_targets(
     pick_approach, pick_descend, place_approach, place_descend);
   EXPECT_EQ(pnp_phases.size(), ArmMotionPlanner::kPickAndPlacePhases.size());
@@ -167,6 +167,8 @@ TEST_F(ArmMotionPlannerTest, BuildPickAndPlacePhaseTargetsSequences)
   }
   EXPECT_DOUBLE_EQ(pnp_phases.at("GRASP").back(), 0.00);    // closed on piece
   EXPECT_DOUBLE_EQ(pnp_phases.at("RELEASE").back(), 1.50);  // open release
+  EXPECT_DOUBLE_EQ(pnp_phases.at("RETRACT_STOW")[1], -1.57);
+  EXPECT_DOUBLE_EQ(pnp_phases.at("RETRACT_STOW").back(), 0.00); // closed stow
 
   // 2. Atomic Pick (5 phases, concludes in transit stow with closed gripper)
   const auto pick_phases = planner_->build_pick_targets(pick_approach, pick_descend);
@@ -177,7 +179,7 @@ TEST_F(ArmMotionPlannerTest, BuildPickAndPlacePhaseTargetsSequences)
   EXPECT_DOUBLE_EQ(pick_phases.at("RETRACT_STOW")[1], -1.57);
   EXPECT_DOUBLE_EQ(pick_phases.at("RETRACT_STOW").back(), 0.00);
 
-  // 3. Atomic Place (5 phases, ascends in Z then returns to stow with open gripper)
+  // 3. Atomic Place (5 phases, ascends in Z then returns to stow with closed gripper)
   const auto place_phases = planner_->build_place_targets(place_approach, place_descend);
   EXPECT_EQ(place_phases.size(), ArmMotionPlanner::kPlacePhases.size());
   for (const auto & phase_name : ArmMotionPlanner::kPlacePhases) {
@@ -186,7 +188,7 @@ TEST_F(ArmMotionPlannerTest, BuildPickAndPlacePhaseTargetsSequences)
   EXPECT_DOUBLE_EQ(place_phases.at("RETRACT")[0], place_approach[0]);
   EXPECT_DOUBLE_EQ(place_phases.at("RETRACT").back(), 1.50);
   EXPECT_DOUBLE_EQ(place_phases.at("RETRACT_STOW")[1], -1.57);
-  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT_STOW").back(), 1.50);
+  EXPECT_DOUBLE_EQ(place_phases.at("RETRACT_STOW").back(), 0.00);
 }
 
 TEST_F(ArmMotionPlannerTest, BuildClearPhaseTargetsSequences)
@@ -207,6 +209,9 @@ TEST_F(ArmMotionPlannerTest, BuildClearPhaseTargetsSequences)
   EXPECT_DOUBLE_EQ(left_phases.at("DROP_CLEAR")[0], 1.20);
   EXPECT_DOUBLE_EQ(left_phases.at("DROP_CLEAR").back(), 0.00);
   EXPECT_DOUBLE_EQ(left_phases.at("RELEASE_CLEAR").back(), 1.50);
+  EXPECT_DOUBLE_EQ(left_phases.at("RETRACT_STOW")[1], -1.57);
+  EXPECT_DOUBLE_EQ(left_phases.at("RETRACT_STOW").back(), 0.00);
+  EXPECT_TRUE(left_phases.find("RETRACT_CLEAR") == left_phases.end());
 
   // Test RIGHT graveyard bin
   const auto right_phases = planner_->build_clear_targets(pick_approach, pick_descend, ClearBinSide::RIGHT);
@@ -214,6 +219,9 @@ TEST_F(ArmMotionPlannerTest, BuildClearPhaseTargetsSequences)
   EXPECT_DOUBLE_EQ(right_phases.at("DROP_CLEAR")[0], -1.20);
   EXPECT_DOUBLE_EQ(right_phases.at("DROP_CLEAR").back(), 0.00);
   EXPECT_DOUBLE_EQ(right_phases.at("RELEASE_CLEAR").back(), 1.50);
+  EXPECT_DOUBLE_EQ(right_phases.at("RETRACT_STOW")[1], -1.57);
+  EXPECT_DOUBLE_EQ(right_phases.at("RETRACT_STOW").back(), 0.00);
+  EXPECT_TRUE(right_phases.find("RETRACT_CLEAR") == right_phases.end());
 }
 
 TEST_F(ArmMotionPlannerTest, GetNamedPoseReturnsConfiguredLandmarks)

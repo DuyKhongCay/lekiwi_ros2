@@ -149,7 +149,7 @@ TEST_F(ManipulationActionServerTest, ActionClientExecutesCaptureMoveToClearBinMo
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
 
   ManipulationActionServer::ExecuteChessMove::Goal goal;
-  goal.instruction = "Clear d5";
+  goal.instruction = "Clear d5 to left onboard bin";
   goal.from_square = "d5";
   goal.to_square = "";
   goal.is_capture = true;
@@ -169,6 +169,102 @@ TEST_F(ManipulationActionServerTest, ActionClientExecutesCaptureMoveToClearBinMo
 
   EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
   EXPECT_TRUE(wrapped_result.result->success);
+
+  executor.cancel();
+  spin_thread.join();
+}
+
+TEST_F(ManipulationActionServerTest, ActionClientSucceedsClearRightMove)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("mock_execution", true);
+  options.append_parameter_override("default_velocity", 20.0);
+  options.append_parameter_override("action_name", "/test_manip/execute_clear_right_client");
+
+  auto server_node = std::make_shared<ManipulationActionServer>(options);
+  server_node->accept_robot_description(load_urdf());
+
+  auto client_node = std::make_shared<rclcpp::Node>("test_capture_move_client_right");
+  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
+    client_node, "/test_manip/execute_clear_right_client");
+
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(client_node);
+
+  std::thread spin_thread([&executor]() { executor.spin(); });
+
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
+
+  ManipulationActionServer::ExecuteChessMove::Goal goal;
+  goal.instruction = "Clear d5 to right onboard bin";
+  goal.from_square = "d5";
+  goal.to_square = "";
+  goal.is_capture = true;
+  goal.target_frame = "base_footprint";
+  goal.pick_point.x = 0.20;
+  goal.pick_point.y = -0.02;
+  goal.pick_point.z = 0.05;
+
+  auto send_goal_future = client->async_send_goal(goal);
+  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+  auto goal_handle = send_goal_future.get();
+  ASSERT_NE(goal_handle, nullptr);
+
+  auto result_future = client->async_get_result(goal_handle);
+  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+  auto wrapped_result = result_future.get();
+
+  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
+  EXPECT_TRUE(wrapped_result.result->success);
+
+  executor.cancel();
+  spin_thread.join();
+}
+
+TEST_F(ManipulationActionServerTest, ActionClientAbortsWhenCaptureMissingBinSide)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("mock_execution", true);
+  options.append_parameter_override("default_velocity", 20.0);
+  options.append_parameter_override("action_name", "/test_manip/execute_clear_ambiguous_client");
+
+  auto server_node = std::make_shared<ManipulationActionServer>(options);
+  server_node->accept_robot_description(load_urdf());
+
+  auto client_node = std::make_shared<rclcpp::Node>("test_capture_move_client_ambiguous");
+  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
+    client_node, "/test_manip/execute_clear_ambiguous_client");
+
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(client_node);
+
+  std::thread spin_thread([&executor]() { executor.spin(); });
+
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
+
+  ManipulationActionServer::ExecuteChessMove::Goal goal;
+  goal.instruction = "Clear d5 to onboard bin";
+  goal.from_square = "d5";
+  goal.to_square = "";
+  goal.is_capture = true;
+  goal.target_frame = "base_footprint";
+  goal.pick_point.x = 0.20;
+  goal.pick_point.y = 0.02;
+  goal.pick_point.z = 0.05;
+
+  auto send_goal_future = client->async_send_goal(goal);
+  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+  auto goal_handle = send_goal_future.get();
+  ASSERT_NE(goal_handle, nullptr);
+
+  auto result_future = client->async_get_result(goal_handle);
+  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+  auto wrapped_result = result_future.get();
+
+  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_FALSE(wrapped_result.result->success);
 
   executor.cancel();
   spin_thread.join();
