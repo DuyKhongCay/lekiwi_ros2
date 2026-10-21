@@ -14,6 +14,7 @@
 
 #include "lekiwi_motion/arm/arm_trajectory_executor.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <future>
 #include <thread>
@@ -46,8 +47,14 @@ ArmTrajectoryExecutor::ArmTrajectoryExecutor(
   rclcpp::Node * node,
   ArmTrajectoryExecutorConfig config)
 : node_(node),
-  config_(std::move(config))
+  config_(std::move(config)),
+  motion_planner_(
+    config_.arm_joints,
+    config_.gripper_cfg,
+    config_.named_poses,
+    config_.sampling_rate_hz)
 {
+  init_parameters();
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     for (const auto & j : config_.arm_joints) {
@@ -68,6 +75,59 @@ void ArmTrajectoryExecutor::stop() noexcept
   is_shutting_down_.store(true, std::memory_order_release);
 }
 
+void ArmTrajectoryExecutor::init_parameters()
+{
+  if (!node_) {
+    return;
+  }
+
+  config_.arm_joints = declare_or_get_param<std::vector<std::string>>(
+    node_, "arm_joints", config_.arm_joints);
+  config_.default_velocity = declare_or_get_param<double>(
+    node_, "default_velocity", config_.default_velocity);
+  config_.sampling_rate_hz = declare_or_get_param<double>(
+    node_, "sampling_rate_hz", config_.sampling_rate_hz);
+  config_.controller_action_name = declare_or_get_param<std::string>(
+    node_, "controller_action_name", config_.controller_action_name);
+  config_.joint_states_topic = declare_or_get_param<std::string>(
+    node_, "joint_states_topic", config_.joint_states_topic);
+  config_.robot_description_topic = declare_or_get_param<std::string>(
+    node_, "robot_description_topic", config_.robot_description_topic);
+  config_.board_frame = declare_or_get_param<std::string>(
+    node_, "board_frame", config_.board_frame);
+  config_.base_frame = declare_or_get_param<std::string>(
+    node_, "base_frame", config_.base_frame);
+  config_.tip_frame = declare_or_get_param<std::string>(
+    node_, "tip_frame", config_.tip_frame);
+  config_.default_pitch = declare_or_get_param<double>(
+    node_, "planning.default_pitch", config_.default_pitch);
+  config_.default_roll = declare_or_get_param<double>(
+    node_, "planning.default_roll", config_.default_roll);
+  config_.mock_execution = declare_or_get_param<bool>(
+    node_, "mock_execution", config_.mock_execution);
+
+  config_.gripper_cfg.open_rad = declare_or_get_param<double>(
+    node_, "gripper.open", config_.gripper_cfg.open_rad);
+  config_.gripper_cfg.closed_rad = declare_or_get_param<double>(
+    node_, "gripper.closed", config_.gripper_cfg.closed_rad);
+
+  config_.named_poses.approach = declare_or_get_param<std::vector<double>>(
+    node_, "named_poses.approach", config_.named_poses.approach);
+  config_.named_poses.stow = declare_or_get_param<std::vector<double>>(
+    node_, "named_poses.stow", config_.named_poses.stow);
+  config_.named_poses.clear_left = declare_or_get_param<std::vector<double>>(
+    node_, "named_poses.clear_left", config_.named_poses.clear_left);
+  config_.named_poses.clear_right = declare_or_get_param<std::vector<double>>(
+    node_, "named_poses.clear_right", config_.named_poses.clear_right);
+
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  motion_planner_ = arm::ArmMotionPlanner(
+    config_.arm_joints,
+    config_.gripper_cfg,
+    config_.named_poses,
+    config_.sampling_rate_hz);
+}
+
 void ArmTrajectoryExecutor::init_trajectory_client_and_subscribers()
 {
   cb_group_controller_client_ = node_->create_callback_group(
@@ -80,7 +140,7 @@ void ArmTrajectoryExecutor::init_trajectory_client_and_subscribers()
 
   joint_state_sub_ = node_->create_subscription<sensor_msgs::msg::JointState>(
     config_.joint_states_topic,
-    rclcpp::SystemDefaultsQoS(),
+    rclcpp::SensorDataQoS(),
     std::bind(&ArmTrajectoryExecutor::on_joint_state, this, std::placeholders::_1),
     sub_options);
 
@@ -109,32 +169,48 @@ void ArmTrajectoryExecutor::init_kinematics_and_tf()
   qos_profile.transient_local();
   qos_profile.reliable();
   robot_desc_sub_ = node_->create_subscription<std_msgs::msg::String>(
-    "robot_description",
+    config_.robot_description_topic,
     qos_profile,
     std::bind(&ArmTrajectoryExecutor::on_robot_description, this, std::placeholders::_1));
+
+  const std::string urdf_param = declare_or_get_param<std::string>(
+    node_, "robot_description", "");
+  if (!urdf_param.empty()) {
+    if (!accept_robot_description(urdf_param)) {
+      throw std::runtime_error(
+        "ArmTrajectoryExecutor: Failed to initialize kinematics from 'robot_description' parameter: " +
+        kinematics_error_msg());
+    }
+  }
 }
 
 void ArmTrajectoryExecutor::on_robot_description(const std_msgs::msg::String::ConstSharedPtr msg)
 {
-  if (msg) {
+  if (msg && !msg->data.empty()) {
     accept_robot_description(msg->data);
   }
 }
 
-void ArmTrajectoryExecutor::accept_robot_description(const std::string & urdf_xml)
+bool ArmTrajectoryExecutor::accept_robot_description(const std::string & urdf_xml)
 {
+  std::lock_guard<std::mutex> lock(kinematics_mutex_);
+  if (is_kinematics_initialized_.load(std::memory_order_relaxed)) {
+    return true;
+  }
   try {
     auto urdf_model = urdf::parseURDF(urdf_xml);
     if (!urdf_model) {
-      RCLCPP_WARN(node_->get_logger(), "Failed to parse robot_description XML");
-      return;
+      has_kinematics_failed_.store(true, std::memory_order_release);
+      kinematics_error_msg_ = "Failed to parse robot_description XML";
+      RCLCPP_WARN(node_->get_logger(), "%s", kinematics_error_msg_.c_str());
+      return false;
     }
     if (config_.arm_joints.size() < 5) {
-      RCLCPP_ERROR(
-        node_->get_logger(),
-        "Kinematics extraction failed: Expected at least 5 arm joints, but only %zu configured.",
-        config_.arm_joints.size());
-      return;
+      has_kinematics_failed_.store(true, std::memory_order_release);
+      kinematics_error_msg_ = "Expected at least 5 arm joints, got " +
+        std::to_string(config_.arm_joints.size());
+      RCLCPP_ERROR(node_->get_logger(), "%s", kinematics_error_msg_.c_str());
+      return false;
     }
 
     workspace::KinematicsModel new_model;
@@ -146,23 +222,61 @@ void ArmTrajectoryExecutor::accept_robot_description(const std::string & urdf_xm
         *urdf_model, config_.base_frame, config_.tip_frame,
         arm_5_joints, new_model, err, 0.05))
     {
-      RCLCPP_WARN(node_->get_logger(), "Kinematics extraction failed: %s", err.c_str());
-      return;
+      has_kinematics_failed_.store(true, std::memory_order_release);
+      kinematics_error_msg_ = "Kinematics extraction failed: " + err;
+      RCLCPP_WARN(node_->get_logger(), "%s", kinematics_error_msg_.c_str());
+      return false;
     }
 
-    auto solver = std::make_unique<workspace::SO101AnalyticalSolver>(new_model);
-    const double reach = solver->reach_bound();
-    {
-      std::lock_guard<std::mutex> lock(kinematics_mutex_);
-      analytical_solver_ = std::move(solver);
-    }
+    kinematics_model_ = new_model;
+    analytical_solver_ = std::make_shared<workspace::SO101AnalyticalSolver>(kinematics_model_);
+    is_kinematics_initialized_.store(true, std::memory_order_release);
+    has_kinematics_failed_.store(false, std::memory_order_release);
+    kinematics_error_msg_.clear();
+
+    const double reach = analytical_solver_->reach_bound();
     RCLCPP_INFO(
       node_->get_logger(),
-      "ManipulationActionServer IK solver ready (reach: %.3f m)",
+      "Kinematics & Analytical IK initialized successfully (reach envelope: %.3f m)",
       reach);
+
+    if (kinematics_callback_) {
+      kinematics_callback_(analytical_solver_, kinematics_model_);
+    }
+    return true;
   } catch (const std::exception & e) {
-    RCLCPP_WARN(node_->get_logger(), "Exception during kinematics initialization: %s", e.what());
+    has_kinematics_failed_.store(true, std::memory_order_release);
+    kinematics_error_msg_ = "Exception during kinematics initialization: " + std::string(e.what());
+    RCLCPP_WARN(node_->get_logger(), "%s", kinematics_error_msg_.c_str());
+    return false;
   }
+}
+
+void ArmTrajectoryExecutor::set_kinematics_callback(KinematicsCallback cb)
+{
+  std::lock_guard<std::mutex> lock(kinematics_mutex_);
+  kinematics_callback_ = std::move(cb);
+  if (is_kinematics_initialized_.load(std::memory_order_acquire) && kinematics_callback_) {
+    kinematics_callback_(analytical_solver_, kinematics_model_);
+  }
+}
+
+std::string ArmTrajectoryExecutor::kinematics_error_msg() const
+{
+  std::lock_guard<std::mutex> lock(kinematics_mutex_);
+  return kinematics_error_msg_;
+}
+
+std::shared_ptr<workspace::SO101AnalyticalSolver> ArmTrajectoryExecutor::analytical_solver() const
+{
+  std::lock_guard<std::mutex> lock(kinematics_mutex_);
+  return analytical_solver_;
+}
+
+workspace::KinematicsModel ArmTrajectoryExecutor::kinematics_model() const
+{
+  std::lock_guard<std::mutex> lock(kinematics_mutex_);
+  return kinematics_model_;
 }
 
 void ArmTrajectoryExecutor::on_joint_state(const sensor_msgs::msg::JointState::ConstSharedPtr msg)
@@ -175,6 +289,28 @@ void ArmTrajectoryExecutor::on_joint_state(const sensor_msgs::msg::JointState::C
     auto it = current_joints_.find(msg->name[i]);
     if (it != current_joints_.end()) {
       it->second = msg->position[i];
+    }
+  }
+
+  if (!has_joint_states_.load(std::memory_order_relaxed)) {
+    if (config_.arm_joints.size() >= 5) {
+      bool all_found = true;
+      for (size_t i = 0; i < 5; ++i) {
+        bool found = false;
+        for (const auto & name : msg->name) {
+          if (name == config_.arm_joints[i]) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          all_found = false;
+          break;
+        }
+      }
+      if (all_found) {
+        has_joint_states_.store(true, std::memory_order_release);
+      }
     }
   }
 }
@@ -190,6 +326,57 @@ std::vector<double> ArmTrajectoryExecutor::get_current_positions_or_default() co
     }
   }
   return pos;
+}
+
+std::optional<std::array<double, 5>> ArmTrajectoryExecutor::get_active_arm_positions() const
+{
+  if (!has_joint_states()) {
+    return std::nullopt;
+  }
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (config_.arm_joints.size() < 5) {
+    return std::nullopt;
+  }
+  std::array<double, 5> pos{};
+  for (size_t i = 0; i < 5; ++i) {
+    auto it = current_joints_.find(config_.arm_joints[i]);
+    if (it == current_joints_.end()) {
+      return std::nullopt;
+    }
+    pos[i] = it->second;
+  }
+  return pos;
+}
+
+std::optional<std::vector<double>> ArmTrajectoryExecutor::get_named_pose(
+  const std::string & name) const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.get_named_pose(name);
+}
+
+GripperConfig ArmTrajectoryExecutor::gripper_config() const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.gripper_config();
+}
+
+double ArmTrajectoryExecutor::clamp_gripper(double target_rad) const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.clamp_gripper(target_rad);
+}
+
+double ArmTrajectoryExecutor::gripper_open_rad() const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.gripper_open_rad();
+}
+
+double ArmTrajectoryExecutor::gripper_closed_rad() const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.gripper_closed_rad();
 }
 
 std::optional<geometry_msgs::msg::PointStamped> ArmTrajectoryExecutor::transform_to_base(
@@ -255,10 +442,115 @@ std::optional<std::vector<double>> ArmTrajectoryExecutor::resolve_point_ik(
   return joint_positions;
 }
 
+std::unordered_map<std::string, std::vector<double>> ArmTrajectoryExecutor::build_phase_targets(
+  const std::vector<double> & pick_approach,
+  const std::vector<double> & pick_descend,
+  const std::vector<double> & place_approach,
+  const std::vector<double> & place_descend) const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.build_phase_targets(
+    pick_approach, pick_descend, place_approach, place_descend);
+}
+
+std::unordered_map<std::string, std::vector<double>> ArmTrajectoryExecutor::build_clear_targets(
+  const std::vector<double> & pick_approach,
+  const std::vector<double> & pick_descend,
+  arm::ClearBinSide side) const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.build_clear_targets(pick_approach, pick_descend, side);
+}
+
+std::unordered_map<std::string, std::vector<double>> ArmTrajectoryExecutor::build_pick_targets(
+  const std::vector<double> & pick_approach,
+  const std::vector<double> & pick_descend) const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.build_pick_targets(pick_approach, pick_descend);
+}
+
+std::unordered_map<std::string, std::vector<double>> ArmTrajectoryExecutor::build_place_targets(
+  const std::vector<double> & place_approach,
+  const std::vector<double> & place_descend) const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.build_place_targets(place_approach, place_descend);
+}
+
+trajectory_msgs::msg::JointTrajectory ArmTrajectoryExecutor::plan_trajectory_at_velocity(
+  const std::vector<double> & start_joints,
+  const std::vector<double> & target_joints,
+  double target_velocity_rad_s) const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  const double vel = (target_velocity_rad_s > 0.0) ? target_velocity_rad_s : config_.default_velocity;
+  return motion_planner_.plan_trajectory_at_velocity(
+    start_joints, target_joints, vel, config_.sampling_rate_hz);
+}
+
+std::pair<bool, std::string> ArmTrajectoryExecutor::execute_joint_target(
+  const std::vector<double> & target_positions,
+  const std::string & label,
+  double velocity,
+  std::function<bool()> is_canceling)
+{
+  if (is_shutting_down_.load(std::memory_order_acquire)) {
+    return {false, "Executor shutting down"};
+  }
+
+  if (target_positions.size() != config_.arm_joints.size()) {
+    return {false, "Target joints dimension mismatch"};
+  }
+
+  const auto current_pos = get_current_positions_or_default();
+  trajectory_msgs::msg::JointTrajectory traj;
+  try {
+    std::lock_guard<std::mutex> lock(planner_mutex_);
+    const double vel = (velocity > 0.0) ? velocity : config_.default_velocity;
+    traj = motion_planner_.plan_trajectory_at_velocity(
+      current_pos, target_positions, vel, config_.sampling_rate_hz);
+  } catch (const std::exception & exc) {
+    return {false, "Trajectory planning failed for '" + label + "': " + exc.what()};
+  }
+
+  auto [ok, msg] = execute_trajectory(traj, is_canceling);
+  if (!ok) {
+    return {false, "Execution failed for '" + label + "': " + msg};
+  }
+  return {true, "Successfully executed target: " + label};
+}
+
+std::pair<bool, std::string> ArmTrajectoryExecutor::execute_named_pose(
+  const std::string & name,
+  double velocity,
+  std::function<bool()> is_canceling)
+{
+  const auto target_opt = get_named_pose(name);
+  if (!target_opt.has_value()) {
+    return {false, "Unknown named pose: " + name};
+  }
+
+  auto [ok, msg] = execute_joint_target(*target_opt, name, velocity, is_canceling);
+  if (!ok) {
+    return {false, msg};
+  }
+  return {true, "Successfully moved to pose: " + name};
+}
+
 std::pair<bool, std::string> ArmTrajectoryExecutor::execute_trajectory(
   const trajectory_msgs::msg::JointTrajectory & traj,
   std::function<bool()> is_canceling)
 {
+  if (is_shutting_down_.load(std::memory_order_acquire)) {
+    return {false, "Executor shutting down"};
+  }
+
+  TrajectoryExecutionGuard guard(is_trajectory_busy_);
+  if (!guard.acquired()) {
+    return {false, "Arm is currently busy moving a trajectory"};
+  }
+
   if (config_.mock_execution) {
     return execute_mock_trajectory(traj, is_canceling);
   }
