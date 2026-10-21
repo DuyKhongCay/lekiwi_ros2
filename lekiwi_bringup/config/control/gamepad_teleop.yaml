@@ -154,14 +154,14 @@ joy_teleop:
     lekiwi_arm_toggle_gripper:
       type: service
       interface_type: std_srvs/srv/Trigger
-      service_name: /arm/toggle_gripper
+      service_name: /cartesian_jog_server_node/toggle_gripper
       buttons: [4, 10] # LB + R3
 
     # ── ARM CONTROLLER: NAMED POSES (Deadman: Start / Button 7) ────────────────
     lekiwi_arm_pose_approach:
       type: service
       interface_type: lekiwi_interfaces/srv/GoToNamedPose
-      service_name: /arm/go_to_named_pose
+      service_name: /cartesian_jog_server_node/go_to_named_pose
       buttons: [4, 3] # Start + Y
       service_request:
         pose_name: "approach"
@@ -169,7 +169,7 @@ joy_teleop:
     lekiwi_arm_pose_stow:
       type: service
       interface_type: lekiwi_interfaces/srv/GoToNamedPose
-      service_name: /arm/go_to_named_pose
+      service_name: /cartesian_jog_server_node/go_to_named_pose
       buttons: [4, 0] # A
       service_request:
         pose_name: "stow"
@@ -177,7 +177,7 @@ joy_teleop:
     lekiwi_arm_pose_clear_left:
       type: service
       interface_type: lekiwi_interfaces/srv/GoToNamedPose
-      service_name: /arm/go_to_named_pose
+      service_name: /cartesian_jog_server_node/go_to_named_pose
       buttons: [4, 2] # X
       service_request:
         pose_name: "clear_left"
@@ -185,7 +185,7 @@ joy_teleop:
     lekiwi_arm_pose_clear_right:
       type: service
       interface_type: lekiwi_interfaces/srv/GoToNamedPose
-      service_name: /arm/go_to_named_pose
+      service_name: /cartesian_jog_server_node/go_to_named_pose
       buttons: [4, 1] # B
       service_request:
         pose_name: "clear_right"
