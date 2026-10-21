@@ -6,7 +6,7 @@ fps: 25
 reference_topic: "/cameras/usb_wrist/image_raw/compressed"
 
 # Default freshness window (seconds) if a feature does not override it
-default_max_age_s: 0.04
+default_max_age_s: 0.05
 
 # Fallback task instruction if not present in episode custom_data
 task: "Chess pick and place move"

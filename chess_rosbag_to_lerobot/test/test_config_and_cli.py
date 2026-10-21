@@ -14,7 +14,7 @@ def test_load_config_lekiwi_chess():
     assert cfg.robot_type == "lekiwi"
     assert cfg.fps == 25
     assert cfg.reference_topic == "/cameras/usb_wrist/image_raw/compressed"
-    assert cfg.default_max_age_s == 0.04
+    assert cfg.default_max_age_s == 0.05
 
     # Chessboard check
     assert cfg.chessboard.board_frame == "chessboard_frame"

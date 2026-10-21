@@ -268,6 +268,7 @@ def convert_all_bags(
 
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
+        from lerobot.configs.video import RGBEncoderConfig
     except ImportError as e:
         raise ImportError(
             "LeRobot is required for dataset conversion. Please install lerobot or run in an environment with lerobot installed."
@@ -280,6 +281,15 @@ def convert_all_bags(
 
     features = build_lerobot_features(cfg, use_videos=use_videos)
 
+    if use_videos and vcodec:
+        # Hardware NVENC encoders reject LeRobot's default tight GOP size (g=2)
+        encoder_kwargs = {"vcodec": vcodec}
+        if "nvenc" in vcodec.lower():
+            encoder_kwargs["g"] = None
+        rgb_encoder = RGBEncoderConfig(**encoder_kwargs)
+    else:
+        rgb_encoder = None
+
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         root=output_dir,
@@ -287,7 +297,7 @@ def convert_all_bags(
         robot_type=cfg.robot_type,
         features=features,
         use_videos=use_videos,
-        video_backend=vcodec,
+        rgb_encoder=rgb_encoder,
     )
 
     t0 = time.perf_counter()

@@ -49,7 +49,7 @@ server = { cmd = "python -m lerobot_policy_server.cli --host 0.0.0.0 --port 8090
 
 # --- Task 2: Chuyển đổi MCAP rosbag cờ vua sang LeRobot Dataset v3.0 ---
 # Bọc sub-shell tự động nạp ROS 2 Jazzy và overlay của lekiwi_ros2
-convert = { cmd = "bash -c 'source /opt/ros/jazzy/setup.bash && source install/setup.bash 2>/dev/null || true; if [ \"${1-}\" = \"--\" ]; then shift; fi; exec python -m chess_rosbag_to_lerobot.cli \"$@\"' --" }
+convert = { cmd = "bash -c 'source /opt/ros/jazzy/setup.bash 2>/dev/null || true; source install/setup.bash 2>/dev/null || true; export PYTHONPATH=\"chess_rosbag_to_lerobot:$PYTHONPATH\"; if [ \"${1-}\" = \"--\" ]; then shift; fi; exec python -m chess_rosbag_to_lerobot.cli \"$@\"' --" }
 
 # --- Task 3: Trực quan hóa dữ liệu dataset sau khi convert ---
 viz = { cmd = "lerobot-dataset-viz" }

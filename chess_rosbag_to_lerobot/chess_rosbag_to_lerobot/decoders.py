@@ -10,6 +10,11 @@ from typing import Any, Callable, Dict
 import numpy as np
 
 try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
     import imageio.v3 as iio
 except ImportError:
     import imageio as iio
@@ -70,8 +75,16 @@ def _ensure_shape(arr: np.ndarray, spec: FeatureSpec) -> np.ndarray:
 @register_decoder("sensor_msgs/msg/CompressedImage", lerobot_dtype="video")
 def decode_compressed_image(msg: Any, spec: FeatureSpec) -> np.ndarray:
     """Decode JPEG/PNG compressed image into HWC uint8 RGB numpy array."""
-    buf = bytes(msg.data)
-    img = iio.imread(io.BytesIO(buf))
+    raw_data = bytes(msg.data)
+    if cv2 is not None:
+        buf = np.frombuffer(raw_data, dtype=np.uint8)
+        bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        if bgr is not None:
+            img = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            return _ensure_shape(img, spec)
+
+    # Fallback to imageio if cv2 is not installed or imdecode returned None
+    img = iio.imread(io.BytesIO(raw_data))
 
     if img.ndim == 2:  # Grayscale -> 3 channel
         img = np.stack([img, img, img], axis=-1)
