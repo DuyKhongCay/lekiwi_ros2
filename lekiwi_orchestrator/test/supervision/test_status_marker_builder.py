@@ -94,6 +94,14 @@ def test_builder_deleteall_hygiene(dummy_stamp):
             "",
             ["[COMPLETED]"],
         ),
+        (
+            MacroMissionState.AWAITING_BOARD_SYNC,
+            True,
+            "w",
+            "",
+            "",
+            ["[SYNCING BOARD]", "Arrange Pieces", "White"],
+        ),
     ],
 )
 def test_builder_hud_marker_attributes_parameterized(

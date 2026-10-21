@@ -93,7 +93,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "manipulation",
-            default_value="policy",
+            default_value="kinematics",
             choices=["kinematics", "policy", "false"],
             description="Manipulation subsystem mode: "
             "'kinematics' (mock/real action server + cartesian service, accel=0), "

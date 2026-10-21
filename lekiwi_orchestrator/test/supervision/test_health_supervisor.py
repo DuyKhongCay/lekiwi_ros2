@@ -214,13 +214,14 @@ def test_diagnostics_and_visualizer_emission(mock_node, dummy_snapshot):
     marker_pub = MagicMock()
     mock_node.create_publisher.side_effect = [diag_pub, marker_pub]
 
-    cfg = HealthSupervisorConfig(robot_color="b", enable_visualizer=True)
+    cfg = HealthSupervisorConfig(enable_visualizer=True)
     monitor = HealthSupervisor(
         node=mock_node,
         config=cfg,
         state_provider=lambda: dummy_snapshot,
     )
     try:
+        monitor.set_robot_color("b")
         monitor.on_nav_ready_msg(Bool(data=True))
         monitor.on_grasp_ready_msg(Bool(data=True))
         monitor.publish_diagnostics(dummy_snapshot)

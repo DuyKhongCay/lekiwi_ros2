@@ -107,7 +107,6 @@ manipulation_action_server:
 chess_mission_orchestrator:
   ros__parameters:
     # --- Mission Execution Settings ---
-    robot_color: "b"
     navigation: true
     feasibility_timeout_sec: 5.0
     action_timeout_sec: 0.0
@@ -131,6 +130,9 @@ chess_mission_orchestrator:
     services:
       check_feasibility: "/workspace/check_move_feasibility"
       recover: "/orchestrator/recover"
+      import_fen: "/orchestrator/import_fen"
+      export_fen: "/orchestrator/export_fen"
+      chess_set_fen: "/chess/set_fen"
       set_perception_context: "/orchestrator/set_perception_context"
       system_reset_readiness: "/system/reset_readiness"
       ekf_reset: "/ekf_filter_node_map/reset"

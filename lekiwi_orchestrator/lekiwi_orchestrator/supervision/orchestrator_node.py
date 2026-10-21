@@ -15,6 +15,7 @@ Implements Mediator & Facade Design Patterns:
 
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -27,7 +28,7 @@ from lekiwi_interfaces.msg import (
     ChessMoveDetails,
     PerceptionContext,
 )
-from lekiwi_interfaces.srv import CheckMoveFeasibility
+from lekiwi_interfaces.srv import CheckMoveFeasibility, SetFen
 from rclpy.callback_groups import (
     MutuallyExclusiveCallbackGroup,
     ReentrantCallbackGroup,
@@ -39,6 +40,7 @@ from std_msgs.msg import Bool
 from std_srvs.srv import Empty, Trigger
 
 from lekiwi_orchestrator.core.fsm import (
+    IMPORT_FEN_ALLOWED_STATES,
     MISSION_STATE_NAMES,
     MacroMissionState,
     MotionExecutionState,
@@ -165,8 +167,20 @@ class ChessMissionOrchestrator(Node):
             self._handle_recover_service,
             callback_group=self._cb_group_client,
         )
+        self._import_fen_service = self.create_service(
+            SetFen,
+            self.parameters.import_fen_srv,
+            self._handle_import_fen_service,
+            callback_group=self._cb_group_client,
+        )
+        self._export_fen_service = self.create_service(
+            Trigger,
+            self.parameters.export_fen_srv,
+            self._handle_export_fen_service,
+            callback_group=self._cb_group_client,
+        )
 
-        # Service clients for system and EKF reset
+        # Service clients for system, EKF reset, and chess engine FEN configuration
         self._system_reset_client = self.create_client(
             Trigger,
             self.parameters.system_reset_readiness_srv,
@@ -177,13 +191,18 @@ class ChessMissionOrchestrator(Node):
             self.parameters.ekf_reset_srv,
             callback_group=self._cb_group_client,
         )
+        self._chess_set_fen_client = self.create_client(
+            SetFen,
+            self.parameters.chess_set_fen_srv,
+            callback_group=self._cb_group_client,
+        )
 
         # Initial State: WAITING_FOR_TF_READY with TF_TRACKING_AND_NAV perception
         self.transition_to(MacroMissionState.WAITING_FOR_TF_READY)
         self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
 
         self.get_logger().info(
-            f"ChessMissionOrchestrator initialized. Robot Color: '{self.parameters.robot_color}'. "
+            "ChessMissionOrchestrator initialized. "
             f"Waiting for Navigation Readiness on {self.parameters.nav_ready_topic} and Grasp Readiness on {self.parameters.grasp_ready_topic}..."
         )
 
@@ -245,7 +264,6 @@ class ChessMissionOrchestrator(Node):
             auto_recovery_enabled=config.auto_recovery_enabled,
             auto_recovery_timeout_sec=config.auto_recovery_timeout_sec,
             max_recovery_attempts=config.max_recovery_attempts,
-            robot_color=config.robot_color,
             enable_visualizer=config.visualization_enabled,
             visualizer_topic=config.visualization_topic,
             visualizer_config=VisualizerConfig(
@@ -317,6 +335,7 @@ class ChessMissionOrchestrator(Node):
             finalize_turn_fn=self._finalize_turn_completed,
             dispatch_workflow_fn=self._dispatch_move_workflow,
             reset_obs_viewpoints_fn=obs_navigator.reset_tour,
+            on_robot_color_updated_cb=health_supervisor.set_robot_color,
         )
 
         # 7. Move Workflow
@@ -354,6 +373,9 @@ class ChessMissionOrchestrator(Node):
         if self._ekf_reset_client is not None:
             self.destroy_client(self._ekf_reset_client)
             self._ekf_reset_client = None
+        if self._chess_set_fen_client is not None:
+            self.destroy_client(self._chess_set_fen_client)
+            self._chess_set_fen_client = None
         if self._motion_client is not None:
             self._motion_client.destroy()
         return super().destroy_node()
@@ -630,6 +652,122 @@ class ChessMissionOrchestrator(Node):
         """Delegate recovery service request to HealthSupervisor."""
         return self._health_supervisor.handle_recover_service(request, response)
 
+    def _handle_export_fen_service(
+        self, request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """Export current 6-field canonical FEN string and robot color as JSON."""
+        fen = self._game_status_handler.latest_full_fen
+        if not fen:
+            response.success = False
+            response.message = "No FEN available (no game status received yet)"
+            return response
+        robot_color = self._game_status_handler.robot_color or "unknown"
+        response.success = True
+        response.message = json.dumps({"fen": fen, "robot_color": robot_color})
+        return response
+
+    def _handle_import_fen_service(
+        self, request: SetFen.Request, response: SetFen.Response
+    ) -> SetFen.Response:
+        """Import a FEN string, validate robot stationary state, and coordinate board sync."""
+        target_fen = request.fen.strip()
+        target_color = request.robot_color.strip()
+
+        # Check if request.fen is a JSON payload (e.g. from an export_fen call)
+        if target_fen.startswith("{") and target_fen.endswith("}"):
+            try:
+                data = json.loads(target_fen)
+                if isinstance(data, dict):
+                    if "fen" in data and isinstance(data["fen"], str):
+                        target_fen = data["fen"].strip()
+                    if not target_color and "robot_color" in data and isinstance(data["robot_color"], str):
+                        target_color = data["robot_color"].strip()
+            except Exception as ex:
+                self.get_logger().warn(f"Failed to parse FEN JSON payload: {ex}")
+
+        # Strict validation: reject without swallowing errors silently
+        if not target_color:
+            response.success = False
+            response.message = "Missing required robot_color: must specify 'w'/'white' or 'b'/'black'"
+            self.get_logger().warn(f"Rejected import_fen: {response.message}")
+            return response
+
+        with self._state_lock:
+            current_state = self.mission_state
+
+        if current_state not in IMPORT_FEN_ALLOWED_STATES:
+            response.success = False
+            response.message = (
+                f"Cannot import FEN while robot is in active state {current_state.name}. "
+                f"Allowed states: {[s.name for s in IMPORT_FEN_ALLOWED_STATES]}"
+            )
+            self.get_logger().warn(f"Rejected import_fen: {response.message}")
+            return response
+
+        if not self._chess_set_fen_client.service_is_ready():
+            response.success = False
+            response.message = (
+                f"Chess set_fen service '{self.parameters.chess_set_fen_srv}' is not available"
+            )
+            self.get_logger().warn(response.message)
+            return response
+
+        chess_req = SetFen.Request(fen=target_fen, robot_color=target_color)
+        future = self._chess_set_fen_client.call_async(chess_req)
+
+        done_event = threading.Event()
+        chess_resp: list[SetFen.Response | None] = [None]
+        err_box: list[str | None] = [None]
+
+        def _on_done(fut: Any) -> None:
+            try:
+                chess_resp[0] = fut.result()
+            except Exception as ex:
+                err_box[0] = str(ex)
+            finally:
+                done_event.set()
+
+        future.add_done_callback(_on_done)
+        timeout_sec = self.parameters.action_timeout_sec
+        if not done_event.wait(timeout=timeout_sec):
+            response.success = False
+            response.message = f"Timed out waiting for chess set_fen service after {timeout_sec:.1f}s"
+            self.get_logger().warn(response.message)
+            return response
+
+        if err_box[0] is not None:
+            response.success = False
+            response.message = f"Error calling chess set_fen service: {err_box[0]}"
+            self.get_logger().warn(response.message)
+            return response
+
+        res = chess_resp[0]
+        if res is None or not res.success:
+            response.success = False
+            response.message = res.message if res else "Chess service returned empty response"
+            self.get_logger().warn(f"Chess set_fen rejected request: {response.message}")
+            return response
+
+        # Cancel active recovery timers or latches if we were in ERROR_FALLBACK
+        self._health_supervisor.cancel_recovery_timer()
+        self._health_supervisor.set_operator_latched(False)
+
+        # Update robot color immediately in HealthSupervisor
+        if res.robot_color:
+            self._health_supervisor.set_robot_color(res.robot_color)
+
+        self.clear_move_goals()
+        self._game_status_handler.on_fen_imported(res.canonical_fen)
+        self.transition_to(MacroMissionState.AWAITING_BOARD_SYNC)
+        self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
+
+        response.success = True
+        response.canonical_fen = res.canonical_fen
+        response.active_color = res.active_color
+        response.robot_color = res.robot_color
+        response.message = res.message
+        return response
+
     def _on_post_move_watchdog_timeout(self) -> None:
         """Handle post-move verification watchdog expiry."""
         self._post_move_verifier.on_timeout()
@@ -684,11 +822,7 @@ class ChessMissionOrchestrator(Node):
                 )
             return
 
-        initial_state = (
-            MacroMissionState.EVALUATING_BEST_MOVE
-            if self.parameters.robot_color == "w"
-            else MacroMissionState.WAITING_FOR_PLAYER_MOVE
-        )
+        initial_state = MacroMissionState.WAITING_FOR_PLAYER_MOVE
         self.transition_to(initial_state)
         self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
 

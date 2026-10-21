@@ -102,6 +102,7 @@ def test_build_capture_stages_matrix(capture_goal, plan_type, expected_names):
     """Verify MovePlanBuilder correctly handles piece capture staging across all variants."""
     resp = CheckMoveFeasibility.Response()
     resp.plan_type = plan_type
+    resp.message = "CAPTURE_TEST;bin=clear_left"
     resp.clear_base_pose.pose.position.x = 0.5
     resp.pick_base_pose.pose.position.x = 1.0
     resp.place_base_pose.pose.position.x = 2.0
@@ -110,6 +111,7 @@ def test_build_capture_stages_matrix(capture_goal, plan_type, expected_names):
     assert [s.name for s in stages] == expected_names
     assert stages[0].motion_state == MotionExecutionState.CLEARING_PIECE
     assert stages[0].is_capture is True
+    assert stages[0].instruction == f"Clear {capture_goal.captured_square} to left onboard bin"
 
 
 def test_capture_triple_base_observation_pose_anchored_to_place_base(ros_context):
@@ -130,6 +132,7 @@ def test_capture_triple_base_observation_pose_anchored_to_place_base(ros_context
         resp = CheckMoveFeasibility.Response()
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_CAPTURE_TRIPLE_BASE
+        resp.message = "CAPTURE_TRIPLE_BASE;bin=clear_right"
         resp.clear_base_pose.header.frame_id = "chessboard_frame"
         resp.clear_base_pose.pose.position.x = -0.3
         resp.clear_base_pose.pose.position.y = 0.3

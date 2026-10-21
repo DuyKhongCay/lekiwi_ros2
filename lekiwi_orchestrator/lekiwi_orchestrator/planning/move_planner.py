@@ -53,9 +53,24 @@ class MoveStep:
     requires_pre_grasp_gate: bool = True
 
 
+def _extract_clear_bin_side(message: str) -> str:
+    """Extract explicit onboard discard bin side from feasibility response message.
+
+    Enforces zero backward-compatibility: captures must specify clear_left or clear_right.
+    """
+    if "bin=clear_right" in message or "clear_right" in message:
+        return "right"
+    if "bin=clear_left" in message or "clear_left" in message:
+        return "left"
+    raise ValueError(
+        f"Capture feasibility message missing explicit clear bin side: {message!r}"
+    )
+
+
 def _clear_step(
     from_square: str,
     pick_point: Point,
+    bin_side: str,
     target_pose: PoseStamped | None = None,
     nav_state: MotionExecutionState | None = None,
     requires_pre_grasp_gate: bool = True,
@@ -63,7 +78,7 @@ def _clear_step(
     return MoveStep(
         name=StepKind.CLEAR,
         target_pose=target_pose,
-        instruction=f"Clear {from_square} to onboard bin",
+        instruction=f"Clear {from_square} to {bin_side} onboard bin",
         from_square=from_square,
         to_square="",
         is_capture=True,
@@ -251,16 +266,19 @@ class MovePlanBuilder:
             ),
         ]
 
-    @staticmethod
+    @classmethod
     def _build_capture_zero_nav(
+        cls,
         resp: CheckMoveFeasibility.Response,
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
         cap_sq = details.captured_square or details.to_square
+        bin_side = _extract_clear_bin_side(resp.message)
         return [
             _clear_step(
                 from_square=cap_sq,
                 pick_point=resp.clear_point,
+                bin_side=bin_side,
             ),
             _move_step(
                 from_square=details.from_square,
@@ -271,16 +289,19 @@ class MovePlanBuilder:
             ),
         ]
 
-    @staticmethod
+    @classmethod
     def _build_capture_single_base(
+        cls,
         resp: CheckMoveFeasibility.Response,
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
         cap_sq = details.captured_square or details.to_square
+        bin_side = _extract_clear_bin_side(resp.message)
         return [
             _clear_step(
                 from_square=cap_sq,
                 pick_point=resp.clear_point,
+                bin_side=bin_side,
                 target_pose=resp.clear_base_pose,
                 nav_state=MotionExecutionState.NAV_TO_CLEAR,
             ),
@@ -293,12 +314,14 @@ class MovePlanBuilder:
             ),
         ]
 
-    @staticmethod
+    @classmethod
     def _build_capture_dual_base(
+        cls,
         resp: CheckMoveFeasibility.Response,
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
         cap_sq = details.captured_square or details.to_square
+        bin_side = _extract_clear_bin_side(resp.message)
         dx = resp.clear_base_pose.pose.position.x - resp.pick_base_pose.pose.position.x
         dy = resp.clear_base_pose.pose.position.y - resp.pick_base_pose.pose.position.y
         clear_same_as_pick = math.hypot(dx, dy) < 0.05
@@ -307,6 +330,7 @@ class MovePlanBuilder:
             _clear_step(
                 from_square=cap_sq,
                 pick_point=resp.clear_point,
+                bin_side=bin_side,
                 target_pose=resp.clear_base_pose,
                 nav_state=MotionExecutionState.NAV_TO_CLEAR,
             ),
@@ -327,16 +351,19 @@ class MovePlanBuilder:
             ),
         ]
 
-    @staticmethod
+    @classmethod
     def _build_capture_triple_base(
+        cls,
         resp: CheckMoveFeasibility.Response,
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
         cap_sq = details.captured_square or details.to_square
+        bin_side = _extract_clear_bin_side(resp.message)
         return [
             _clear_step(
                 from_square=cap_sq,
                 pick_point=resp.clear_point,
+                bin_side=bin_side,
                 target_pose=resp.clear_base_pose,
                 nav_state=MotionExecutionState.NAV_TO_CLEAR,
             ),

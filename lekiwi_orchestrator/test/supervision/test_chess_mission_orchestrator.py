@@ -13,7 +13,7 @@ from lekiwi_interfaces.msg import (
     ChessGameStatus,
     PerceptionContext,
 )
-from lekiwi_interfaces.srv import CheckMoveFeasibility
+from lekiwi_interfaces.srv import CheckMoveFeasibility, SetFen
 from lekiwi_orchestrator.core.fsm import (
     MacroMissionState,
     MotionExecutionState,
@@ -63,13 +63,28 @@ def test_orchestrator_initial_state(ros_context):
     ],
 )
 def test_game_start_by_player_color(ros_context, color, expected_state):
-    """Verify game startup behavior depending on robot assigned color (White vs Black)."""
-    node = ChessMissionOrchestrator(parameter_overrides=[Parameter("robot_color", value=color)])
+    """Verify game startup behavior depending on dynamically broadcast robot color (White vs Black)."""
+    node = ChessMissionOrchestrator()
     try:
         node._on_nav_ready(Bool(data=True))
         assert node.is_nav_ready
-        assert node.mission_state == expected_state
+        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
         assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
+
+        # Incoming first game status message from chess master: White to move
+        status = ChessGameStatus()
+        status.full_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        status.active_color = "w"
+        status.robot_color = color
+        status.is_board_stable = True
+        if color == "w":
+            status.game_phase = ChessGameStatus.PHASE_ROBOT_THINKING
+            status.best_move_details.uci = ""
+        else:
+            status.game_phase = ChessGameStatus.PHASE_WAITING_PLAYER
+
+        node._on_game_status(status)
+        assert node.mission_state == expected_state
     finally:
         node.destroy_node()
 
@@ -206,6 +221,8 @@ def test_workflow_dispatch_sequences(ros_context, plan_type, is_capture):
         resp = CheckMoveFeasibility.Response()
         resp.feasible = True
         resp.plan_type = plan_type
+        if is_capture:
+            resp.message = "CAPTURE_TEST;bin=clear_left"
         resp.clear_point = Point(x=0.5, y=0.5, z=0.03)
 
         goal = ChessMoveGoal(
@@ -273,6 +290,7 @@ def test_recovery_discards_stale_move_if_fen_changes(ros_context):
         # New game status arrives with different FEN (board modified externally)
         status = ChessGameStatus()
         status.active_color = "b"
+        status.robot_color = "b"
         status.full_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
         status.is_board_stable = True
         status.game_phase = ChessGameStatus.PHASE_ROBOT_READY
@@ -488,5 +506,119 @@ def test_recovery_from_non_error_state(ros_context):
         res = node._handle_recover_service(req, resp)
         assert res.success
         assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+    finally:
+        node.destroy_node()
+
+
+def test_export_fen_service(ros_context):
+    """Verify /orchestrator/export_fen returns latest full FEN and robot color as JSON."""
+    import json
+    node = ChessMissionOrchestrator()
+    try:
+        req = Trigger.Request()
+        resp = Trigger.Response()
+
+        # Before any game status received: export fails
+        res = node._handle_export_fen_service(req, resp)
+        assert not res.success
+
+        # Receive game status with full FEN and robot color
+        status = ChessGameStatus()
+        status.full_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+        status.robot_color = "b"
+        node._on_game_status(status)
+
+        res = node._handle_export_fen_service(req, resp)
+        assert res.success
+        payload = json.loads(res.message)
+        assert payload["fen"] == status.full_fen
+        assert payload["robot_color"] == "b"
+    finally:
+        node.destroy_node()
+
+
+def test_import_fen_service_rejected_during_motion(ros_context):
+    """Verify /orchestrator/import_fen is rejected when robot is in motion/planning states."""
+    node = ChessMissionOrchestrator()
+    try:
+        node._on_nav_ready(Bool(data=True))
+        node.transition_to(MacroMissionState.EVALUATING_BEST_MOVE)
+        node.transition_to(MacroMissionState.CHECKING_REACHABILITY)
+        assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
+
+        # Missing robot_color should be rejected immediately
+        req_no_color = SetFen.Request(fen="8/8/8/4k3/8/8/4K3/8 w - - 0 1", robot_color="")
+        resp_no_color = SetFen.Response()
+        res_no_color = node._handle_import_fen_service(req_no_color, resp_no_color)
+        assert not res_no_color.success
+        assert "Missing required robot_color" in res_no_color.message
+
+        req = SetFen.Request(fen="8/8/8/4k3/8/8/4K3/8 w - - 0 1", robot_color="b")
+        resp = SetFen.Response()
+        res = node._handle_import_fen_service(req, resp)
+
+        assert not res.success
+        assert "Cannot import FEN" in res.message
+        assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
+    finally:
+        node.destroy_node()
+
+
+def test_import_fen_service_accepted_and_sync_workflow(ros_context):
+    """Verify import FEN workflow transitions to AWAITING_BOARD_SYNC and exits on stable board."""
+    from rclpy.task import Future
+
+    node = ChessMissionOrchestrator()
+    try:
+        node._on_nav_ready(Bool(data=True))
+        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+
+        target_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+
+        # Mock chess_set_fen_client
+        node._chess_set_fen_client.service_is_ready = lambda: True
+
+        def mock_call_async(req):
+            fut = Future()
+            fut.set_result(
+                SetFen.Response(
+                    success=True,
+                    canonical_fen=target_fen,
+                    active_color="w",
+                    robot_color="b",
+                    message="OK",
+                )
+            )
+            return fut
+
+        node._chess_set_fen_client.call_async = mock_call_async
+
+        req = SetFen.Request(fen=target_fen, robot_color="black")
+        resp = SetFen.Response()
+        res = node._handle_import_fen_service(req, resp)
+
+        assert res.success
+        assert res.canonical_fen == target_fen
+        assert res.robot_color == "b"
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+        assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
+
+        # Status reported as PHASE_AWAITING_BOARD_SYNC or unstable: remain in AWAITING_BOARD_SYNC
+        status = ChessGameStatus()
+        status.full_fen = target_fen
+        status.active_color = "w"
+        status.robot_color = "b"
+        status.game_phase = ChessGameStatus.PHASE_AWAITING_BOARD_SYNC
+        status.is_board_stable = False
+        node._on_game_status(status)
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+
+        # Status reports board synchronized and stable (White turn, robot is Black)
+        status.game_phase = ChessGameStatus.PHASE_WAITING_PLAYER
+        status.is_board_stable = True
+        node._on_game_status(status)
+
+        # Robot is Black, active_color is White -> should transition to WAITING_FOR_PLAYER_MOVE
+        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
     finally:
         node.destroy_node()

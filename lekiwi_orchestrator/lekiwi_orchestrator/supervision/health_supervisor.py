@@ -77,6 +77,7 @@ _HUD_STATE_COLORS: dict[MacroMissionState, tuple[float, float, float, float]] = 
     MacroMissionState.EXECUTING_MOVE_PIPELINE: (0.1, 1.0, 0.3, 1.0),
     MacroMissionState.TURN_COMPLETED: (0.0, 1.0, 0.8, 1.0),
     MacroMissionState.ERROR_FALLBACK: (1.0, 0.1, 0.1, 1.0),
+    MacroMissionState.AWAITING_BOARD_SYNC: (1.0, 0.55, 0.0, 1.0),
 }
 _HUD_DEFAULT_COLOR: tuple[float, float, float, float] = (0.85, 0.85, 0.85, 1.0)
 
@@ -134,6 +135,8 @@ class StatusMarkerBuilder:
             )
         if state == MacroMissionState.TURN_COMPLETED:
             return f"[COMPLETED] Turn Finalized\nRobot: {color_name}"
+        if state == MacroMissionState.AWAITING_BOARD_SYNC:
+            return f"[SYNCING BOARD] Arrange Pieces\nRobot: {color_name}"
         if state == MacroMissionState.ERROR_FALLBACK:
             return f"[ERROR] System in Error Fallback\nNav: {nav_status}"
         return f"[{state_str}]\nRobot: {color_name}"
@@ -144,7 +147,12 @@ class StatusMarkerBuilder:
         nav_ready: bool,
         robot_color: str,
     ) -> tuple[tuple[float, float, float, float], str]:
-        color_name = "White" if robot_color.lower().startswith("w") else "Black"
+        if robot_color.startswith("w"):
+            color_name = "White"
+        elif robot_color.startswith("b"):
+            color_name = "Black"
+        else:
+            color_name = "Unknown"
         color = _HUD_STATE_COLORS.get(snapshot.mission_state, _HUD_DEFAULT_COLOR)
         text = StatusMarkerBuilder._format_hud_text(snapshot, nav_ready, color_name)
         return color, text
@@ -219,7 +227,6 @@ class HealthSupervisorConfig:
     auto_recovery_enabled: bool = True
     auto_recovery_timeout_sec: float = 5.0
     max_recovery_attempts: int = 3
-    robot_color: str = "w"
     enable_visualizer: bool = True
     visualizer_topic: str = "~/status_markers"
     visualizer_config: VisualizerConfig = field(default_factory=VisualizerConfig)
@@ -300,6 +307,7 @@ class HealthSupervisor:
         # State tracking: independent Navigation and Grasp readiness
         self.nav_ready = False
         self.grasp_ready = False
+        self._robot_color: str = ""
         self.last_nav_heartbeat: float | None = None
         self.last_grasp_heartbeat: float | None = None
         self.recovery_attempts = 0
@@ -373,6 +381,17 @@ class HealthSupervisor:
                 return False
             now = self._get_now_sec()
             return (now - self.last_grasp_heartbeat) <= self._config.readiness_timeout_sec
+
+    @property
+    def robot_color(self) -> str:
+        """Return cached dynamic robot color ('w', 'b', or empty)."""
+        with self._state_lock:
+            return self._robot_color
+
+    def set_robot_color(self, robot_color: str) -> None:
+        """Update dynamically learned robot color from chess referee topic."""
+        with self._state_lock:
+            self._robot_color = robot_color.lower().strip() if robot_color else ""
 
     def on_nav_ready_msg(
         self,
@@ -659,7 +678,7 @@ class HealthSupervisor:
         with self._state_lock:
             nav_ready_val = self.nav_ready
             grasp_ready_val = self.grasp_ready
-            robot_col = self._config.robot_color
+            robot_col = self._robot_color if self._robot_color else "unknown"
             attempts = self.recovery_attempts
 
         diag = DiagnosticStatus()
@@ -710,7 +729,7 @@ class HealthSupervisor:
             markers = self._marker_builder.build(
                 snapshot=snapshot,
                 nav_ready=nav_ready_val,
-                robot_color=self._config.robot_color,
+                robot_color=robot_col,
                 stamp=stamp,
             )
             self._marker_pub.publish(markers)

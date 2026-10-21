@@ -78,6 +78,7 @@ class GameStatusHandler:
         finalize_turn_fn: Callable[[], None],
         dispatch_workflow_fn: Callable[[str, Any], None],
         reset_obs_viewpoints_fn: Callable[[], None],
+        on_robot_color_updated_cb: Callable[[str], None] | None = None,
     ) -> None:
         self._node = node
         self._config = config
@@ -88,8 +89,16 @@ class GameStatusHandler:
         self._finalize_turn_fn = finalize_turn_fn
         self._dispatch_workflow_fn = dispatch_workflow_fn
         self._reset_obs_viewpoints_fn = reset_obs_viewpoints_fn
+        self._on_robot_color_updated_cb = on_robot_color_updated_cb
 
         self._last_processed_fen = ""
+        self._latest_full_fen = ""
+        self._robot_color = ""
+
+    @property
+    def robot_color(self) -> str:
+        with self._state_lock:
+            return self._robot_color
 
     @property
     def last_processed_fen(self) -> str:
@@ -98,6 +107,49 @@ class GameStatusHandler:
     @last_processed_fen.setter
     def last_processed_fen(self, fen: str) -> None:
         self._last_processed_fen = fen
+
+    @property
+    def latest_full_fen(self) -> str:
+        with self._state_lock:
+            return self._latest_full_fen
+
+    def on_fen_imported(self, canonical_fen: str) -> None:
+        """Handle newly imported FEN: invalidate last processed FEN and store latest canonical FEN."""
+        with self._state_lock:
+            self._last_processed_fen = ""
+            self._latest_full_fen = canonical_fen
+
+    def _handle_board_sync_if_active(self, msg: ChessGameStatus) -> bool:
+        """Evaluate board synchronization progress when in AWAITING_BOARD_SYNC state.
+
+        Returns True if event was fully handled or still waiting for physical sync,
+        False if board sync just completed on robot's turn (to allow immediate turn eligibility check).
+        """
+        with self._state_lock:
+            if self._get_mission_state() != MacroMissionState.AWAITING_BOARD_SYNC:
+                return False
+
+        # If referee is still waiting for board sync or vision is not yet stable, stay in AWAITING_BOARD_SYNC
+        if msg.game_phase == ChessGameStatus.PHASE_AWAITING_BOARD_SYNC or not msg.is_board_stable:
+            return True
+
+        # Physical board layout confirmed stable and matches imported FEN!
+        self._node.get_logger().info(
+            f">>> [BOARD SYNC] Physical board verified stable with imported FEN: {msg.full_fen}"
+        )
+
+        if self.handle_game_over_if_ended(msg):
+            return True
+
+        with self._state_lock:
+            current_color = self._robot_color
+
+        if msg.active_color == current_color:
+            self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE)
+            return False
+
+        self._transition_to_fn(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+        return True
 
     def handle_game_over_if_ended(self, msg: ChessGameStatus) -> bool:
         """Check and transition to GAME_OVER if referee reports checkmate or draw."""
@@ -131,7 +183,9 @@ class GameStatusHandler:
 
     def is_eligible_robot_turn(self, msg: ChessGameStatus) -> bool:
         """Determine if referee message indicates a valid turn ready for robot execution."""
-        is_robot_turn = msg.active_color == self._config.robot_color
+        with self._state_lock:
+            current_color = self._robot_color
+        is_robot_turn = msg.active_color == current_color
         best_uci = bool(msg.best_move_details.uci)
         is_phase_ready = msg.game_phase in (
             ChessGameStatus.PHASE_ROBOT_READY,
@@ -156,18 +210,47 @@ class GameStatusHandler:
         Thread-safety:
             Checks and updates `_last_processed_fen` under `_state_lock`.
         """
+        if msg.robot_color:
+            norm_color = msg.robot_color.lower().strip()
+            color_changed = False
+            with self._state_lock:
+                if norm_color != self._robot_color:
+                    self._robot_color = norm_color
+                    color_changed = True
+            if color_changed and self._on_robot_color_updated_cb is not None:
+                self._on_robot_color_updated_cb(norm_color)
+
+        if msg.full_fen:
+            with self._state_lock:
+                self._latest_full_fen = msg.full_fen
+            if clear_pending_recovery_cb is not None:
+                clear_pending_recovery_cb()
+
+        if self._handle_board_sync_if_active(msg):
+            return
+
         if self.handle_game_over_if_ended(msg):
             return
 
         if self.verify_post_move_board(msg):
             return
 
+        with self._state_lock:
+            current_color = self._robot_color
+
+        if (
+            msg.game_phase == ChessGameStatus.PHASE_ROBOT_THINKING
+            and current_color
+            and msg.active_color == current_color
+            and self._get_mission_state() == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        ):
+            self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE)
+            return
+
         if not self.is_eligible_robot_turn(msg):
             return
 
         with self._state_lock:
-            if clear_pending_recovery_cb is not None:
-                clear_pending_recovery_cb()
 
             eligible_state = self._get_mission_state() in (
                 MacroMissionState.WAITING_FOR_PLAYER_MOVE,

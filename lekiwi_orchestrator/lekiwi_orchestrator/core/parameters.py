@@ -23,7 +23,6 @@ class OrchestratorParameters:
 
     def __init__(self, node: Node) -> None:
         """Declare and parse all orchestrator ROS 2 parameters from node handle."""
-        node.declare_parameter("robot_color", "b")
         node.declare_parameter("board_frame", "chessboard_frame")
         node.declare_parameter("map_frame", "map")
         node.declare_parameter("feasibility_timeout_sec", 5.0)
@@ -46,6 +45,9 @@ class OrchestratorParameters:
             "services.check_feasibility", "/workspace/check_move_feasibility"
         )
         node.declare_parameter("services.recover", "/orchestrator/recover")
+        node.declare_parameter("services.import_fen", "/orchestrator/import_fen")
+        node.declare_parameter("services.export_fen", "/orchestrator/export_fen")
+        node.declare_parameter("services.chess_set_fen", "/chess/set_fen")
         node.declare_parameter(
             "services.set_perception_context",
             "/orchestrator/set_perception_context",
@@ -90,7 +92,6 @@ class OrchestratorParameters:
         if not math.isfinite(readiness_to) or readiness_to <= 0:
             raise ValueError("readiness_timeout_sec must be finite and positive")
 
-        self.robot_color = str(node.get_parameter("robot_color").value).lower()
         self.board_frame = str(node.get_parameter("board_frame").value)
         self.map_frame = str(node.get_parameter("map_frame").value)
         self.feasibility_timeout_sec = float(
@@ -125,6 +126,9 @@ class OrchestratorParameters:
             node.get_parameter("services.check_feasibility").value
         )
         self.recover_srv = str(node.get_parameter("services.recover").value)
+        self.import_fen_srv = str(node.get_parameter("services.import_fen").value)
+        self.export_fen_srv = str(node.get_parameter("services.export_fen").value)
+        self.chess_set_fen_srv = str(node.get_parameter("services.chess_set_fen").value)
         self.set_perception_srv = str(
             node.get_parameter("services.set_perception_context").value
         )
