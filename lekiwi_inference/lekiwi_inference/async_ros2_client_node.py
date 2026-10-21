@@ -12,16 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Thin ROS 2 node coordinating sensor ingest, 50Hz action actuation, and safety supervision."""
+"""ROS 2 Jazzy node bridging sensory topics to the remote LeRobot policy server.
+
+Implements the ExecuteChessMove Action Server for physical manipulation, offloading
+10D environment_state to the remote policy and streaming joint target commands to ros2_control.
+"""
+
+from __future__ import annotations
 
 import threading
 import time
 from typing import Optional
 
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
+from lekiwi_interfaces.action import ExecuteChessMove
 import numpy as np
-from rcl_interfaces.msg import FloatingPointRange, IntegerRange, ParameterDescriptor
 import rclpy
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, JointState
@@ -29,80 +38,41 @@ from std_msgs.msg import Bool, Float64MultiArray
 from std_srvs.srv import SetBool
 
 from lekiwi_inference.async_client import AsyncInferenceClient, ClientConfig
-from lekiwi_inference.safety_watchdog import SafetyState, SafetyWatchdog
 from lekiwi_inference.transport.zmq_transport import ZmqPolicyTransport
 from lekiwi_inference.utils import extract_joint_positions, image_msg_to_bytes
 
+TASK_DESCRIPTION_MAP: dict[int, str] = {
+    ExecuteChessMove.Goal.OP_MOVE: "Chess pick and place move",
+    ExecuteChessMove.Goal.OP_CLEAR_LEFT: "Clear to left onboard bin",
+    ExecuteChessMove.Goal.OP_CLEAR_RIGHT: "Clear to right onboard bin",
+    ExecuteChessMove.Goal.OP_PICK: "Pick chess piece",
+    ExecuteChessMove.Goal.OP_PLACE: "Place chess piece",
+}
+
 
 class AsyncRos2ClientNode(Node):
-    """ROS 2 Jazzy node bridging sensory topics to the remote policy server and controlling robot arm joints."""
+    """ROS 2 Jazzy node driving physical-AI arm policy execution over ZeroMQ."""
 
-    def __init__(self) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         """Declares validated parameters, binds subscriber callbacks, and initializes real-time timers."""
-        super().__init__("async_ros2_inference_client")
+        super().__init__("async_ros2_inference_client", *args, **kwargs)
 
         # -------------------------------------------------------------------
-        # 1. Parameter Declarations with Descriptors & Validated Ranges
+        # 1. Parameter Declarations
         # -------------------------------------------------------------------
-        self.declare_parameter(
-            "server_address",
-            "127.0.0.1:8090",
-            ParameterDescriptor(description="ZMQ Policy Server endpoint (host:port)"),
-        )
-        self.declare_parameter(
-            "policy_type",
-            "act",
-            ParameterDescriptor(description="Physical-AI policy model architecture"),
-        )
-        self.declare_parameter(
-            "repo_id",
-            "legalaspro/act_so101_pnp_microsanity_20_50hz_v0",
-            ParameterDescriptor(description="HuggingFace repository ID or local weights path"),
-        )
-        self.declare_parameter(
-            "control_rate",
-            50.0,
-            ParameterDescriptor(
-                description="Deterministic arm forward command rate in Hz",
-                floating_point_range=[FloatingPointRange(from_value=10.0, to_value=100.0, step=1.0)],
-            ),
-        )
-        self.declare_parameter(
-            "max_age_s",
-            0.25,
-            ParameterDescriptor(
-                description="Max allowable action age before watchdog holds position",
-                floating_point_range=[FloatingPointRange(from_value=0.05, to_value=2.0, step=0.01)],
-            ),
-        )
-        self.declare_parameter(
-            "actions_per_chunk",
-            100,
-            ParameterDescriptor(
-                description="Horizon chunk size predicted by ACT policy",
-                integer_range=[IntegerRange(from_value=10, to_value=500, step=1)],
-            ),
-        )
-        self.declare_parameter(
-            "wrist_cam_topic",
-            "/cameras/usb_wrist/image_raw/compressed",
-            ParameterDescriptor(description="Topic for wrist-mounted camera compressed feed"),
-        )
-        self.declare_parameter(
-            "side_cam_topic",
-            "/cameras/usb_side/image_raw/compressed",
-            ParameterDescriptor(description="Topic for side/top camera compressed feed"),
-        )
-        self.declare_parameter(
-            "joints_topic",
-            "/joint_states",
-            ParameterDescriptor(description="Topic for robot joint telemetry"),
-        )
-        self.declare_parameter(
-            "fwd_cmd_topic",
-            "/arm_forward_controller/commands",
-            ParameterDescriptor(description="Output forward command controller topic"),
-        )
+        self.declare_parameter("server_address", "127.0.0.1:8090")
+        self.declare_parameter("policy_type", "act")
+        self.declare_parameter("repo_id", "DuyKhongCay/act_lekiwi_chess")
+        self.declare_parameter("control_rate", 25.0)
+        self.declare_parameter("max_age_s", 0.08)
+        self.declare_parameter("actions_per_chunk", 40)
+        self.declare_parameter("chunk_size_threshold", 0.5)
+        self.declare_parameter("wrist_cam_topic", "/cameras/usb_wrist/image_raw/compressed")
+        self.declare_parameter("side_cam_topic", "/cameras/usb_side/image_raw/compressed")
+        self.declare_parameter("overhead_cam_topic", "/cameras/stereo_right/image_raw/compressed")
+        self.declare_parameter("joints_topic", "/joint_states")
+        self.declare_parameter("fwd_cmd_topic", "/arm_forward_controller/commands")
+        self.declare_parameter("action_name", "/manipulation/execute_chess_move")
         self.declare_parameter(
             "arm_joints",
             [
@@ -113,45 +83,69 @@ class AsyncRos2ClientNode(Node):
                 "arm_wrist_roll",
                 "arm_gripper",
             ],
-            ParameterDescriptor(description="Ordered joint names commanded by policy"),
         )
-        self.declare_parameter(
-            "aggregation_fn",
-            "weighted_average",
-            ParameterDescriptor(description="Temporal smoothing algorithm: weighted_average/conservative/latest_only"),
-        )
-        self.declare_parameter(
-            "auto_start",
-            True,
-            ParameterDescriptor(description="Automatically establish connection and start inference"),
-        )
+        self.declare_parameter("aggregation_fn", "weighted_average")
+        self.declare_parameter("auto_start", True)
 
-        # Retrieve parsed parameters
+        # Convergence settings
+        self.declare_parameter("convergence.min_episode_duration_s", 3.0)
+        self.declare_parameter("convergence.max_episode_duration_s", 25.0)
+        self.declare_parameter("convergence.settle_window_s", 0.6)
+        self.declare_parameter("convergence.pos_tol_rad", 0.035)
+        self.declare_parameter("convergence.vel_tol_rad", 0.015)
+
+        # Retrieve parameters
         self.server_address = str(self.get_parameter("server_address").value)
         self.policy_type = str(self.get_parameter("policy_type").value)
         self.repo_id = str(self.get_parameter("repo_id").value)
         self.control_rate = float(self.get_parameter("control_rate").value)
         self.max_age_s = float(self.get_parameter("max_age_s").value)
         self.actions_per_chunk = int(self.get_parameter("actions_per_chunk").value)
+        self.chunk_size_threshold = float(self.get_parameter("chunk_size_threshold").value)
         self.wrist_cam_topic = str(self.get_parameter("wrist_cam_topic").value)
         self.side_cam_topic = str(self.get_parameter("side_cam_topic").value)
+        self.overhead_cam_topic = str(self.get_parameter("overhead_cam_topic").value)
         self.joints_topic = str(self.get_parameter("joints_topic").value)
         self.fwd_cmd_topic = str(self.get_parameter("fwd_cmd_topic").value)
+        self.action_name = str(self.get_parameter("action_name").value)
         self.arm_joints = list(self.get_parameter("arm_joints").value)
         self.aggregation_fn = str(self.get_parameter("aggregation_fn").value)
         self.auto_start = bool(self.get_parameter("auto_start").value)
 
+        self.min_episode_duration_s = float(self.get_parameter("convergence.min_episode_duration_s").value)
+        self.max_episode_duration_s = float(self.get_parameter("convergence.max_episode_duration_s").value)
+        self.settle_window_s = float(self.get_parameter("convergence.settle_window_s").value)
+        self.pos_tol_rad = float(self.get_parameter("convergence.pos_tol_rad").value)
+        self.vel_tol_rad = float(self.get_parameter("convergence.vel_tol_rad").value)
+        self.required_settle_steps = max(1, int(self.settle_window_s * self.control_rate))
+
         # -------------------------------------------------------------------
         # 2. State & Concurrency Structures
         # -------------------------------------------------------------------
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._latest_wrist_bytes: Optional[bytes] = None
+        self._latest_wrist_stamp: float = 0.0
         self._latest_side_bytes: Optional[bytes] = None
+        self._latest_side_stamp: float = 0.0
+        self._latest_overhead_bytes: Optional[bytes] = None
+        self._latest_overhead_stamp: float = 0.0
         self._latest_joint_positions: Optional[np.ndarray] = None
+        self._latest_joint_stamp: float = 0.0
+        self._previous_joint_positions: Optional[np.ndarray] = None
+
+        self._estop_active = False
         self._is_active = False
 
-        # Initialize Safety Watchdog
-        self.watchdog = SafetyWatchdog(max_age_s=self.max_age_s)
+        # Action execution tracking
+        self._active_goal_lock = threading.Lock()
+        self._active_goal_handle = None
+        self._active_env_state: Optional[np.ndarray] = None
+        self._active_task: str = "Chess pick and place move"
+        self._active_goal_start_time: float = 0.0
+        self._active_settle_count: int = 0
+        self._goal_finished_event = threading.Event()
+        self._goal_success = False
+        self._goal_result_message = ""
 
         # Initialize Transport and Client
         self.transport = ZmqPolicyTransport(server_address=self.server_address)
@@ -161,14 +155,21 @@ class AsyncRos2ClientNode(Node):
             repo_id=self.repo_id,
             fps=self.control_rate,
             actions_per_chunk=self.actions_per_chunk,
+            chunk_size_threshold=self.chunk_size_threshold,
             aggregation_fn=self.aggregation_fn,
             features={
                 "observation.state": {"shape": (len(self.arm_joints),), "dtype": "float32"},
-                "observation.images.wrist": {"dtype": "image", "shape": (480, 640, 3)},
-                "observation.images.side": {"dtype": "image", "shape": (480, 640, 3)},
+                "observation.environment_state": {"shape": (10,), "dtype": "float32"},
+                "observation.images.wrist": {"dtype": "image", "shape": (384, 384, 3)},
+                "observation.images.side": {"dtype": "image", "shape": (384, 384, 3)},
+                "observation.images.overhead": {"dtype": "image", "shape": (384, 384, 3)},
             },
         )
-        self.client = AsyncInferenceClient(transport=self.transport, config=client_cfg)
+        self.client = AsyncInferenceClient(transport=self.transport, config=client_cfg, logger=self.get_logger())
+
+        # Callback Groups
+        self._action_cb_group = ReentrantCallbackGroup()
+        self._sub_cb_group = MutuallyExclusiveCallbackGroup()
 
         # -------------------------------------------------------------------
         # 3. ROS 2 Subscriptions & Publishers
@@ -178,24 +179,35 @@ class AsyncRos2ClientNode(Node):
             self.wrist_cam_topic,
             self._wrist_cam_callback,
             qos_profile_sensor_data,
+            callback_group=self._sub_cb_group,
         )
         self.sub_side = self.create_subscription(
             CompressedImage,
             self.side_cam_topic,
             self._side_cam_callback,
             qos_profile_sensor_data,
+            callback_group=self._sub_cb_group,
+        )
+        self.sub_overhead = self.create_subscription(
+            CompressedImage,
+            self.overhead_cam_topic,
+            self._overhead_cam_callback,
+            qos_profile_sensor_data,
+            callback_group=self._sub_cb_group,
         )
         self.sub_joints = self.create_subscription(
             JointState,
             self.joints_topic,
             self._joint_state_callback,
             qos_profile_sensor_data,
+            callback_group=self._sub_cb_group,
         )
         self.sub_estop = self.create_subscription(
             Bool,
             "/lekiwi/estop",
             self._estop_callback,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
+            callback_group=self._sub_cb_group,
         )
 
         self.cmd_pub = self.create_publisher(
@@ -209,11 +221,23 @@ class AsyncRos2ClientNode(Node):
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
         )
 
-        # Service for enabling/pausing inference
+        # Service for enabling/pausing inference client
         self.srv_enable = self.create_service(
             SetBool,
             "/lekiwi/inference/enable",
             self._handle_enable_service,
+            callback_group=self._action_cb_group,
+        )
+
+        # Action Server for ExecuteChessMove
+        self._action_server = ActionServer(
+            self,
+            ExecuteChessMove,
+            self.action_name,
+            execute_callback=self._execute_chess_move_goal,
+            goal_callback=self._handle_goal_received,
+            cancel_callback=self._handle_cancel_received,
+            callback_group=self._action_cb_group,
         )
 
         # -------------------------------------------------------------------
@@ -221,7 +245,7 @@ class AsyncRos2ClientNode(Node):
         # -------------------------------------------------------------------
         dt = 1.0 / self.control_rate
         self.control_timer = self.create_timer(dt, self._control_timer_callback)
-        self.watchdog_timer = self.create_timer(0.1, self._watchdog_timer_callback)
+        self.diag_timer = self.create_timer(1.0, self._diagnostic_timer_callback)
 
         if self.auto_start:
             self._start_inference()
@@ -230,140 +254,273 @@ class AsyncRos2ClientNode(Node):
         """Initializes client worker thread and marks inference active."""
         if self.client.start():
             self._is_active = True
-            self.get_logger().info("Inference streaming successfully activated.")
+            self.get_logger().info("Inference client connected and ready.")
             return True
         else:
-            self.get_logger().error("Failed to start inference client.")
+            self.get_logger().error("Failed to connect inference client to policy server.")
             return False
 
     def _stop_inference(self) -> None:
         """Pauses worker thread and clears buffered motion targets."""
         self._is_active = False
         self.client.stop()
-        self.get_logger().info("Inference streaming paused.")
+        self.get_logger().info("Inference client stopped.")
 
     def _wrist_cam_callback(self, msg: CompressedImage) -> None:
-        """Stores latest compressed wrist camera image snapshot atomically."""
         with self._lock:
             self._latest_wrist_bytes = image_msg_to_bytes(msg)
-        self._try_dispatch_observation()
+            self._latest_wrist_stamp = time.time()
 
     def _side_cam_callback(self, msg: CompressedImage) -> None:
-        """Stores latest compressed side camera image snapshot atomically."""
         with self._lock:
             self._latest_side_bytes = image_msg_to_bytes(msg)
-        self._try_dispatch_observation()
+            self._latest_side_stamp = time.time()
+
+    def _overhead_cam_callback(self, msg: CompressedImage) -> None:
+        with self._lock:
+            self._latest_overhead_bytes = image_msg_to_bytes(msg)
+            self._latest_overhead_stamp = time.time()
 
     def _joint_state_callback(self, msg: JointState) -> None:
-        """Extracts and updates ordered arm joint feedback positions atomically."""
         positions = extract_joint_positions(msg, self.arm_joints)
         if positions is not None:
             with self._lock:
+                self._previous_joint_positions = (
+                    self._latest_joint_positions.copy()
+                    if self._latest_joint_positions is not None
+                    else positions.copy()
+                )
                 self._latest_joint_positions = positions
+                self._latest_joint_stamp = time.time()
 
     def _estop_callback(self, msg: Bool) -> None:
-        """Processes emergency stop triggers to instantly inhibit motion publishing."""
-        self.watchdog.trigger_estop(msg.data)
+        self._estop_active = msg.data
         if msg.data:
-            self.get_logger().warn("E-STOP triggered via /lekiwi/estop! Stopping arm motion.")
+            self.get_logger().warn("E-STOP triggered via /lekiwi/estop! Halting motion.")
 
-    def _try_dispatch_observation(self) -> None:
-        """Submits complete synchronized sensor observations to background worker queue."""
-        if not self._is_active:
-            return
-
+    def _is_sensor_data_fresh(self, now: float) -> bool:
+        max_age = self.max_age_s
         with self._lock:
-            wrist = self._latest_wrist_bytes
-            side = self._latest_side_bytes
-            joints = self._latest_joint_positions
+            if (
+                self._latest_wrist_bytes is None
+                or self._latest_side_bytes is None
+                or self._latest_overhead_bytes is None
+                or self._latest_joint_positions is None
+            ):
+                return False
 
-        if wrist is not None and side is not None and joints is not None:
-            obs = {
-                "observation.state": joints,
-                "observation.images.wrist": wrist,
-                "observation.images.side": side,
-            }
-            self.client.submit_observation(obs)
+            if (now - self._latest_wrist_stamp) > max_age:
+                return False
+            if (now - self._latest_side_stamp) > max_age:
+                return False
+            if (now - self._latest_overhead_stamp) > max_age:
+                return False
+            if (now - self._latest_joint_stamp) > max_age:
+                return False
+            return True
+
+    # -----------------------------------------------------------------------
+    # Action Server Callbacks
+    # -----------------------------------------------------------------------
+
+    def _handle_goal_received(self, goal_request: ExecuteChessMove.Goal) -> GoalResponse:
+        with self._active_goal_lock:
+            if self._active_goal_handle is not None and self._active_goal_handle.is_active:
+                self.get_logger().warn("Rejecting goal: arm is currently busy with another active goal.")
+                return GoalResponse.REJECT
+
+        op = goal_request.operation
+        if op not in TASK_DESCRIPTION_MAP:
+            self.get_logger().error(f"Rejecting goal: unknown operation enum {op}.")
+            return GoalResponse.REJECT
+
+        return GoalResponse.ACCEPT
+
+    def _handle_cancel_received(self, goal_handle) -> CancelResponse:
+        self.get_logger().warn("Received cancellation request for active manipulation goal.")
+        return CancelResponse.ACCEPT
+
+    def _execute_chess_move_goal(self, goal_handle) -> ExecuteChessMove.Result:
+        goal = goal_handle.request
+        op = goal.operation
+        task = TASK_DESCRIPTION_MAP.get(op, "Chess pick and place move")
+        env_state = np.array(goal.environment_state, dtype=np.float32)
+
+        self.get_logger().info(
+            f"Executing manipulation goal: op={op} ('{task}'), env_state={env_state.tolist()[:6]}..."
+        )
+
+        with self._active_goal_lock:
+            self._active_goal_handle = goal_handle
+            self._active_env_state = env_state
+            self._active_task = task
+            self._active_goal_start_time = time.time()
+            self._active_settle_count = 0
+            self._goal_finished_event.clear()
+            self._goal_success = False
+            self._goal_result_message = ""
+
+        # Flush stale actions from any previous transaction
+        self.client.reset_episode()
+
+        poll_interval = 0.05
+        max_duration = self.max_episode_duration_s
+
+        while not self._goal_finished_event.wait(timeout=poll_interval):
+            if goal_handle.is_cancel_requested:
+                with self._active_goal_lock:
+                    self._goal_success = False
+                    self._goal_result_message = "Goal canceled by client request."
+                    self._goal_finished_event.set()
+                break
+
+            elapsed = time.time() - self._active_goal_start_time
+            if elapsed >= max_duration:
+                with self._active_goal_lock:
+                    self._goal_success = False
+                    self._goal_result_message = f"Policy rollout timeout after {elapsed:.1f}s."
+                    self._goal_finished_event.set()
+                break
+
+        total_duration = float(time.time() - self._active_goal_start_time)
+        result = ExecuteChessMove.Result()
+        result.execution_time_sec = total_duration
+
+        with self._active_goal_lock:
+            success = self._goal_success
+            result.success = success
+            result.message = self._goal_result_message or ("Success" if success else "Failed")
+
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                self.get_logger().warn(f"Goal canceled: {result.message}")
+            elif success:
+                goal_handle.succeed()
+                self.get_logger().info(f"Goal completed successfully in {total_duration:.2f}s")
+            else:
+                goal_handle.abort()
+                self.get_logger().error(f"Goal aborted: {result.message}")
+
+            self._active_goal_handle = None
+            self._active_env_state = None
+
+        self.client.reset_episode()
+        return result
+
+    # -----------------------------------------------------------------------
+    # 25 Hz Control & Observation Loop
+    # -----------------------------------------------------------------------
 
     def _control_timer_callback(self) -> None:
-        """Executes real-time 50Hz control step, arbitrating between planned actions and position hold."""
+        now = time.time()
+
         with self._lock:
             current_joints = (
                 self._latest_joint_positions.copy()
                 if self._latest_joint_positions is not None
                 else None
             )
+            prev_joints = (
+                self._previous_joint_positions.copy()
+                if self._previous_joint_positions is not None
+                else current_joints
+            )
+            wrist_bytes = self._latest_wrist_bytes
+            side_bytes = self._latest_side_bytes
+            overhead_bytes = self._latest_overhead_bytes
 
         if current_joints is None:
             return
 
-        # Check for new action arrival to update watchdog timer
-        last_action_ts = self.client.get_last_action_timestamp()
-        if last_action_ts > 0:
-            self.watchdog.notify_action_received(last_action_ts)
+        with self._active_goal_lock:
+            active_handle = self._active_goal_handle
+            env_state = self._active_env_state
+            task = self._active_task
+            start_time = self._active_goal_start_time
 
-        candidate_action = self.client.get_next_action() if self._is_active else None
+        # 1. Observation Dispatch (when goal is running and client is ready)
+        if active_handle is not None and env_state is not None:
+            if self.client.ready_to_send() and self._is_sensor_data_fresh(now):
+                raw_obs = {
+                    "observation.images.wrist": wrist_bytes,
+                    "observation.images.side": side_bytes,
+                    "observation.images.overhead": overhead_bytes,
+                    "observation.state": current_joints.astype(np.float32),
+                    "observation.environment_state": env_state,
+                    "task": task,
+                }
+                self.client.submit_observation(raw_obs, timestamp=now)
 
-        safe_cmd, state = self.watchdog.arbitrate_command(
-            candidate_action=candidate_action,
-            current_joint_positions=current_joints,
-        )
+        # 2. Action Actuation
+        if self._estop_active:
+            # E-stop holds current position
+            safe_cmd = current_joints
+        elif active_handle is not None and self.client.actions_available():
+            candidate = self.client.pop_action()
+            safe_cmd = candidate if candidate is not None else current_joints
+        else:
+            # Default hold position
+            safe_cmd = current_joints
 
         msg = Float64MultiArray()
         msg.data = [float(val) for val in safe_cmd]
         self.cmd_pub.publish(msg)
 
-    def _watchdog_timer_callback(self) -> None:
-        """Evaluates communication health at 10Hz and publishes diagnostic telemetry."""
-        state = self.watchdog.evaluate_state()
-        age = self.watchdog.get_action_age()
-        timeouts = self.watchdog.get_timeout_count()
+        # 3. Publish Feedback & Evaluate Convergence
+        if active_handle is not None and active_handle.is_active:
+            elapsed = now - start_time
+            progress = min(100.0, float((elapsed / self.max_episode_duration_s) * 100.0))
 
-        if state == SafetyState.STALE_HOLD and self._is_active:
-            self.get_logger().warn(
-                f"Inference latency exceeded! Action age: {age:.3f}s > {self.max_age_s}s. Holding arm position.",
-                throttle_duration_sec=2.0,
-            )
+            feedback = ExecuteChessMove.Feedback()
+            feedback.current_phase = "POLICY_ROLLOUT"
+            feedback.progress_percent = progress
+            feedback.instruction = task
+            active_handle.publish_feedback(feedback)
 
-        # Publish diagnostic status
+            if elapsed >= self.min_episode_duration_s and prev_joints is not None:
+                pos_err = float(np.max(np.abs(safe_cmd - current_joints)))
+                vel_mag = float(np.max(np.abs(current_joints - prev_joints)))
+
+                if pos_err < self.pos_tol_rad and vel_mag < self.vel_tol_rad:
+                    self._active_settle_count += 1
+                    if self._active_settle_count >= self.required_settle_steps:
+                        with self._active_goal_lock:
+                            self._goal_success = True
+                            self._goal_result_message = f"Converged after {elapsed:.2f}s."
+                            self._goal_finished_event.set()
+                else:
+                    self._active_settle_count = 0
+
+    def _diagnostic_timer_callback(self) -> None:
+        """Publishes 1 Hz diagnostic telemetry."""
         diag = DiagnosticStatus()
         diag.name = "LeKiwi Policy Inference"
         diag.hardware_id = "RaspberryPi5-ZeroMQ"
-        diag.level = (
-            DiagnosticStatus.OK
-            if state == SafetyState.HEALTHY
-            else DiagnosticStatus.WARN
-            if state == SafetyState.STALE_HOLD
-            else DiagnosticStatus.ERROR
-        )
-        diag.message = state.value
+        diag.level = DiagnosticStatus.OK if self.transport.is_connected() else DiagnosticStatus.WARN
+        diag.message = "Connected" if self.transport.is_connected() else "Disconnected"
         diag.values = [
-            KeyValue(key="ActionAge_s", value=f"{age:.4f}"),
-            KeyValue(key="QueueSize", value=str(self.client.action_queue.size())),
-            KeyValue(key="ServerRTT_ms", value=f"{self.transport.ping():.1f}"),
-            KeyValue(key="TimeoutEvents", value=str(timeouts)),
-            KeyValue(key="IsActive", value=str(self._is_active)),
+            KeyValue(key="transport_connected", value=str(self.transport.is_connected())),
+            KeyValue(key="queue_size", value=str(self.client.get_queue_size())),
+            KeyValue(key="rtt_latency_ms", value=f"{self.transport.ping():.1f}"),
         ]
         self.diag_pub.publish(diag)
 
     def _handle_enable_service(
         self, request: SetBool.Request, response: SetBool.Response
     ) -> SetBool.Response:
-        """Handles external service calls to start or pause policy motion."""
+        """Handles external service calls to start or pause policy client connection."""
         if request.data:
             if not self._is_active:
                 success = self._start_inference()
                 response.success = success
-                response.message = (
-                    "Inference streaming started" if success else "Failed to start inference"
-                )
+                response.message = "Inference client started" if success else "Failed to connect"
             else:
                 response.success = True
-                response.message = "Inference is already running"
+                response.message = "Inference is already connected"
         else:
             self._stop_inference()
             response.success = True
-            response.message = "Inference streaming paused"
+            response.message = "Inference client stopped"
         return response
 
     def destroy_node(self) -> None:
@@ -373,18 +530,15 @@ class AsyncRos2ClientNode(Node):
 
 
 def main(args=None) -> None:
-    """Initializes rclpy runtime and spins the async inference client node."""
+    """Initializes rclpy runtime and spins the async inference client node using MultiThreadedExecutor."""
     rclpy.init(args=args)
     node = AsyncRos2ClientNode()
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
-
-if __name__ == "__main__":
-    main()
-
