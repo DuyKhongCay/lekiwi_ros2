@@ -23,13 +23,12 @@ class OrchestratorParameters:
 
     def __init__(self, node: Node) -> None:
         """Declare and parse all orchestrator ROS 2 parameters from node handle."""
-        node.declare_parameter("robot_color", "b")
         node.declare_parameter("board_frame", "chessboard_frame")
         node.declare_parameter("map_frame", "map")
         node.declare_parameter("feasibility_timeout_sec", 5.0)
         node.declare_parameter("action_timeout_sec", 60.0)
         node.declare_parameter("readiness_timeout_sec", 1.0)
-        node.declare_parameter("pre_grasp_settle_sec", 2.0)
+        node.declare_parameter("chassis_settle_timeout_sec", 2.0)
         node.declare_parameter("navigation", True)
 
         node.declare_parameter("recovery.auto_recovery_enabled", True)
@@ -46,10 +45,27 @@ class OrchestratorParameters:
             "services.check_feasibility", "/workspace/check_move_feasibility"
         )
         node.declare_parameter("services.recover", "/orchestrator/recover")
+        node.declare_parameter("services.import_fen", "/orchestrator/import_fen")
+        node.declare_parameter("services.export_fen", "/orchestrator/export_fen")
+        node.declare_parameter("services.chess_set_fen", "/chess/set_fen")
         node.declare_parameter(
             "services.set_perception_context",
             "/orchestrator/set_perception_context",
         )
+        node.declare_parameter(
+            "services.system_reset_readiness",
+            "/system/reset_readiness",
+        )
+        node.declare_parameter(
+            "services.ekf_reset",
+            "/ekf_filter_node_map/reset",
+        )
+
+        node.declare_parameter("disturbance.local_odom_topic", "/odometry/local")
+        node.declare_parameter("disturbance.global_odom_topic", "/odometry/global")
+        node.declare_parameter("disturbance.uncommanded_linear_thresh", 0.03)
+        node.declare_parameter("disturbance.uncommanded_angular_thresh", 0.08)
+        node.declare_parameter("disturbance.uncommanded_confirm_duration_sec", 0.20)
 
         node.declare_parameter("actions.navigate_to_pose", "/navigate_to_pose")
         node.declare_parameter(
@@ -76,7 +92,6 @@ class OrchestratorParameters:
         if not math.isfinite(readiness_to) or readiness_to <= 0:
             raise ValueError("readiness_timeout_sec must be finite and positive")
 
-        self.robot_color = str(node.get_parameter("robot_color").value).lower()
         self.board_frame = str(node.get_parameter("board_frame").value)
         self.map_frame = str(node.get_parameter("map_frame").value)
         self.feasibility_timeout_sec = float(
@@ -84,8 +99,8 @@ class OrchestratorParameters:
         )
         self.action_timeout_sec = float(node.get_parameter("action_timeout_sec").value)
         self.readiness_timeout_sec = readiness_to
-        self.pre_grasp_settle_sec = float(
-            node.get_parameter("pre_grasp_settle_sec").value
+        self.chassis_settle_timeout_sec = float(
+            node.get_parameter("chassis_settle_timeout_sec").value
         )
         self.navigation = bool(node.get_parameter("navigation").value)
 
@@ -111,8 +126,31 @@ class OrchestratorParameters:
             node.get_parameter("services.check_feasibility").value
         )
         self.recover_srv = str(node.get_parameter("services.recover").value)
+        self.import_fen_srv = str(node.get_parameter("services.import_fen").value)
+        self.export_fen_srv = str(node.get_parameter("services.export_fen").value)
+        self.chess_set_fen_srv = str(node.get_parameter("services.chess_set_fen").value)
         self.set_perception_srv = str(
             node.get_parameter("services.set_perception_context").value
+        )
+        self.system_reset_readiness_srv = str(
+            node.get_parameter("services.system_reset_readiness").value
+        )
+        self.ekf_reset_srv = str(node.get_parameter("services.ekf_reset").value)
+
+        self.disturbance_local_odom_topic = str(
+            node.get_parameter("disturbance.local_odom_topic").value
+        )
+        self.disturbance_global_odom_topic = str(
+            node.get_parameter("disturbance.global_odom_topic").value
+        )
+        self.disturbance_uncommanded_linear_thresh = float(
+            node.get_parameter("disturbance.uncommanded_linear_thresh").value
+        )
+        self.disturbance_uncommanded_angular_thresh = float(
+            node.get_parameter("disturbance.uncommanded_angular_thresh").value
+        )
+        self.disturbance_uncommanded_confirm_duration_sec = float(
+            node.get_parameter("disturbance.uncommanded_confirm_duration_sec").value
         )
 
         self.navigate_to_pose_action = str(

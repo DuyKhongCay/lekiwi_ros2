@@ -29,6 +29,7 @@ namespace lekiwi_chess_master
     // Declare and initialize tracking parameters
     raw_fen_topic_ = declare_parameter<std::string>("raw_fen_topic", "/chess/raw_fen");
     game_status_topic_ = declare_parameter<std::string>("game_status_topic", "/chess/game_status");
+    set_fen_service_name_ = declare_parameter<std::string>("set_fen_service", "/chess/set_fen");
     debounce_frames_ = declare_parameter<int>("debounce_frames", 3);
     auto_trigger_engine_ = declare_parameter<bool>("auto_trigger_engine", false);
     robot_color_ = declare_parameter<std::string>("robot_color", "black");
@@ -37,9 +38,9 @@ namespace lekiwi_chess_master
 
     RCLCPP_INFO(
         get_logger(),
-        "Starting ChessGameStateTrackerComponent (Sub: %s, Pub: %s, Debounce: %d frames, "
+        "Starting ChessGameStateTrackerComponent (Sub: %s, Pub: %s, Service: %s, Debounce: %d frames, "
         "AutoTrigger: %s, RobotColor: %s, ThinkTime: %d ms)",
-        raw_fen_topic_.c_str(), game_status_topic_.c_str(), debounce_frames_,
+        raw_fen_topic_.c_str(), game_status_topic_.c_str(), set_fen_service_name_.c_str(), debounce_frames_,
         auto_trigger_engine_ ? "true" : "false", robot_color_.c_str(), think_time_ms_);
 
     // Publish game status with reliable QoS for UI panels and motion orchestrators
@@ -55,6 +56,12 @@ namespace lekiwi_chess_master
     reset_srv_ = create_service<std_srvs::srv::Trigger>(
         "/chess/reset_game",
         std::bind(&ChessGameStateTrackerComponent::handle_reset_service, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    // Provide import/set FEN service
+    set_fen_srv_ = create_service<lekiwi_interfaces::srv::SetFen>(
+        set_fen_service_name_,
+        std::bind(&ChessGameStateTrackerComponent::handle_set_fen_service, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     // Optionally instantiate action client for autonomous Stockfish queries
@@ -97,12 +104,105 @@ namespace lekiwi_chess_master
     best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
     current_eval_centipawns_ = 0;
     current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
+    awaiting_physical_sync_ = false;
 
     RCLCPP_INFO(get_logger(), "Chess game board reset to starting position: %s", board_.getFen().c_str());
     publish_game_status(true, true);
 
     // If robot plays White, initiate the opening calculation immediately
     trigger_engine_if_needed();
+  }
+
+  bool ChessGameStateTrackerComponent::set_fen(
+      std::string_view fen_str,
+      std::string_view new_robot_color,
+      std::string &canonical_fen,
+      std::string &active_color,
+      std::string &robot_color,
+      std::string &message)
+  {
+    std::string norm_color(new_robot_color);
+    std::transform(norm_color.begin(), norm_color.end(), norm_color.begin(), ::tolower);
+    if (norm_color.empty())
+    {
+      message = "Missing required robot_color: must specify 'w'/'white' or 'b'/'black'";
+      RCLCPP_WARN(get_logger(), "Rejected set_fen request: %s", message.c_str());
+      return false;
+    }
+    if (norm_color != "w" && norm_color != "white" && norm_color != "b" && norm_color != "black")
+    {
+      message = "Invalid robot_color '" + std::string(new_robot_color) + "': must specify 'w'/'white' or 'b'/'black'";
+      RCLCPP_WARN(get_logger(), "Rejected set_fen request: %s", message.c_str());
+      return false;
+    }
+
+    chess::Board candidate_board;
+    std::string err;
+    if (!domain::validate_and_parse_fen(fen_str, candidate_board, err))
+    {
+      message = "Invalid FEN: " + err;
+      RCLCPP_WARN(get_logger(), "Rejected set_fen request: %s", message.c_str());
+      return false;
+    }
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    // Abort active engine search if running
+    if (is_engine_busy_ && current_goal_handle_)
+    {
+      RCLCPP_INFO(get_logger(), "Canceling active engine search due to FEN import.");
+      if (action_client_)
+      {
+        action_client_->async_cancel_goal(current_goal_handle_);
+      }
+      current_goal_handle_.reset();
+    }
+    is_engine_busy_ = false;
+
+    // Update robot color
+    robot_color_ = (norm_color == "w" || norm_color == "white") ? "white" : "black";
+    robot_color = (robot_color_ == "white") ? "w" : "b";
+
+    board_ = candidate_board;
+    std::string full_fen = board_.getFen();
+    auto space_idx = full_fen.find(' ');
+    last_accepted_placement_ = (space_idx != std::string::npos)
+                                   ? full_fen.substr(0, space_idx)
+                                   : full_fen;
+
+    pending_placement_.clear();
+    consecutive_count_ = 0;
+    last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+    best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+    current_eval_centipawns_ = 0;
+
+    awaiting_physical_sync_ = true;
+    current_phase_ = ChessGameStatus::PHASE_AWAITING_BOARD_SYNC;
+
+    canonical_fen = full_fen;
+    active_color = (board_.sideToMove() == chess::Color::WHITE) ? "w" : "b";
+    message = "FEN imported successfully. Awaiting physical board synchronization.";
+
+    RCLCPP_INFO(
+        get_logger(),
+        "FEN imported successfully: %s (Robot Color: %s). Phase set to PHASE_AWAITING_BOARD_SYNC.",
+        canonical_fen.c_str(), robot_color_.c_str());
+
+    publish_game_status(true, false);
+    return true;
+  }
+
+  void ChessGameStateTrackerComponent::handle_set_fen_service(
+      const std::shared_ptr<lekiwi_interfaces::srv::SetFen::Request> request,
+      std::shared_ptr<lekiwi_interfaces::srv::SetFen::Response> response)
+  {
+    response->success = set_fen(
+        request->fen,
+        request->robot_color,
+        response->canonical_fen,
+        response->active_color,
+        response->robot_color,
+        response->message);
   }
 
   void ChessGameStateTrackerComponent::handle_reset_service(
@@ -153,6 +253,9 @@ namespace lekiwi_chess_master
     msg.best_move_details = best_move_details_;
     msg.eval_centipawns = current_eval_centipawns_;
     msg.active_color = (board_.sideToMove() == chess::Color::WHITE) ? "w" : "b";
+    std::string norm_color = robot_color_;
+    std::transform(norm_color.begin(), norm_color.end(), norm_color.begin(), ::tolower);
+    msg.robot_color = (norm_color == "white" || norm_color == "w") ? "w" : "b";
     msg.is_board_stable = is_stable;
     msg.is_legal_move = is_legal;
     msg.is_check = board_.inCheck();
@@ -166,13 +269,19 @@ namespace lekiwi_chess_master
       {
         msg.is_checkmate = true;
         msg.is_draw = false;
-        current_phase_ = ChessGameStatus::PHASE_GAME_OVER;
+        if (!awaiting_physical_sync_)
+        {
+          current_phase_ = ChessGameStatus::PHASE_GAME_OVER;
+        }
       }
       else
       {
         msg.is_checkmate = false;
         msg.is_draw = true; // Stalemate
-        current_phase_ = ChessGameStatus::PHASE_GAME_OVER;
+        if (!awaiting_physical_sync_)
+        {
+          current_phase_ = ChessGameStatus::PHASE_GAME_OVER;
+        }
       }
     }
     else
@@ -181,7 +290,14 @@ namespace lekiwi_chess_master
       msg.is_draw = false;
     }
 
-    msg.game_phase = current_phase_;
+    if (awaiting_physical_sync_)
+    {
+      msg.game_phase = ChessGameStatus::PHASE_AWAITING_BOARD_SYNC;
+    }
+    else
+    {
+      msg.game_phase = current_phase_;
+    }
     game_status_pub_->publish(msg);
   }
 
@@ -300,6 +416,11 @@ namespace lekiwi_chess_master
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       current_goal_handle_.reset();
+      if (awaiting_physical_sync_)
+      {
+        RCLCPP_INFO(get_logger(), "Ignoring late engine result while awaiting board sync.");
+        return;
+      }
     }
 
     switch (result.code)
@@ -372,6 +493,23 @@ namespace lekiwi_chess_master
     }
 
     bool is_stable = (consecutive_count_ >= debounce_frames_);
+
+    // Handle board synchronization mode
+    if (awaiting_physical_sync_)
+    {
+      if (placement == last_accepted_placement_ && is_stable)
+      {
+        awaiting_physical_sync_ = false;
+        current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
+        RCLCPP_INFO(
+            get_logger(),
+            "Physical board synchronization complete! Matched placement: %s",
+            placement.c_str());
+        publish_game_status(true, true);
+        trigger_engine_if_needed();
+      }
+      return;
+    }
 
     // Discard redundant updates if placement is already accepted and current
     if (placement == last_accepted_placement_)

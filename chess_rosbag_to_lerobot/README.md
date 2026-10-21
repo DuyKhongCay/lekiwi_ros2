@@ -34,8 +34,9 @@ Physical-AI models like ACT and Diffusion Policy require strictly synchronous, f
 `chess_rosbag_to_lerobot` resolves this fundamental domain mismatch through four key capabilities:
 
 * **Anti-Future-Leakage Temporal Synchronizer**: Drives the dataset clock from a high-priority visual reference stream (`/cameras/usb_wrist/image_raw/compressed` at 25 Hz) while sampling peripheral visual and proprioceptive streams using strict causal "As-Of" alignment ($t_{\text{sample}} \le t_{\text{ref}}$).
-* **SSOT Dynamic Chess Spatial Conditioning**: Parses task instructions (e.g. `"Pick e2, place e4"`), converts FIDE algebraic squares into metric 3D points relative to the physical board origin, projects them dynamically into the robot base frame via recorded `/tf` replay, and bundles them into a unified 6D `observation.environment_state` vector.
+* **Multi-Primitive 10D Spatial Conditioning**: Parses task instructions across all four manipulation primitives (`MOVE`, `CLEAR`, `PICK`, `PLACE`), projects board endpoints dynamically into `base_footprint` via `/tf` replay or forward kinematics (FK) landmarks (`stow`, `clear_left`, `clear_right`), and bundles them with a 4D one-hot primitive selector into a 10D `observation.environment_state` conditioning vector.
 * **Direct Multi-Camera Decoding**: Decodes compressed JPEG frames from up to three camera perspectives (`usb_wrist`, `usb_side`, `stereo_right`) and encodes them directly into MP4 video chunks (`libsvtav1` / `libx264`).
+* **Offline TF Replaying with Seeding & Pure-NumPy Fallback**: Reconstructs frame transformations offline even when `/tf_static` is omitted from rosbags (via configurable `map -> chessboard_frame` seeding) and provides an integrated pure-NumPy BFS transform graph that works with zero ROS 2 dependencies.
 * **Pixi-First Host Workstation Integration**: Seamlessly pre-configured to execute on GPU training workstations via isolated `pixi` environments with zero host ROS 2 dependency pollution.
 
 ---
@@ -105,9 +106,27 @@ In imitation learning, passing future observation data ($t > t_{\text{ref}}$) in
 
 ---
 
-### 2.3 SSOT Chess Spatial Conditioning
+### 2.3 Multi-Primitive 10D Spatial Conditioning
 
-To enable generalized pick-and-place without requiring hundreds of demonstrations for all 4,032 possible square combinations, the policy is conditioned on target coordinates.
+To enable generalized manipulation across diverse board actions without requiring separate policy models, the policy is conditioned on a unified 10D target vector across all 4 manipulation primitives:
+
+1. **`MOVE`** (`"Pick <from_sq>, place <to_sq>"` / `"e2e4"`):
+   - Source: `<from_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
+   - Target: `<to_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
+   - One-hot: `[1, 0, 0, 0]`.
+2. **`CLEAR`** (`"Clear <from_sq> to left onboard bin"` / `"Clear <from_sq> to right onboard bin"`):
+   - Source: `<from_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
+   - Target: Calibrated discard bin landmark (`clear_left` or `clear_right`) computed via 5-DoF forward kinematics in `base_footprint`.
+   - One-hot: `[0, 1, 0, 0]`.
+   - *Validation Policy*: Any episode lacking explicit `"left"` or `"right"` (e.g. `"Clear d4 to onboard bin"`) raises `AmbiguousClearBinError` and is immediately skipped with a `WARNING` log without reading the MCAP payload.
+3. **`PICK`** (`"Pick <from_sq>"`):
+   - Source: `<from_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
+   - Target: Calibrated `stow` position in `base_footprint` via forward kinematics.
+   - One-hot: `[0, 0, 1, 0]`.
+4. **`PLACE`** (`"Place <to_sq>"`):
+   - Source: Calibrated `stow` position in `base_footprint` via forward kinematics.
+   - Target: `<to_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
+   - One-hot: `[0, 0, 0, 1]`.
 
 ```
        [Rank 8]  a8  b8  c8  d8  e8  f8  g8  h8
@@ -117,16 +136,9 @@ To enable generalized pick-and-place without requiring hundreds of demonstration
                 [File A]                       [File H]
 ```
 
-1. **Board Metric Mapping**: Given square name $S = (f, r)$ where file $f \in [0, 7]$ and rank $r \in [0, 7]$, coordinates $(x_b, y_b, z_b)$ in `chessboard_frame` with center origin are computed as:
-   $$x_b = (f - 3.5) \cdot s, \quad y_b = (r - 3.5) \cdot s, \quad z_b = z_{\text{clearance}}$$
-   where $s = 0.037\,\text{m}$ (square dimension) and $z_{\text{clearance}} = 0.035\,\text{m}$.
-
-2. **Dynamic Kinematic Projection**: Using `TfReplayer`, each point is dynamically transformed into the moving robot's `base_footprint` at timestamp $t_{\text{ref}}$:
-   $$\mathbf{p}_{\text{base}}(t) = \mathbf{T}_{\text{base}}^{\text{board}}(t) \begin{bmatrix} x_b \\ y_b \\ z_b \\ 1 \end{bmatrix}$$
-
-3. **Conditioning Vector Packaging**: Pick and place points are concatenated into a single 6-dimensional **Environment State** vector:
-   $$\mathbf{s}_{\text{env}} = \begin{bmatrix} x_{\text{pick}}^{\text{base}} & y_{\text{pick}}^{\text{base}} & z_{\text{pick}}^{\text{base}} & x_{\text{place}}^{\text{base}} & y_{\text{place}}^{\text{base}} & z_{\text{place}}^{\text{base}} \end{bmatrix}^T \in \mathbb{R}^6$$
-   This vector is ingested by LeRobot's Transformer Encoder as a goal token (via Linear Projection) or Diffusion conditioning vector.
+#### Vector Packaging
+The resulting 10-dimensional **Environment State** vector is:
+$$\mathbf{s}_{\text{env}} = \begin{bmatrix} x_{\text{source}}^{\text{base}} & y_{\text{source}}^{\text{base}} & z_{\text{source}}^{\text{base}} & x_{\text{target}}^{\text{base}} & y_{\text{target}}^{\text{base}} & z_{\text{target}}^{\text{base}} & \text{is\_move} & \text{is\_clear} & \text{is\_pick} & \text{is\_place} \end{bmatrix}^T \in \mathbb{R}^{10}$$
 
 ---
 
@@ -141,7 +153,7 @@ When converted, each episode produces a standardized schema compatible with PyTo
 | `observation.images.overhead` | `[384, 384, 3]` | `video` (AV1/MP4) | Overhead perspective (`stereo_right`) of board |
 | `observation.state` | `[6]` | `float32` | Current 6-DoF joint positions (`arm_shoulder_pan`..`arm_gripper`) |
 | `action` | `[6]` | `float32` | Commanded/actual trajectory controller joint positions |
-| `observation.environment_state` | `[6]` | `float32` | 6D metric conditioning target: `[pick_xyz, place_xyz]` in meters |
+| `observation.environment_state` | `[10]` | `float32` | 10D conditioning target: `[source_xyz, target_xyz, is_move, is_clear, is_pick, is_place]` in meters / one-hot |
 
 ### Generated Directory Layout
 ```
@@ -190,6 +202,7 @@ pixi run -e lerobot convert -- \
 * `--input-dir <path>`: Root directory containing episode sub-folders (`episode_000000/`, etc.).
 * `--config <path>`: Path to conversion YAML configuration.
 * `--repo-id <id>`: Identifier for the dataset (e.g. `local/dataset_name` or `hf_username/repo_name`).
+* `--task-types <types...>`: (Optional) Filter episodes by manipulation primitive (`move`, `clear`, `pick`, `place`).
 * `--output-dir <path>`: (Optional) Override local destination folder (default: `~/.cache/huggingface/lerobot/<repo-id>`).
 * `--vcodec <codec>`: Video compression library (`libsvtav1` default, `libx264` for faster encoding, `h264_nvenc` for NVIDIA hardware encoding).
 * `--sync-p95`: Enable detailed 95th-percentile latency diagnostic profiling table.
@@ -274,10 +287,10 @@ features:
     max_age_s: 0.04
     names: *arm_joints
 
-  # 6D Goal Conditioning (pick_xyz + place_xyz)
+  # 10D Multi-Primitive Goal Conditioning (source_xyz + target_xyz + 4D one-hot)
   - key: "observation.environment_state"
     msg_type: "spatial/environment_state"
-    shape: [6]
+    shape: [10]
 ```
 
 ---

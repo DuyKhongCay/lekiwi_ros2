@@ -149,7 +149,7 @@ TEST_F(ManipulationActionServerTest, ActionClientExecutesCaptureMoveToClearBinMo
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
 
   ManipulationActionServer::ExecuteChessMove::Goal goal;
-  goal.instruction = "Clear d5";
+  goal.instruction = "Clear d5 to left onboard bin";
   goal.from_square = "d5";
   goal.to_square = "";
   goal.is_capture = true;
@@ -169,6 +169,102 @@ TEST_F(ManipulationActionServerTest, ActionClientExecutesCaptureMoveToClearBinMo
 
   EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
   EXPECT_TRUE(wrapped_result.result->success);
+
+  executor.cancel();
+  spin_thread.join();
+}
+
+TEST_F(ManipulationActionServerTest, ActionClientSucceedsClearRightMove)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("mock_execution", true);
+  options.append_parameter_override("default_velocity", 20.0);
+  options.append_parameter_override("action_name", "/test_manip/execute_clear_right_client");
+
+  auto server_node = std::make_shared<ManipulationActionServer>(options);
+  server_node->accept_robot_description(load_urdf());
+
+  auto client_node = std::make_shared<rclcpp::Node>("test_capture_move_client_right");
+  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
+    client_node, "/test_manip/execute_clear_right_client");
+
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(client_node);
+
+  std::thread spin_thread([&executor]() { executor.spin(); });
+
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
+
+  ManipulationActionServer::ExecuteChessMove::Goal goal;
+  goal.instruction = "Clear d5 to right onboard bin";
+  goal.from_square = "d5";
+  goal.to_square = "";
+  goal.is_capture = true;
+  goal.target_frame = "base_footprint";
+  goal.pick_point.x = 0.20;
+  goal.pick_point.y = -0.02;
+  goal.pick_point.z = 0.05;
+
+  auto send_goal_future = client->async_send_goal(goal);
+  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+  auto goal_handle = send_goal_future.get();
+  ASSERT_NE(goal_handle, nullptr);
+
+  auto result_future = client->async_get_result(goal_handle);
+  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+  auto wrapped_result = result_future.get();
+
+  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
+  EXPECT_TRUE(wrapped_result.result->success);
+
+  executor.cancel();
+  spin_thread.join();
+}
+
+TEST_F(ManipulationActionServerTest, ActionClientAbortsWhenCaptureMissingBinSide)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("mock_execution", true);
+  options.append_parameter_override("default_velocity", 20.0);
+  options.append_parameter_override("action_name", "/test_manip/execute_clear_ambiguous_client");
+
+  auto server_node = std::make_shared<ManipulationActionServer>(options);
+  server_node->accept_robot_description(load_urdf());
+
+  auto client_node = std::make_shared<rclcpp::Node>("test_capture_move_client_ambiguous");
+  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
+    client_node, "/test_manip/execute_clear_ambiguous_client");
+
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(client_node);
+
+  std::thread spin_thread([&executor]() { executor.spin(); });
+
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
+
+  ManipulationActionServer::ExecuteChessMove::Goal goal;
+  goal.instruction = "Clear d5 to onboard bin";
+  goal.from_square = "d5";
+  goal.to_square = "";
+  goal.is_capture = true;
+  goal.target_frame = "base_footprint";
+  goal.pick_point.x = 0.20;
+  goal.pick_point.y = 0.02;
+  goal.pick_point.z = 0.05;
+
+  auto send_goal_future = client->async_send_goal(goal);
+  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+  auto goal_handle = send_goal_future.get();
+  ASSERT_NE(goal_handle, nullptr);
+
+  auto result_future = client->async_get_result(goal_handle);
+  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+  auto wrapped_result = result_future.get();
+
+  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_FALSE(wrapped_result.result->success);
 
   executor.cancel();
   spin_thread.join();
@@ -728,7 +824,7 @@ TEST_F(ManipulationActionServerTest, ArmBusyTopicBroadcastsTrueDuringNamedPoseAn
 
   // Initial latched state should be false
   const auto wait_init = std::chrono::steady_clock::now();
-  while ((std::chrono::steady_clock::now() - wait_init) < std::chrono::seconds(1)) {
+  while ((std::chrono::steady_clock::now() - wait_init) < std::chrono::seconds(3)) {
     {
       std::lock_guard<std::mutex> lock(busy_mutex);
       if (!busy_history.empty()) {
@@ -889,6 +985,22 @@ TEST_F(ManipulationActionServerTest, RecordModeWaitingStateKeepsArmBusyFalse)
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
   ASSERT_TRUE(save_cli->wait_for_service(std::chrono::seconds(3)));
 
+  // Wait for initial latched busy = false message
+  const auto wait_busy_init = std::chrono::steady_clock::now();
+  while ((std::chrono::steady_clock::now() - wait_busy_init) < std::chrono::seconds(3)) {
+    {
+      std::lock_guard<std::mutex> lock(busy_mutex);
+      if (!latest_busy) {
+        break;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  {
+    std::lock_guard<std::mutex> lock(busy_mutex);
+    ASSERT_FALSE(latest_busy);
+  }
+
   std::string feedback_phase = "";
   ManipulationActionServer::ExecuteChessMove::Goal goal;
   goal.instruction = "e2e4";
@@ -935,6 +1047,98 @@ TEST_F(ManipulationActionServerTest, RecordModeWaitingStateKeepsArmBusyFalse)
   auto res_fut = client->async_get_result(goal_handle);
   ASSERT_EQ(res_fut.wait_for(std::chrono::seconds(3)), std::future_status::ready);
   EXPECT_TRUE(res_fut.get().result->success);
+
+  executor.cancel();
+  spin_thread.join();
+}
+
+TEST_F(ManipulationActionServerTest, RecordModeCancelGoalExitsImmediatelyAndDiscardsEpisode)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("mock_execution", true);
+  options.append_parameter_override("record", true);
+  options.append_parameter_override("default_velocity", 20.0);
+  options.append_parameter_override("action_name", "/test_manip/record_cancel_test");
+
+  auto server_node = std::make_shared<ManipulationActionServer>(options);
+  server_node->accept_robot_description(load_urdf());
+
+  auto client_node = std::make_shared<rclcpp::Node>("test_record_cancel_client");
+  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
+    client_node, "/test_manip/record_cancel_test");
+
+  std::atomic<bool> discard_called{false};
+  auto mock_discard_srv = client_node->create_service<std_srvs::srv::Trigger>(
+    "/episode_recorder_node/discard_episode",
+    [&discard_called](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+       std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+      discard_called.store(true);
+      res->success = true;
+      res->message = "Mock episode discarded by cancel";
+    });
+
+  auto save_cli = client_node->create_client<std_srvs::srv::Trigger>("/arm/save_episode");
+
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(client_node);
+
+  std::thread spin_thread([&executor]() { executor.spin(); });
+
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
+  ASSERT_TRUE(save_cli->wait_for_service(std::chrono::seconds(3)));
+
+  ManipulationActionServer::ExecuteChessMove::Goal goal;
+  goal.instruction = "e2e4";
+  goal.from_square = "e2";
+  goal.to_square = "e4";
+  goal.target_frame = "base_footprint";
+  goal.pick_point.x = 0.20;
+  goal.pick_point.y = 0.0;
+  goal.pick_point.z = 0.05;
+  goal.place_point.x = 0.20;
+  goal.place_point.y = 0.05;
+  goal.place_point.z = 0.05;
+
+  auto send_goal_future = client->async_send_goal(goal);
+  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+  auto goal_handle = send_goal_future.get();
+  ASSERT_NE(goal_handle, nullptr);
+
+  auto result_future = client->async_get_result(goal_handle);
+
+  // Wait until RECORDING_WAIT is reached
+  const auto wait_start = std::chrono::steady_clock::now();
+  while (!server_node->is_waiting_record() &&
+    (std::chrono::steady_clock::now() - wait_start) < std::chrono::seconds(2))
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_TRUE(server_node->is_waiting_record());
+
+  // Cancel goal asynchronously
+  auto cancel_future = client->async_cancel_goal(goal_handle);
+  ASSERT_EQ(cancel_future.wait_for(std::chrono::seconds(3)), std::future_status::ready);
+
+  // Verify action result returns CANCELED immediately
+  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(3)), std::future_status::ready);
+  auto wrapped_result = result_future.get();
+  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::CANCELED);
+  EXPECT_FALSE(wrapped_result.result->success);
+
+  // Verify discard episode was called
+  for (int i = 0; i < 50 && !discard_called.load(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  EXPECT_TRUE(discard_called.load());
+
+  // Verify that subsequent /arm/save_episode is rejected because not in RECORDING_WAIT
+  auto save_req = std::make_shared<std_srvs::srv::Trigger::Request>();
+  auto save_future = save_cli->async_send_request(save_req);
+  ASSERT_EQ(save_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+  auto save_resp = save_future.get();
+  EXPECT_FALSE(save_resp->success);
+  EXPECT_NE(save_resp->message.find("No active manipulation goal in RECORDING_WAIT"), std::string::npos);
 
   executor.cancel();
   spin_thread.join();

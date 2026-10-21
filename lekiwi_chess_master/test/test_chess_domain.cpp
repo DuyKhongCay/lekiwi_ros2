@@ -157,3 +157,68 @@ TEST_F(ChessDomainTest, FallbackOnPseudoLegalMove)
   EXPECT_EQ(details.to_square, "h8");
   EXPECT_EQ(details.promotion_piece, "queen");
 }
+
+TEST_F(ChessDomainTest, ValidateFenStandardPositions)
+{
+  chess::Board board;
+  std::string err;
+
+  // 1. Full 6-field standard starting FEN
+  EXPECT_TRUE(validate_and_parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", board, err));
+  EXPECT_TRUE(err.empty());
+  EXPECT_EQ(board.getFen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+
+  // 2. 1-field piece placement only
+  EXPECT_TRUE(validate_and_parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", board, err));
+  EXPECT_TRUE(err.empty());
+  EXPECT_EQ(board.sideToMove(), chess::Color::WHITE);
+
+  // 3. Valid custom endgame position
+  EXPECT_TRUE(validate_and_parse_fen("8/8/8/4k3/8/8/4K3/8 w - - 0 1", board, err));
+  EXPECT_TRUE(err.empty());
+}
+
+TEST_F(ChessDomainTest, ValidateFenRejectsInvalidInput)
+{
+  chess::Board board;
+  std::string err;
+
+  // Empty or whitespace
+  EXPECT_FALSE(validate_and_parse_fen("", board, err));
+  EXPECT_FALSE(err.empty());
+
+  EXPECT_FALSE(validate_and_parse_fen("   ", board, err));
+
+  // Invalid rank counts (7 ranks instead of 8)
+  EXPECT_FALSE(validate_and_parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP w - - 0 1", board, err));
+  EXPECT_NE(err.find("8 ranks"), std::string::npos);
+
+  // Invalid square count in rank (sum = 9)
+  EXPECT_FALSE(validate_and_parse_fen("rnbqkbnr/ppppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1", board, err));
+  EXPECT_NE(err.find("does not sum to 8"), std::string::npos);
+
+  // Invalid character
+  EXPECT_FALSE(validate_and_parse_fen("rnbqkbnr/pppppppp/8/8/4X3/8/PPPPPPPP/RNBQKBNR w - - 0 1", board, err));
+  EXPECT_NE(err.find("Invalid character"), std::string::npos);
+
+  // Missing kings (0 kings)
+  EXPECT_FALSE(validate_and_parse_fen("8/8/8/8/8/8/8/8 w - - 0 1", board, err));
+  EXPECT_NE(err.find("king"), std::string::npos);
+
+  // Missing Black king (White king only)
+  EXPECT_FALSE(validate_and_parse_fen("8/8/8/4K3/8/8/8/8 w - - 0 1", board, err));
+  EXPECT_NE(err.find("Black king"), std::string::npos);
+
+  // Two White kings
+  EXPECT_FALSE(validate_and_parse_fen("8/8/8/4K2K/4k3/8/8/8 w - - 0 1", board, err));
+  EXPECT_NE(err.find("White king"), std::string::npos);
+
+  // Pawns on 8th rank
+  EXPECT_FALSE(validate_and_parse_fen("4P3/8/8/4k3/8/8/4K3/8 w - - 0 1", board, err));
+  EXPECT_NE(err.find("rank"), std::string::npos);
+
+  // Inactive king under check (Black king attacked by White Queen, but it is Black's turn to move)
+  // White to move, but White king is already attacked by Black rook
+  EXPECT_FALSE(validate_and_parse_fen("4k3/8/8/8/8/8/4r3/4K3 b - - 0 1", board, err));
+  EXPECT_NE(err.find("Opposing king"), std::string::npos);
+}

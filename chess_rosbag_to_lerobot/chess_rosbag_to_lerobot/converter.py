@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import shutil
 import time
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
+import yaml
 
 try:
     from rclpy.serialization import deserialize_message
@@ -27,7 +28,11 @@ from chess_rosbag_to_lerobot.bag_reader import (
     open_reader,
 )
 from chess_rosbag_to_lerobot.buffers import LastBuffer
-from chess_rosbag_to_lerobot.chess_spatial_bridge import resolve_pick_place_points
+from chess_rosbag_to_lerobot.chess_spatial_bridge import (
+    EpisodeSpatialPlan,
+    assemble_environment_state,
+    resolve_episode_spatial_plan,
+)
 from chess_rosbag_to_lerobot.config import Config, FeatureSpec
 from chess_rosbag_to_lerobot.decoders import decode, get_lerobot_dtype
 from chess_rosbag_to_lerobot.tf_replayer import TfReplayer
@@ -35,6 +40,12 @@ from chess_rosbag_to_lerobot.tf_replayer import TfReplayer
 logger = logging.getLogger(__name__)
 
 POS_KEYS = {"observation.state", "action"}
+
+ENV_STATE_10D_NAMES = [
+    "source_x", "source_y", "source_z",
+    "target_x", "target_y", "target_z",
+    "is_move", "is_clear", "is_pick", "is_place",
+]
 
 
 def _is_visual(spec: FeatureSpec) -> bool:
@@ -77,17 +88,11 @@ def build_lerobot_features(cfg: Config, use_videos: bool = True) -> Dict[str, An
                 "names": ["height", "width", "channels"],
             }
         elif spec.msg_type.startswith("spatial/"):
-            # Chess spatial environment state (pick_point [3] + place_point [3] = [6])
-            shape = tuple(int(x) for x in spec.shape) if spec.shape else (6,)
-            names = (
-                ["pick_x", "pick_y", "pick_z", "place_x", "place_y", "place_z"]
-                if shape == (6,)
-                else None
-            )
+            # Chess spatial environment state (10D: [source(3), target(3), one_hot(4)])
             features[spec.key] = {
                 "dtype": "float32",
-                "shape": shape,
-                "names": names,
+                "shape": (10,),
+                "names": ENV_STATE_10D_NAMES,
             }
         else:
             names = list(spec.names) if spec.names is not None else None
@@ -104,27 +109,56 @@ def build_lerobot_features(cfg: Config, use_videos: bool = True) -> Dict[str, An
     return features
 
 
-def convert_one_bag(
-    bag_dir: Path,
-    cfg: Config,
-    dataset: Any,
-    *,
-    collect_p95: bool = False,
-) -> Tuple[int, int]:
-    """Convert a single rosbag episode directory into dataset frames."""
-    if not _ROS_AVAILABLE:
-        raise RuntimeError("ROS 2 python runtime (rclpy, rosidl_runtime_py) not available")
+# -----------------------------------------------------------------------------
+# Decomposed Episode Processing Helpers (Cognitive Complexity <= 6 each)
+# -----------------------------------------------------------------------------
 
-    # 1. Resolve episode task from custom metadata or YAML fallback
+def _extract_episode_task(bag_dir: Path, default_task: str) -> str:
+    """Extract episode task instruction from metadata.yaml or episode_info.yaml."""
     custom = get_custom_data(bag_dir)
     episode_task = custom.get("task")
-    task_str = str(episode_task) if episode_task else cfg.task
+    if not episode_task:
+        info_path = bag_dir / "episode_info.yaml"
+        if info_path.is_file():
+            try:
+                info_data = yaml.safe_load(info_path.read_text(encoding="utf-8")) or {}
+                episode_task = info_data.get("task")
+            except Exception as e:
+                logger.debug("Failed to read %s: %s", info_path, e)
 
-    # 2. Open bag and introspect topics
-    reader = open_reader(bag_dir)
-    bag_topic_types = get_topic_types(reader)
+    return str(episode_task) if episode_task else default_task
 
-    # 3. Match topics and prepare message deserialization classes
+
+def _resolve_and_filter_plan(
+    bag_dir: Path,
+    task_str: str,
+    cfg: Config,
+    allowed_types: Set[str],
+) -> Optional[EpisodeSpatialPlan]:
+    """Parse task into spatial plan and verify primitive against allowed task types."""
+    try:
+        spatial_plan = resolve_episode_spatial_plan(task_str, cfg.chessboard)
+    except ValueError as exc:
+        logger.warning("Skipping episode %s: %s", bag_dir.name, exc)
+        return None
+
+    if spatial_plan.task_type.value not in allowed_types:
+        logger.info(
+            "Skipping episode %s: task_type '%s' not in allowed %s",
+            bag_dir.name,
+            spatial_plan.task_type.value,
+            sorted(list(allowed_types)),
+        )
+        return None
+
+    return spatial_plan
+
+
+def _prepare_topic_specs(
+    bag_topic_types: Dict[str, str],
+    cfg: Config,
+) -> Tuple[Dict[str, FeatureSpec], Dict[str, type], FeatureSpec]:
+    """Validate topic availability and resolve ROS message deserialization classes."""
     topic_to_spec: Dict[str, FeatureSpec] = {s.topic: s for s in cfg.features if s.topic}
     topic_to_msg_class: Dict[str, type] = {}
 
@@ -138,16 +172,14 @@ def convert_one_bag(
             )
         topic_to_msg_class[topic] = get_message(bag_type)
 
-    # Add /tf and /tf_static if present in bag
-    tf_msg_cls = get_message("tf2_msgs/msg/TFMessage") if "tf2_msgs/msg/TFMessage" in bag_topic_types.values() else None
-    tf_replayer = TfReplayer()
-
-    # 4. Check reference topic
     if cfg.reference_topic not in topic_to_spec:
         raise ValueError(f"Reference topic '{cfg.reference_topic}' not found in config features")
-    ref_spec = topic_to_spec[cfg.reference_topic]
 
-    # 5. Initialize buffers for non-reference topics
+    return topic_to_spec, topic_to_msg_class, topic_to_spec[cfg.reference_topic]
+
+
+def _init_buffers(cfg: Config, collect_p95: bool) -> Dict[str, LastBuffer]:
+    """Initialize As-Of sample buffers for non-reference topics."""
     buffers: Dict[str, LastBuffer] = {}
     for spec in cfg.features:
         if not spec.topic or spec.topic == cfg.reference_topic:
@@ -157,86 +189,66 @@ def convert_one_bag(
             max_age_ns=int(max_age * 1e9),
             collect_p95=collect_p95,
         )
+    return buffers
 
-    # 6. Pre-calculate chess spatial pick and place vectors
-    pick_metric, place_metric = resolve_pick_place_points(task_str, cfg.chessboard)
 
-    frame_count = 0
-    dropped_count = 0
+def _build_reference_frame(
+    ref_msg: Any,
+    ts_ns: int,
+    ref_spec: FeatureSpec,
+    spatial_plan: EpisodeSpatialPlan,
+    buffers: Dict[str, LastBuffer],
+    tf_replayer: TfReplayer,
+    cfg: Config,
+) -> Optional[Dict[str, Any]]:
+    """Assemble synchronized frame dictionary at reference tick; returns None if stale."""
+    frame: Dict[str, Any] = {
+        ref_spec.key: decode(ref_msg, ref_spec),
+        "task": spatial_plan.canonical_task,
+    }
 
-    # 7. Process rosbag messages sequentially
-    while reader.has_next():
-        topic, data, bag_ts_ns = reader.read_next()
+    # Transform board-frame landmarks if needed
+    def transform_endpoint(pt: np.ndarray) -> Optional[np.ndarray]:
+        if cfg.chessboard.base_frame == cfg.chessboard.board_frame:
+            return pt
+        return tf_replayer.transform_point(
+            pt, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
+        )
 
-        # Handle TF messages
-        if topic in ("/tf", "/tf_static") and tf_msg_cls is not None:
-            msg = deserialize_message(data, tf_msg_cls)
-            tf_replayer.handle_tf_message(msg, is_static=(topic == "/tf_static"))
+    env_state = assemble_environment_state(spatial_plan, transform_endpoint)
+    for f_spec in cfg.features:
+        if f_spec.key == "observation.environment_state":
+            frame[f_spec.key] = env_state
+
+    # Sample remaining buffered features
+    for other_spec in cfg.features:
+        if not other_spec.topic or other_spec.topic == cfg.reference_topic:
             continue
 
-        spec = topic_to_spec.get(topic)
-        if spec is None:
-            continue
+        val = buffers[other_spec.topic].asof(ts_ns)
+        if val is None:
+            return None  # Stale or missing sample: drop frame
+        frame[other_spec.key] = val
 
-        msg_class = topic_to_msg_class[topic]
-        msg = deserialize_message(data, msg_class)
-        ts_ns = msg_time_ns(msg, spec.stamp_src, bag_ts_ns)
+    return frame
 
-        if topic == cfg.reference_topic:
-            # Reference tick clock: assemble frame
-            frame: Dict[str, Any] = {}
-            frame[ref_spec.key] = decode(msg, ref_spec)
-            frame["task"] = task_str
 
-            # Add Chess Spatial features
-            pick_point = pick_metric.copy()
-            place_point = place_metric.copy()
-            if cfg.chessboard.base_frame != cfg.chessboard.board_frame:
-                transformed_pick = tf_replayer.transform_point(
-                    pick_point, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
-                )
-                if transformed_pick is not None:
-                    pick_point = transformed_pick
-
-                transformed_place = tf_replayer.transform_point(
-                    place_point, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
-                )
-                if transformed_place is not None:
-                    place_point = transformed_place
-
-            env_state = np.concatenate([pick_point, place_point]).astype(np.float32)
-
-            for f_spec in cfg.features:
-                if f_spec.key == "observation.environment_state":
-                    frame[f_spec.key] = env_state
-
-            # Sample remaining buffered features
-            drop = False
-            for other_spec in cfg.features:
-                if not other_spec.topic or other_spec.topic == cfg.reference_topic:
-                    continue
-
-                val = buffers[other_spec.topic].asof(ts_ns)
-                if val is None:
-                    drop = True
-                    break
-                frame[other_spec.key] = val
-
-            if drop:
-                dropped_count += 1
-                continue
-
-            dataset.add_frame(frame)
-            frame_count += 1
-
-        else:
-            # Non-reference topic: decode and push into buffer
-            decoded_val = decode(msg, spec)
-            buffers[topic].push(ts_ns, decoded_val)
-
-    # Episode summary
-    drop_pct = (100.0 * dropped_count / max(1, frame_count + dropped_count))
-    logger.info("Episode %s: %d frames emitted, %d dropped (%.1f%%)", bag_dir.name, frame_count, dropped_count, drop_pct)
+def _log_and_save_episode(
+    bag_dir: Path,
+    frame_count: int,
+    dropped_count: int,
+    buffers: Dict[str, LastBuffer],
+    dataset: Any,
+) -> Tuple[int, int]:
+    """Emit telemetry summary and persist valid episode."""
+    drop_pct = 100.0 * dropped_count / max(1, frame_count + dropped_count)
+    logger.info(
+        "Episode %s: %d frames emitted, %d dropped (%.1f%%)",
+        bag_dir.name,
+        frame_count,
+        dropped_count,
+        drop_pct,
+    )
     for topic, buf in sorted(buffers.items()):
         logger.info("  %s", _format_sync_line(topic, buf.summary()))
 
@@ -246,6 +258,73 @@ def convert_one_bag(
         logger.warning("Episode %s produced 0 valid frames, skipping save", bag_dir.name)
 
     return frame_count, dropped_count
+
+
+# -----------------------------------------------------------------------------
+# Main Conversion Orchestrator
+# -----------------------------------------------------------------------------
+
+def convert_one_bag(
+    bag_dir: Path,
+    cfg: Config,
+    dataset: Any,
+    *,
+    collect_p95: bool = False,
+    allowed_task_types: Optional[Set[str]] = None,
+) -> Tuple[int, int]:
+    """Convert a single rosbag episode directory into dataset frames."""
+    task_str = _extract_episode_task(bag_dir, cfg.task)
+    if not task_str:
+        logger.warning("Skipping episode %s: no task instruction found", bag_dir.name)
+        return 0, 0
+
+    active_allowed = allowed_task_types if allowed_task_types is not None else set(cfg.include_task_types)
+    spatial_plan = _resolve_and_filter_plan(bag_dir, task_str, cfg, active_allowed)
+    if spatial_plan is None:
+        return 0, 0
+
+    if not _ROS_AVAILABLE:
+        raise RuntimeError("ROS 2 python runtime (rclpy, rosidl_runtime_py) not available")
+
+    reader = open_reader(bag_dir)
+    bag_topic_types = get_topic_types(reader)
+    topic_to_spec, topic_to_msg_class, ref_spec = _prepare_topic_specs(bag_topic_types, cfg)
+    buffers = _init_buffers(cfg, collect_p95)
+
+    tf_msg_cls = get_message("tf2_msgs/msg/TFMessage") if "tf2_msgs/msg/TFMessage" in bag_topic_types.values() else None
+    tf_replayer = TfReplayer()
+
+    frame_count = 0
+    dropped_count = 0
+
+    while reader.has_next():
+        topic, data, bag_ts_ns = reader.read_next()
+
+        if topic in ("/tf", "/tf_static") and tf_msg_cls is not None:
+            msg = deserialize_message(data, tf_msg_cls)
+            tf_replayer.handle_tf_message(msg, is_static=(topic == "/tf_static"))
+            continue
+
+        spec = topic_to_spec.get(topic)
+        if spec is None:
+            continue
+
+        msg = deserialize_message(data, topic_to_msg_class[topic])
+        ts_ns = msg_time_ns(msg, spec.stamp_src, bag_ts_ns)
+
+        if topic == cfg.reference_topic:
+            frame = _build_reference_frame(
+                msg, ts_ns, ref_spec, spatial_plan, buffers, tf_replayer, cfg
+            )
+            if frame is None:
+                dropped_count += 1
+            else:
+                dataset.add_frame(frame)
+                frame_count += 1
+        else:
+            buffers[topic].push(ts_ns, decode(msg, spec))
+
+    return _log_and_save_episode(bag_dir, frame_count, dropped_count, buffers, dataset)
 
 
 def convert_all_bags(
@@ -258,6 +337,7 @@ def convert_all_bags(
     push_to_hub: bool = False,
     collect_p95: bool = False,
     overwrite: bool = False,
+    allowed_task_types: Optional[Sequence[str]] = None,
 ) -> None:
     """Orchestrate end-to-end conversion across all episode bags in input_dir."""
     episodes = find_episode_dirs(input_dir)
@@ -300,13 +380,21 @@ def convert_all_bags(
         rgb_encoder=rgb_encoder,
     )
 
+    active_allowed = set(allowed_task_types) if allowed_task_types is not None else set(cfg.include_task_types)
+
     t0 = time.perf_counter()
     total_frames = 0
     total_dropped = 0
 
     for ep_idx, ep_dir in enumerate(episodes):
         logger.info("[%d/%d] Converting episode: %s", ep_idx + 1, len(episodes), ep_dir.name)
-        frames, dropped = convert_one_bag(ep_dir, cfg, dataset, collect_p95=collect_p95)
+        frames, dropped = convert_one_bag(
+            ep_dir,
+            cfg,
+            dataset,
+            collect_p95=collect_p95,
+            allowed_task_types=active_allowed,
+        )
         total_frames += frames
         total_dropped += dropped
 

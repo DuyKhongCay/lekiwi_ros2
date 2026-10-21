@@ -14,14 +14,21 @@ install(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(test_fsm test/test_fsm.py)
-  ament_add_pytest_test(test_chess_mission_orchestrator test/test_chess_mission_orchestrator.py)
-  ament_add_pytest_test(test_health_supervisor test/test_health_supervisor.py)
-  ament_add_pytest_test(test_move_sequencer test/test_move_sequencer.py)
-  ament_add_pytest_test(test_perception_context test/test_perception_context.py)
-  ament_add_pytest_test(test_motion_client test/test_motion_client.py)
-  ament_add_pytest_test(test_status_marker_builder test/test_status_marker_builder.py)
-  ament_add_pytest_test(test_viewpoint_scheduler test/test_viewpoint_scheduler.py)
+  # Core layer tests
+  ament_add_pytest_test(test_fsm test/core/test_fsm.py)
+
+  # Planning layer tests
+  ament_add_pytest_test(test_viewpoint_scheduler test/planning/test_viewpoint_scheduler.py)
+
+  # Execution layer tests
+  ament_add_pytest_test(test_motion_client test/execution/test_motion_client.py)
+  ament_add_pytest_test(test_move_sequencer test/execution/test_move_sequencer.py)
+
+  # Supervision layer tests
+  ament_add_pytest_test(test_chess_mission_orchestrator test/supervision/test_chess_mission_orchestrator.py)
+  ament_add_pytest_test(test_health_supervisor test/supervision/test_health_supervisor.py)
+  ament_add_pytest_test(test_perception_context test/supervision/test_perception_context.py)
+  ament_add_pytest_test(test_status_marker_builder test/supervision/test_status_marker_builder.py)
 endif()
 
 ament_package()

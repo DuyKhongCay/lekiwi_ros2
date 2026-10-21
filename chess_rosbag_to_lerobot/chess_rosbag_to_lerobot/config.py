@@ -8,15 +8,25 @@ from pathlib import Path
 from typing import Any, List, Optional
 import yaml
 
+VALID_TASK_TYPES = ("move", "clear", "pick", "place")
+
+
+@dataclass(frozen=True)
+class LandmarksConfig:
+    """Calibrated 3D Cartesian landmark coordinates [x, y, z] in base_footprint (meters)."""
+    stow: List[float] = field(default_factory=lambda: [0.0704, -0.1882, 0.1757])
+    clear_left: List[float] = field(default_factory=lambda: [-0.0029, 0.1435, 0.1702])
+    clear_right: List[float] = field(default_factory=lambda: [-0.0027, -0.1451, 0.1633])
+
 
 @dataclass
 class ChessboardConfig:
-    """Chessboard geometry parameters matching chessboard_pose_estimator SSOT."""
+    """Chessboard geometry and landmark targets."""
     board_frame: str = "chessboard_frame"
     base_frame: str = "base_footprint"
-    square_size_m: float = 0.040
-    grasp_clearance_z_m: float = 0.025
-    origin_at_center: bool = True
+    square_size_m: float = 0.037
+    grasp_clearance_z_m: float = 0.035
+    landmarks: LandmarksConfig = field(default_factory=LandmarksConfig)
 
 
 @dataclass
@@ -41,6 +51,9 @@ class Config:
     task: str
     chessboard: ChessboardConfig = field(default_factory=ChessboardConfig)
     features: List[FeatureSpec] = field(default_factory=list)
+    include_task_types: List[str] = field(
+        default_factory=lambda: ["move", "clear", "pick", "place"]
+    )
 
 
 def load_config(path: Path | str) -> Config:
@@ -57,12 +70,20 @@ def load_config(path: Path | str) -> Config:
 
     # Chessboard section
     cb_data = data.get("chessboard", {})
+    lm_data = cb_data.get("landmarks", {})
+    default_lm = LandmarksConfig()
+    landmarks = LandmarksConfig(
+        stow=[float(x) for x in lm_data.get("stow", default_lm.stow)],
+        clear_left=[float(x) for x in lm_data.get("clear_left", default_lm.clear_left)],
+        clear_right=[float(x) for x in lm_data.get("clear_right", default_lm.clear_right)],
+    )
+
     cb_cfg = ChessboardConfig(
-        board_frame=cb_data.get("board_frame", "chessboard_frame"),
-        base_frame=cb_data.get("base_frame", "base_footprint"),
-        square_size_m=float(cb_data.get("square_size_m", 0.040)),
-        grasp_clearance_z_m=float(cb_data.get("grasp_clearance_z_m", 0.025)),
-        origin_at_center=bool(cb_data.get("origin_at_center", True)),
+        board_frame=str(cb_data.get("board_frame", "chessboard_frame")),
+        base_frame=str(cb_data.get("base_frame", "base_footprint")),
+        square_size_m=float(cb_data.get("square_size_m", 0.037)),
+        grasp_clearance_z_m=float(cb_data.get("grasp_clearance_z_m", 0.035)),
+        landmarks=landmarks,
     )
 
     # Features
@@ -79,6 +100,15 @@ def load_config(path: Path | str) -> Config:
         )
         features.append(spec)
 
+    raw_task_types = data.get("include_task_types", ["move", "clear", "pick", "place"])
+    include_task_types = [str(t).lower() for t in raw_task_types]
+    for task_type in include_task_types:
+        if task_type not in VALID_TASK_TYPES:
+            raise ValueError(
+                f"Invalid task_type '{task_type}' in include_task_types. "
+                f"Allowed types: {VALID_TASK_TYPES}"
+            )
+
     return Config(
         robot_type=str(data.get("robot_type", "lekiwi")),
         fps=int(data.get("fps", 25)),
@@ -87,4 +117,5 @@ def load_config(path: Path | str) -> Config:
         task=str(data.get("task", "Chess pick and place")),
         chessboard=cb_cfg,
         features=features,
+        include_task_types=include_task_types,
     )

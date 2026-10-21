@@ -490,7 +490,17 @@ namespace lekiwi_motion
     response.clear_point = targets.clear_pt_msg;
     response.pick_point = targets.pick_pt_msg;
     response.place_point = targets.place_pt_msg;
-    response.message = plan.message;
+
+    if (plan.plan_type >= workspace::PLAN_CAPTURE_ZERO_NAV)
+    {
+      const auto clear_local = workspace::transform_point_to_base_frame(targets.clear, plan.clear_base);
+      const std::string bin_side = (clear_local.y >= 0.0) ? "clear_left" : "clear_right";
+      response.message = plan.message + ";bin=" + bin_side;
+    }
+    else
+    {
+      response.message = plan.message;
+    }
   }
 
   void WorkspaceCheckerNode::handle_check_move_feasibility(

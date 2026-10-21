@@ -2,7 +2,7 @@ episode_recorder_node:
   ros__parameters:
     # Storage settings
     root_dir: "/root/docker_ws/lekiwi_ros2/ros_bag"
-    experiment_name: "chess_teleop_v4"
+    experiment_name: "chess_teleop_v5"
     task: "chess_pick_and_place"
     storage_id: "mcap"
 

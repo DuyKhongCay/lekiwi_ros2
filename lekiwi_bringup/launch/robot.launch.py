@@ -82,11 +82,6 @@ def generate_launch_description():
             description="Start joystick gamepad teleoperation for mobile base",
         ),
         DeclareLaunchArgument(
-            "uarm_teleop",
-            default_value="false",
-            description="Start uArm leader teleoperation node for follower arm",
-        ),
-        DeclareLaunchArgument(
             "navigation",
             default_value="true",
             description="Start Nav2 autonomous navigation stack",
@@ -98,7 +93,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "manipulation",
-            default_value="policy",
+            default_value="kinematics",
             choices=["kinematics", "policy", "false"],
             description="Manipulation subsystem mode: "
             "'kinematics' (mock/real action server + cartesian service, accel=0), "
@@ -195,18 +190,6 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("teleop_gamepad")),
     )
 
-    teleop_uarm_share = FindPackageShare("teleop_zhongli_servo_hw")
-
-    teleop_uarm = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([teleop_uarm_share, "launch", "teleop_uarm.launch.py"])
-        ),
-        launch_arguments={
-            "use_sim_time": LaunchConfiguration("use_sim_time"),
-        }.items(),
-        condition=IfCondition(LaunchConfiguration("uarm_teleop")),
-    )
-
     navigation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([bringup_share, "launch", "navigation.launch.py"])
@@ -251,7 +234,6 @@ def generate_launch_description():
             diagnostics,
             orchestrator,
             teleop_gamepad,
-            teleop_uarm,
             navigation,
             chess_master,
         ]

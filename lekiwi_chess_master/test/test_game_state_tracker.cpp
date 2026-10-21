@@ -10,6 +10,8 @@
  * @copyright Apache-2.0
  */
 
+#include <chrono>
+#include <thread>
 #include <gtest/gtest.h>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -166,6 +168,71 @@ TEST(BoardDisplayContextTest, DefaultInitialization)
   EXPECT_FALSE(ctx.is_checkmate);
   EXPECT_FALSE(ctx.is_draw);
   EXPECT_FALSE(ctx.is_raw_view);
+}
+
+// Verifies set_fen validates, imports, and sets tracker to PHASE_AWAITING_BOARD_SYNC
+TEST_F(ChessGameStateTrackerTestFixture, SetFenValidAndAwaitingBoardSync)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("debounce_frames", 2);
+  auto node = std::make_shared<ChessGameStateTrackerComponent>(options);
+
+  std::string target_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2";
+  std::string target_placement = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR";
+  std::string canonical_fen, active_color, robot_color, message;
+
+  EXPECT_TRUE(node->set_fen(target_fen, "white", canonical_fen, active_color, robot_color, message));
+  EXPECT_EQ(canonical_fen, target_fen);
+  EXPECT_EQ(active_color, "w");
+  EXPECT_EQ(robot_color, "w");
+  EXPECT_EQ(node->get_robot_color(), "white");
+  EXPECT_TRUE(node->is_awaiting_physical_sync());
+  EXPECT_EQ(node->get_game_phase(), lekiwi_interfaces::msg::ChessGameStatus::PHASE_AWAITING_BOARD_SYNC);
+
+  // Incoming mismatched vision frames do NOT cancel or mutate awaiting sync state
+  auto pub = node->create_publisher<std_msgs::msg::String>("/chess/raw_fen", rclcpp::SensorDataQoS());
+  auto raw_msg = std::make_shared<std_msgs::msg::String>();
+  raw_msg->data = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"; // standard starting placement
+  pub->publish(*raw_msg);
+  pub->publish(*raw_msg);
+  rclcpp::spin_some(node);
+
+  EXPECT_TRUE(node->is_awaiting_physical_sync());
+  EXPECT_EQ(node->get_game_phase(), lekiwi_interfaces::msg::ChessGameStatus::PHASE_AWAITING_BOARD_SYNC);
+  EXPECT_EQ(node->get_board().getFen(), target_fen);
+
+  // When vision frames match target placement for debounce_frames, sync completes!
+  raw_msg->data = target_placement;
+  for (int i = 0; i < 10 && node->is_awaiting_physical_sync(); ++i)
+  {
+    pub->publish(*raw_msg);
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_FALSE(node->is_awaiting_physical_sync());
+  EXPECT_EQ(node->get_game_phase(), lekiwi_interfaces::msg::ChessGameStatus::PHASE_WAITING_PLAYER);
+}
+
+// Verifies set_fen rejects malformed FEN or missing/invalid robot_color and preserves existing state
+TEST_F(ChessGameStateTrackerTestFixture, SetFenRejectsMalformed)
+{
+  rclcpp::NodeOptions options;
+  auto node = std::make_shared<ChessGameStateTrackerComponent>(options);
+
+  std::string canonical_fen, active_color, robot_color, message;
+  // Missing robot_color
+  EXPECT_FALSE(node->set_fen("8/8/8/8/8/8/8/8 w - - 0 1", "", canonical_fen, active_color, robot_color, message));
+  EXPECT_NE(message.find("Missing required robot_color"), std::string::npos);
+
+  // Invalid robot_color
+  EXPECT_FALSE(node->set_fen("8/8/8/8/8/8/8/8 w - - 0 1", "green", canonical_fen, active_color, robot_color, message));
+  EXPECT_NE(message.find("Invalid robot_color"), std::string::npos);
+
+  // Malformed FEN with valid robot_color
+  EXPECT_FALSE(node->set_fen("invalid/fen/string", "b", canonical_fen, active_color, robot_color, message));
+  EXPECT_FALSE(message.empty());
+  EXPECT_FALSE(node->is_awaiting_physical_sync());
+  EXPECT_EQ(node->get_board().getFen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 }
 
 // Verifies factory helper correctly converts ChessGameStatus ROS message into BoardDisplayContext

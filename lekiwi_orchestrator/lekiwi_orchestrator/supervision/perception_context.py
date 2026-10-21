@@ -19,7 +19,7 @@ from lekiwi_interfaces.srv import SetPerceptionContext
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-from lekiwi_orchestrator.fsm import (
+from lekiwi_orchestrator.core.fsm import (
     PERCEPTION_CONTEXT_NAMES,
     is_perception_transition_allowed,
 )
@@ -135,12 +135,11 @@ class PerceptionContextManager:
 
     def destroy(self) -> None:
         """Destroy publisher and service handles upon orchestrator shutdown."""
-        if hasattr(self, "_service") and self._service is not None:
+        if self._service is not None:
             self._node.destroy_service(self._service)
-        if (
-            hasattr(self, "_perception_context_pub")
-            and self._perception_context_pub is not None
-        ):
+            self._service = None
+        if self._perception_context_pub is not None:
             self._node.destroy_publisher(self._perception_context_pub)
+            self._perception_context_pub = None
 
 

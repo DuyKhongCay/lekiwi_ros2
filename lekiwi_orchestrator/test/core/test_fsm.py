@@ -6,7 +6,7 @@
 import itertools
 
 from lekiwi_interfaces.msg import PerceptionContext
-from lekiwi_orchestrator.fsm import (
+from lekiwi_orchestrator.core.fsm import (
     MacroMissionState,
     MotionExecutionState,
     is_mission_transition_allowed,
@@ -30,6 +30,50 @@ def test_level1_macro_mission_canonical_workflow():
     assert all(
         is_mission_transition_allowed(curr, next_st)
         for curr, next_st in itertools.pairwise(sequence)
+    )
+
+
+def test_level1_macro_mission_awaiting_board_sync_transitions():
+    from lekiwi_orchestrator.core.fsm import IMPORT_FEN_ALLOWED_STATES
+
+    # All allowed states can transition to AWAITING_BOARD_SYNC
+    for state in IMPORT_FEN_ALLOWED_STATES:
+        assert is_mission_transition_allowed(
+            state, MacroMissionState.AWAITING_BOARD_SYNC
+        ), f"State {state.name} should allow transition to AWAITING_BOARD_SYNC"
+
+    # Moving states cannot transition directly to AWAITING_BOARD_SYNC
+    disallowed_states = [
+        MacroMissionState.BOOT_INITIALIZING,
+        MacroMissionState.WAITING_FOR_TF_READY,
+        MacroMissionState.CHECKING_REACHABILITY,
+        MacroMissionState.EXECUTING_MOVE_PIPELINE,
+        MacroMissionState.POST_MOVE_VERIFYING,
+    ]
+    for state in disallowed_states:
+        assert not is_mission_transition_allowed(
+            state, MacroMissionState.AWAITING_BOARD_SYNC
+        ), f"State {state.name} should NOT allow transition to AWAITING_BOARD_SYNC"
+
+    # From AWAITING_BOARD_SYNC, transitions to PLAYER_MOVE, EVALUATING, GAME_OVER, TF_READY, ERROR_FALLBACK are allowed
+    assert is_mission_transition_allowed(
+        MacroMissionState.AWAITING_BOARD_SYNC, MacroMissionState.WAITING_FOR_PLAYER_MOVE
+    )
+    assert is_mission_transition_allowed(
+        MacroMissionState.AWAITING_BOARD_SYNC, MacroMissionState.EVALUATING_BEST_MOVE
+    )
+    assert is_mission_transition_allowed(
+        MacroMissionState.AWAITING_BOARD_SYNC, MacroMissionState.GAME_OVER
+    )
+    assert is_mission_transition_allowed(
+        MacroMissionState.AWAITING_BOARD_SYNC, MacroMissionState.WAITING_FOR_TF_READY
+    )
+    assert is_mission_transition_allowed(
+        MacroMissionState.AWAITING_BOARD_SYNC, MacroMissionState.ERROR_FALLBACK
+    )
+    # But cannot jump straight into physical execution
+    assert not is_mission_transition_allowed(
+        MacroMissionState.AWAITING_BOARD_SYNC, MacroMissionState.EXECUTING_MOVE_PIPELINE
     )
 
 

@@ -5,8 +5,8 @@
 
 import pytest
 from builtin_interfaces.msg import Time
-from lekiwi_orchestrator.fsm import MacroMissionState
-from lekiwi_orchestrator.health_supervisor import (
+from lekiwi_orchestrator.core.fsm import MacroMissionState
+from lekiwi_orchestrator.supervision.health_supervisor import (
     OrchestratorStateSnapshot,
     StatusMarkerBuilder,
     VisualizerConfig,
@@ -93,6 +93,14 @@ def test_builder_deleteall_hygiene(dummy_stamp):
             "",
             "",
             ["[COMPLETED]"],
+        ),
+        (
+            MacroMissionState.AWAITING_BOARD_SYNC,
+            True,
+            "w",
+            "",
+            "",
+            ["[SYNCING BOARD]", "Arrange Pieces", "White"],
         ),
     ],
 )

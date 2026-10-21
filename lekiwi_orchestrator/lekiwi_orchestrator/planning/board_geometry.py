@@ -1,54 +1,16 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-"""Board geometry domain: SE(2) planar mathematics and observation standoff.
-
-Provides planar quaternion conversions, radial circle boundaries, and azimuth
-candidate ranking for active perception vantage point planning.
-"""
+"""Board geometry domain: Observation standoff and azimuth viewpoint scheduling."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 
-from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
+from geometry_msgs.msg import PoseStamped
 
-# ==============================================================================
-# SE(2) Primitives
-# ==============================================================================
-
-
-def yaw_to_quaternion(yaw: float) -> Quaternion:
-    """Convert planar yaw angle in radians to a geometry_msgs Quaternion."""
-    half_yaw = yaw * 0.5
-    return Quaternion(
-        x=0.0,
-        y=0.0,
-        z=math.sin(half_yaw),
-        w=math.cos(half_yaw),
-    )
-
-
-def normalize_angle(angle: float) -> float:
-    """Normalize any planar angle in radians to the principal interval [-pi, pi]."""
-    return math.atan2(math.sin(angle), math.cos(angle))
-
-
-def _create_standoff_pose(
-    target_x: float,
-    target_y: float,
-    facing_yaw: float,
-    frame_id: str,
-) -> PoseStamped:
-    """Construct a PoseStamped with position (target_x, target_y) and heading facing_yaw."""
-    pose = PoseStamped()
-    pose.header.frame_id = frame_id
-    pose.pose = Pose(
-        position=Point(x=target_x, y=target_y, z=0.0),
-        orientation=yaw_to_quaternion(facing_yaw),
-    )
-    return pose
+from lekiwi_orchestrator.core.utils import create_pose2d_stamped, normalize_angle
 
 
 # ==============================================================================
@@ -87,10 +49,10 @@ def _build_viewpoint(
     target_y = standoff_radius * math.sin(target_offset)
     facing_yaw = math.atan2(-target_y, -target_x)
 
-    pose = _create_standoff_pose(
-        target_x=target_x,
-        target_y=target_y,
-        facing_yaw=facing_yaw,
+    pose = create_pose2d_stamped(
+        x=target_x,
+        y=target_y,
+        yaw=facing_yaw,
         frame_id=board_frame,
     )
 
@@ -103,6 +65,57 @@ def _build_viewpoint(
     )
 
 
+def _generate_candidate_paths(pts: list[float]):
+    """Generate cyclic CCW, CW, and single-turnaround candidate sweep tours."""
+    n = len(pts)
+    doubled = pts + pts
+    for cut in range(n):
+        arc = doubled[cut + 1 : cut + 1 + n]
+        yield arc
+        yield arc[::-1]
+        for k in range(n - 1):
+            yield arc[k::-1] + arc[k + 1 :]
+            yield arc[k + 1 :] + arc[k::-1]
+
+
+def _compute_path_cost(path: list[float], curr_azimuth: float) -> tuple[float, float]:
+    """Compute total angular arc cost and initial displacement for an azimuth tour."""
+    first_step = abs(normalize_angle(path[0] - curr_azimuth))
+    cost = first_step + sum(
+        abs(normalize_angle(path[i + 1] - path[i])) for i in range(len(path) - 1)
+    )
+    return cost, first_step
+
+
+def _find_shortest_open_tour(
+    candidate_offsets: list[float], curr_azimuth: float
+) -> list[float]:
+    """Determine candidate permutation with minimal cumulative angular distance."""
+    if len(candidate_offsets) <= 1:
+        return list(candidate_offsets)
+
+    pts = sorted(
+        candidate_offsets,
+        key=lambda c: (c - curr_azimuth) % (2.0 * math.pi),
+    )
+    min_cost = float("inf")
+    min_first_step = float("inf")
+    best_perm = list(candidate_offsets)
+
+    for p in _generate_candidate_paths(pts):
+        cost, first_step = _compute_path_cost(p, curr_azimuth)
+        is_strictly_better = cost < min_cost - 1e-9
+        is_tied_with_less_first_step = (
+            abs(cost - min_cost) <= 1e-9 and first_step < min_first_step
+        )
+        if is_strictly_better or is_tied_with_less_first_step:
+            min_cost = cost
+            min_first_step = first_step
+            best_perm = list(p)
+
+    return best_perm
+
+
 def rank_by_azimuth(
     curr_x: float,
     curr_y: float,
@@ -111,11 +124,10 @@ def rank_by_azimuth(
     board_frame: str = "chessboard_frame",
     fallback_yaw: float = 0.0,
 ) -> list[RankedViewpoint]:
-    """Rank candidate viewpoints sequentially via a chained nearest-neighbor tour.
+    """Rank candidate viewpoints as a global shortest open tour along the standoff perimeter.
 
-    The first viewpoint is chosen closest to the current robot position.
-    Each subsequent viewpoint is chosen closest to the preceding viewpoint,
-    eliminating back-and-forth zigzagging along the standoff perimeter.
+    Finds the exact permutation of candidate offsets that minimizes total arc travel
+    distance from the robot's starting azimuth, avoiding back-and-forth oscillations.
 
     Args:
         curr_x: Current X position in `board_frame` (meters).
@@ -126,25 +138,19 @@ def rank_by_azimuth(
         fallback_yaw: Fallback angle if current robot position is at board origin.
 
     Returns:
-        List of RankedViewpoint instances ordered as a smooth sequential tour.
+        List of RankedViewpoint instances ordered as a global minimal-distance tour.
     """
     if not candidate_offsets:
         return []
 
     curr_azimuth = _resolve_azimuth(curr_x, curr_y, fallback_yaw)
-    remaining = list(candidate_offsets)
-    ranked: list[RankedViewpoint] = []
+    best_perm = _find_shortest_open_tour(candidate_offsets, curr_azimuth)
 
+    ranked: list[RankedViewpoint] = []
     ref_azimuth = curr_azimuth
     accumulated_cost = 0.0
 
-    while remaining:
-        best_idx = min(
-            range(len(remaining)),
-            key=lambda i: abs(normalize_angle(remaining[i] - ref_azimuth)),
-        )
-        next_offset = remaining.pop(best_idx)
-
+    for next_offset in best_perm:
         vp = _build_viewpoint(
             target_offset=next_offset,
             ref_azimuth=ref_azimuth,
@@ -153,8 +159,13 @@ def rank_by_azimuth(
             cum_cost=accumulated_cost,
         )
         ranked.append(vp)
-
         ref_azimuth = next_offset
         accumulated_cost = vp.cumulative_cost
 
     return ranked
+
+
+__all__ = [
+    "RankedViewpoint",
+    "rank_by_azimuth",
+]

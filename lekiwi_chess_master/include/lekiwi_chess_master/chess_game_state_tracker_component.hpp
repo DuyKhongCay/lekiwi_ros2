@@ -38,6 +38,7 @@
 #include <std_srvs/srv/trigger.hpp>
 #include <lekiwi_interfaces/msg/chess_game_status.hpp>
 #include <lekiwi_interfaces/msg/chess_move_details.hpp>
+#include <lekiwi_interfaces/srv/set_fen.hpp>
 #include <lekiwi_interfaces/action/compute_best_move.hpp>
 
 #include <chess.hpp>
@@ -98,6 +99,32 @@ namespace lekiwi_chess_master
     /** @brief Retrieves rich last executed move details message. */
     [[nodiscard]] const lekiwi_interfaces::msg::ChessMoveDetails &get_last_move_details() const { return last_move_details_; }
 
+    /** @brief Checks if tracker is currently awaiting physical board sync with imported FEN. */
+    [[nodiscard]] bool is_awaiting_physical_sync() const
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      return awaiting_physical_sync_;
+    }
+
+    /**
+     * @brief Imports and validates a FEN string and robot color, setting tracker into PHASE_AWAITING_BOARD_SYNC.
+     *
+     * @param[in] fen_str FEN string to import.
+     * @param[in] new_robot_color Target robot color ("w", "b", "white", "black"). Must not be empty.
+     * @param[out] canonical_fen Formatted canonical 6-field FEN.
+     * @param[out] active_color Color whose turn it is ("w" or "b").
+     * @param[out] robot_color Normalized robot color ("w" or "b").
+     * @param[out] message Diagnostic status message.
+     * @return True if FEN and robot_color were valid and imported, false otherwise.
+     */
+    bool set_fen(
+        std::string_view fen_str,
+        std::string_view new_robot_color,
+        std::string &canonical_fen,
+        std::string &active_color,
+        std::string &robot_color,
+        std::string &message);
+
   private:
     /**
      * @brief Ingests vision detection FEN placement and runs temporal debounce filtering.
@@ -116,6 +143,13 @@ namespace lekiwi_chess_master
     void handle_reset_service(
         const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
         std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+
+    /**
+     * @brief Service handler importing and configuring a FEN position.
+     */
+    void handle_set_fen_service(
+        const std::shared_ptr<lekiwi_interfaces::srv::SetFen::Request> request,
+        std::shared_ptr<lekiwi_interfaces::srv::SetFen::Response> response);
 
     /**
      * @brief Matches a stable vision placement against all legal FIDE candidate moves.
@@ -162,6 +196,7 @@ namespace lekiwi_chess_master
     // Node Parameters
     std::string raw_fen_topic_{"/chess/raw_fen"};
     std::string game_status_topic_{"/chess/game_status"};
+    std::string set_fen_service_name_{"/chess/set_fen"};
     int debounce_frames_{3};
     bool auto_trigger_engine_{false};
     std::string robot_color_{"black"};
@@ -172,6 +207,7 @@ namespace lekiwi_chess_master
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr raw_fen_sub_;
     rclcpp::Publisher<ChessGameStatus>::SharedPtr game_status_pub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_srv_;
+    rclcpp::Service<lekiwi_interfaces::srv::SetFen>::SharedPtr set_fen_srv_;
     rclcpp_action::Client<ComputeBestMove>::SharedPtr action_client_;
 
     // Game Engine & Debounce tracking
@@ -180,6 +216,7 @@ namespace lekiwi_chess_master
     std::string last_accepted_placement_{kDefaultStartingPlacement};
     std::string pending_placement_;
     int consecutive_count_{0};
+    bool awaiting_physical_sync_{false};
 
     // Match & Engine Status
     lekiwi_interfaces::msg::ChessMoveDetails last_move_details_;

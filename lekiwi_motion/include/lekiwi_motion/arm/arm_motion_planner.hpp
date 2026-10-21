@@ -140,10 +140,10 @@ public:
     "APPROACH_PLACE", "DESCEND_PLACE", "RELEASE", "RETRACT", "RETRACT_STOW"};
   inline static const std::vector<std::string> kPickAndPlacePhases{
     "APPROACH_PICK", "DESCEND_PICK", "GRASP", "LIFT",
-    "APPROACH_PLACE", "DESCEND_PLACE", "RELEASE", "RETRACT"};
+    "APPROACH_PLACE", "DESCEND_PLACE", "RELEASE", "RETRACT", "RETRACT_STOW"};
   inline static const std::vector<std::string> kClearPhases{
     "APPROACH_PICK", "DESCEND_PICK", "GRASP", "LIFT",
-    "DROP_CLEAR", "RELEASE_CLEAR", "RETRACT_CLEAR"};
+    "DROP_CLEAR", "RELEASE_CLEAR", "RETRACT_STOW"};
 
   explicit ArmMotionPlanner(
     std::vector<std::string> arm_joints = {},

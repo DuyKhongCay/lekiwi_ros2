@@ -106,13 +106,13 @@ def generate_launch_description():
                 extra_arguments=[{"use_intra_process_comms": True}],
             )
         ],
-        condition=UnlessCondition(
-            PythonExpression(
-                [
-                    "'", LaunchConfiguration("manipulation"), "' == 'false'"
-                ]
-            )
-        ),
+        # condition=UnlessCondition(
+        #     PythonExpression(
+        #         [
+        #             "'", LaunchConfiguration("manipulation"), "' == 'false'"
+        #         ]
+        #     )
+        # ),
     )
 
     # 5. Define Python chess mission conductor node (independent process)

@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 
 # Goal
-string instruction             # Task description (e.g., "Pick e2, place e4")
+string instruction             # Task description (e.g., "Pick e2, place e4", "Clear b4 to left onboard bin", "Clear b4 to right onboard bin")
 string piece_type              # Piece type (e.g., "pawn", "knight")
 string from_square             # Source square (e.g., "e2")
 string to_square               # Target square (e.g., "e4")

@@ -12,51 +12,22 @@ import pytest
 import rclpy
 from geometry_msgs.msg import Point, PoseStamped
 from lekiwi_interfaces.srv import CheckMoveFeasibility
-from lekiwi_orchestrator.fsm import MotionExecutionState
-from lekiwi_orchestrator.mission_types import (
+from lekiwi_orchestrator.core.fsm import MotionExecutionState
+from lekiwi_orchestrator.core.mission_types import (
     ActionResult,
     ChessMoveGoal,
     ObservationIntent,
 )
-from lekiwi_orchestrator.motion_client import MotionClient
-from lekiwi_orchestrator.move_planner import (
+from lekiwi_orchestrator.execution.motion_client import FakeMotionClient, MotionClient
+from lekiwi_orchestrator.execution.move_sequencer import MoveSequencer
+from lekiwi_orchestrator.execution.turn_workflow import MoveWorkflow
+from lekiwi_orchestrator.planning.move_planner import (
     MovePlanBuilder,
     StepKind,
 )
-from lekiwi_orchestrator.move_sequencer import MoveSequencer
-from lekiwi_orchestrator.obs_navigator import ObsNavigator
-from lekiwi_orchestrator.perception_context import PerceptionContextManager
-from lekiwi_orchestrator.turn_workflow import MoveWorkflow
+from lekiwi_orchestrator.planning.obs_navigator import ObsNavigator
+from lekiwi_orchestrator.supervision.perception_context import PerceptionContextManager
 from rclpy.node import Node
-
-
-class DummyPipelineDispatcher(MotionClient):
-    """Local test stub for testing move pipeline execution in isolation."""
-
-    def check_feasibility(self, goal, timeout_sec=5.0, on_success=None, on_error=None) -> bool:
-        if on_success:
-            resp = CheckMoveFeasibility.Response()
-            resp.feasible = True
-            on_success(resp)
-        return True
-
-    def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None) -> bool:
-        if on_completed:
-            on_completed(ActionResult(success=True, message="Mock nav ok"))
-        return True
-
-    def send_manipulation_goal(
-        self, goal, timeout_sec=60.0, on_feedback=None, on_completed=None
-    ) -> bool:
-        if on_completed:
-            on_completed(ActionResult(success=True, message="Mock manip ok"))
-        return True
-
-    def cancel_active_goal(self) -> None:
-        pass
-
-    def destroy(self) -> None:
-        pass
 
 
 @pytest.fixture(scope="module")
@@ -131,6 +102,7 @@ def test_build_capture_stages_matrix(capture_goal, plan_type, expected_names):
     """Verify MovePlanBuilder correctly handles piece capture staging across all variants."""
     resp = CheckMoveFeasibility.Response()
     resp.plan_type = plan_type
+    resp.message = "CAPTURE_TEST;bin=clear_left"
     resp.clear_base_pose.pose.position.x = 0.5
     resp.pick_base_pose.pose.position.x = 1.0
     resp.place_base_pose.pose.position.x = 2.0
@@ -139,12 +111,13 @@ def test_build_capture_stages_matrix(capture_goal, plan_type, expected_names):
     assert [s.name for s in stages] == expected_names
     assert stages[0].motion_state == MotionExecutionState.CLEARING_PIECE
     assert stages[0].is_capture is True
+    assert stages[0].instruction == f"Clear {capture_goal.captured_square} to left onboard bin"
 
 
 def test_capture_triple_base_observation_pose_anchored_to_place_base(ros_context):
     """Verify regression: in CAPTURE_TRIPLE_BASE, observation pose is anchored radially to place_base_pose."""
     node = Node("test_capture_obs_anchor_node")
-    dispatcher = DummyPipelineDispatcher()
+    dispatcher = FakeMotionClient()
     try:
         obs_nav = ObsNavigator(
             node=node,
@@ -159,6 +132,7 @@ def test_capture_triple_base_observation_pose_anchored_to_place_base(ros_context
         resp = CheckMoveFeasibility.Response()
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_CAPTURE_TRIPLE_BASE
+        resp.message = "CAPTURE_TRIPLE_BASE;bin=clear_right"
         resp.clear_base_pose.header.frame_id = "chessboard_frame"
         resp.clear_base_pose.pose.position.x = -0.3
         resp.clear_base_pose.pose.position.y = 0.3
@@ -188,7 +162,7 @@ def test_capture_triple_base_observation_pose_anchored_to_place_base(ros_context
         )
         steps = MovePlanBuilder.build_steps(resp, details, observation_pose=obs_pose)
         obs_step = steps[-1]
-        assert obs_step.name in (StepKind.OBSERVATION, "OBSERVATION")
+        assert obs_step.name == StepKind.OBSERVATION
         assert obs_step.nav_motion_state == MotionExecutionState.NAV_TO_OBS
         assert obs_step.target_pose.pose.position.y < -0.5
     finally:
@@ -210,7 +184,7 @@ def test_chess_move_goal_from_uci():
 def test_move_pipeline_executor_lifecycle(ros_context):
     """Verify end-to-end execution of a multi-stage move pipeline and Level 2 transitions."""
     node = Node("test_pipeline_executor_node")
-    dispatcher = DummyPipelineDispatcher()
+    dispatcher = FakeMotionClient()
     perception = PerceptionContextManager(
         node=node,
         perception_context_topic="/test/pipeline/perception_context",
@@ -245,7 +219,7 @@ def test_move_pipeline_executor_lifecycle(ros_context):
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
         stages = MovePlanBuilder.build_steps(resp, goal, observation_pose=obs_pose)
 
-        executor.start_pipeline(stages, resp)
+        executor.start_pipeline(stages)
 
         assert len(completed_events) == 1
         assert len(failed_events) == 0
@@ -270,7 +244,7 @@ def test_move_pipeline_executor_lifecycle(ros_context):
 def test_move_pipeline_executor_cancellation(ros_context):
     """Verify cancelling an active pipeline immediately resets motion state and halts execution."""
     node = Node("test_pipeline_cancel_node")
-    dispatcher = DummyPipelineDispatcher()
+    dispatcher = FakeMotionClient()
     perception = PerceptionContextManager(
         node=node,
         perception_context_topic="/test/cancel/perception_context",
@@ -285,7 +259,7 @@ def test_move_pipeline_executor_cancellation(ros_context):
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
-        executor.start_pipeline(stages, resp)
+        executor.start_pipeline(stages)
         executor.cancel()
 
         assert executor.motion_state == MotionExecutionState.IDLE
@@ -301,7 +275,7 @@ def test_pipeline_cancellation_during_grasp_settle(ros_context):
     node = Node("test_cancel_settle_node")
     manip_goals_sent = []
 
-    class SettleCancelDispatcher(DummyPipelineDispatcher):
+    class SettleCancelDispatcher(FakeMotionClient):
         def send_manipulation_goal(self, goal, timeout_sec=60.0, on_feedback=None, on_completed=None) -> bool:
             manip_goals_sent.append(goal)
             return super().send_manipulation_goal(goal, timeout_sec, on_feedback, on_completed)
@@ -326,7 +300,7 @@ def test_pipeline_cancellation_during_grasp_settle(ros_context):
         dispatcher=dispatcher,
         perception=perception,
         grasp_readiness_provider=_readiness_provider,
-        pre_grasp_settle_sec=1.0,
+        chassis_settle_timeout_sec=1.0,
         on_pipeline_completed=lambda: completed_events.append(True),
         on_pipeline_failed=lambda err: failed_events.append(err),
     )
@@ -338,7 +312,7 @@ def test_pipeline_cancellation_during_grasp_settle(ros_context):
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
-        executor.start_pipeline(stages, resp)
+        executor.start_pipeline(stages)
 
         assert len(manip_goals_sent) == 0
         assert len(completed_events) == 0
@@ -354,7 +328,7 @@ def test_pipeline_cancellation_during_grasp_settle(ros_context):
 def test_move_pipeline_grasp_readiness_timeout_fails_safely(ros_context):
     """Verify that when grasp readiness times out, failure is safely reported without crashing or hanging."""
     node = Node("test_grasp_readiness_node")
-    dispatcher = DummyPipelineDispatcher()
+    dispatcher = FakeMotionClient()
     perception = PerceptionContextManager(
         node=node,
         perception_context_topic="/test/grasp/perception_context",
@@ -367,7 +341,7 @@ def test_move_pipeline_grasp_readiness_timeout_fails_safely(ros_context):
         dispatcher=dispatcher,
         perception=perception,
         grasp_readiness_provider=lambda: False,
-        pre_grasp_settle_sec=0.1,
+        chassis_settle_timeout_sec=0.1,
         on_pipeline_failed=lambda err: failed_events.append(err),
     )
 
@@ -378,7 +352,7 @@ def test_move_pipeline_grasp_readiness_timeout_fails_safely(ros_context):
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
-        executor.start_pipeline(stages, resp)
+        executor.start_pipeline(stages)
 
         assert len(failed_events) == 1
         assert "Grasp readiness check failed" in failed_events[0]
@@ -393,7 +367,7 @@ def test_move_pipeline_grasp_readiness_timeout_fails_safely(ros_context):
 def test_move_pipeline_grasp_readiness_settle_success(ros_context):
     """Verify that when grasp is initially False but becomes True within settle window, execution succeeds."""
     node = Node("test_grasp_settle_node")
-    dispatcher = DummyPipelineDispatcher()
+    dispatcher = FakeMotionClient()
     perception = PerceptionContextManager(
         node=node,
         perception_context_topic="/test/grasp_settle/perception_context",
@@ -413,7 +387,7 @@ def test_move_pipeline_grasp_readiness_settle_success(ros_context):
         dispatcher=dispatcher,
         perception=perception,
         grasp_readiness_provider=_flapping_provider,
-        pre_grasp_settle_sec=0.2,
+        chassis_settle_timeout_sec=0.2,
         on_pipeline_completed=lambda: completed_events.append(True),
         on_pipeline_failed=lambda err: failed_events.append(err),
     )
@@ -425,7 +399,7 @@ def test_move_pipeline_grasp_readiness_settle_success(ros_context):
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
-        executor.start_pipeline(stages, resp)
+        executor.start_pipeline(stages)
 
         assert len(failed_events) == 0
         assert len(completed_events) == 1
@@ -441,7 +415,7 @@ def test_active_relocalization_on_grasp_unready_success(ros_context):
     node = Node("test_active_reloc_success_node")
     nav_goals = []
 
-    class RelocTrackingDispatcher(DummyPipelineDispatcher):
+    class RelocTrackingDispatcher(FakeMotionClient):
         def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None) -> bool:
             nav_goals.append(target_pose)
             if on_completed:
@@ -470,7 +444,7 @@ def test_active_relocalization_on_grasp_unready_success(ros_context):
         dispatcher=dispatcher,
         perception=perception,
         grasp_readiness_provider=_readiness_provider,
-        pre_grasp_settle_sec=0.01,
+        chassis_settle_timeout_sec=0.01,
         observation_navigator=obs_nav,
         on_pipeline_completed=lambda: completed_events.append(True),
         on_pipeline_failed=lambda err: failed_events.append(err),
@@ -485,7 +459,7 @@ def test_active_relocalization_on_grasp_unready_success(ros_context):
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
-        executor.start_pipeline(stages, resp)
+        executor.start_pipeline(stages)
 
         assert len(failed_events) == 0
         assert len(completed_events) == 1
@@ -501,7 +475,7 @@ def test_active_relocalization_on_grasp_unready_success(ros_context):
 def test_active_relocalization_on_grasp_unready_exhaustion(ros_context):
     """Verify that when grasp readiness repeatedly fails across all viewpoints, pipeline fails gracefully."""
     node = Node("test_active_reloc_exhaust_node")
-    dispatcher = DummyPipelineDispatcher()
+    dispatcher = FakeMotionClient()
     perception = PerceptionContextManager(
         node=node,
         perception_context_topic="/test/reloc_exh/perception_context",
@@ -519,7 +493,7 @@ def test_active_relocalization_on_grasp_unready_exhaustion(ros_context):
         dispatcher=dispatcher,
         perception=perception,
         grasp_readiness_provider=lambda: False,
-        pre_grasp_settle_sec=0.01,
+        chassis_settle_timeout_sec=0.01,
         observation_navigator=obs_nav,
         on_pipeline_failed=lambda err: failed_events.append(err),
     )
@@ -533,7 +507,7 @@ def test_active_relocalization_on_grasp_unready_exhaustion(ros_context):
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
-        executor.start_pipeline(stages, resp)
+        executor.start_pipeline(stages)
 
         assert len(failed_events) == 1
         assert "exhausted all 3 relocalization viewpoints" in failed_events[0]
@@ -557,7 +531,7 @@ def test_stage_pipeline_dispatch_and_execution_failures(ros_context, fail_type, 
     """Verify safe failure handling across Nav2 and Manipulation dispatch and execution errors."""
     node = Node(f"test_fail_{fail_type.lower()}_node")
 
-    class FaultInjectionDispatcher(DummyPipelineDispatcher):
+    class FaultInjectionDispatcher(FakeMotionClient):
         def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None) -> bool:
             if fail_type == "NAV_DISPATCH":
                 return False
@@ -601,10 +575,58 @@ def test_stage_pipeline_dispatch_and_execution_failures(ros_context, fail_type, 
 
         goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
-        executor.start_pipeline(stages, resp)
+        executor.start_pipeline(stages)
 
         assert len(failed_events) == 1
         assert expected_err_snippet in failed_events[0]
+        assert executor.motion_state == MotionExecutionState.IDLE
+    finally:
+        perception.destroy()
+        dispatcher.destroy()
+        node.destroy_node()
+
+
+def test_observation_step_waits_for_chassis_settle(ros_context):
+    """Verify that MoveSequencer waits for chassis settling before advancing to IDLE after observation retreat."""
+    node = Node("test_obs_settle_node")
+    dispatcher = FakeMotionClient()
+    perception = PerceptionContextManager(
+        node=node,
+        perception_context_topic="/test/obs_settle/perception_context",
+        set_perception_service_name="/test/obs_settle/set_context",
+    )
+
+    completed_events = []
+    settle_polls = {"count": 0}
+
+    def _settle_provider():
+        settle_polls["count"] += 1
+        return settle_polls["count"] >= 3
+
+    executor = MoveSequencer(
+        node=node,
+        dispatcher=dispatcher,
+        perception=perception,
+        chassis_settle_timeout_sec=0.5,
+        chassis_settle_provider=_settle_provider,
+        on_pipeline_completed=lambda: completed_events.append(True),
+    )
+
+    try:
+        resp = CheckMoveFeasibility.Response()
+        resp.feasible = True
+        resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
+        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        obs_pose = PoseStamped()
+        obs_pose.header.frame_id = "map"
+
+        stages = MovePlanBuilder.build_steps(resp, goal, observation_pose=obs_pose)
+        assert any(s.name == StepKind.OBSERVATION for s in stages)
+
+        executor.start_pipeline(stages)
+
+        assert len(completed_events) == 1
+        assert settle_polls["count"] >= 3
         assert executor.motion_state == MotionExecutionState.IDLE
     finally:
         perception.destroy()

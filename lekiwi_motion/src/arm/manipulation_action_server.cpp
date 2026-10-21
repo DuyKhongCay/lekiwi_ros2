@@ -414,10 +414,32 @@ void ManipulationActionServer::notify_record_signal(RecordCoordinationSignal sig
   record_cv_.notify_all();
 }
 
+void ManipulationActionServer::discard_active_recording_async() noexcept
+{
+  if (!discard_client_) {
+    return;
+  }
+  try {
+    if (discard_client_->service_is_ready()) {
+      discard_client_->async_send_request(std::make_shared<Trigger::Request>());
+    } else {
+      RCLCPP_WARN(get_logger(), "Discard episode service not ready when cancelling record wait.");
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(get_logger(), "Failed to async call discard_episode: %s", e.what());
+  }
+}
+
 void ManipulationActionServer::handle_save_episode(
   const std::shared_ptr<Trigger::Request> /*request*/,
   std::shared_ptr<Trigger::Response> response)
 {
+  if (!is_waiting_record_.load(std::memory_order_acquire)) {
+    response->success = false;
+    response->message = "No active manipulation goal in RECORDING_WAIT state";
+    RCLCPP_WARN(get_logger(), "Rejecting /arm/save_episode: %s", response->message.c_str());
+    return;
+  }
   RCLCPP_INFO(
     get_logger(), "Received /arm/save_episode request. Forwarding to episode_recorder_node...");
   if (forward_trigger_request(save_client_, "/episode_recorder_node/save_episode", response)) {
@@ -429,6 +451,12 @@ void ManipulationActionServer::handle_abort_episode(
   const std::shared_ptr<Trigger::Request> /*request*/,
   std::shared_ptr<Trigger::Response> response)
 {
+  if (!is_waiting_record_.load(std::memory_order_acquire)) {
+    response->success = false;
+    response->message = "No active manipulation goal in RECORDING_WAIT state";
+    RCLCPP_WARN(get_logger(), "Rejecting /arm/abort_episode: %s", response->message.c_str());
+    return;
+  }
   RCLCPP_INFO(
     get_logger(),
     "Received /arm/abort_episode request. Forwarding to episode_recorder_node/discard_episode...");
@@ -468,7 +496,10 @@ rclcpp_action::CancelResponse ManipulationActionServer::handle_cancel(
   const std::shared_ptr<GoalHandleChessMove> /*goal_handle*/)
 {
   RCLCPP_WARN(get_logger(), "Manipulation cancel request received.");
-  record_cv_.notify_all();
+  if (is_waiting_record_.load(std::memory_order_acquire)) {
+    discard_active_recording_async();
+    notify_record_signal(RecordCoordinationSignal::CANCEL);
+  }
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
@@ -517,6 +548,19 @@ void ManipulationActionServer::execute_move(const std::shared_ptr<GoalHandleChes
   const auto waypoints = resolve_move_waypoints(ctx, is_pure_pick, is_pure_place);
   if (!waypoints.has_value()) {
     return;
+  }
+
+  if (ctx.goal->is_capture) {
+    const std::string & instruction = ctx.goal->instruction;
+    const bool has_left = instruction.find("left") != std::string::npos;
+    const bool has_right = instruction.find("right") != std::string::npos;
+    if (!has_left && !has_right) {
+      abort_move(
+        ctx,
+        "Capture instruction must explicitly specify 'left' or 'right' onboard bin: " + instruction,
+        0.0);
+      return;
+    }
   }
 
   const auto [phase_names, phase_targets] = build_active_phase_plan(
@@ -584,8 +628,15 @@ void ManipulationActionServer::execute_record_mode(
     abort_move(ctx, "Node shutting down", 50.0);
     return;
   }
-  if (ctx.goal_handle->is_canceling()) {
-    cancel_move(ctx, "Execution canceled by user during record wait", 0.0);
+  if (received_sig == RecordCoordinationSignal::CANCEL || ctx.goal_handle->is_canceling()) {
+    for (int i = 0; i < 100 && !ctx.goal_handle->is_canceling(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (ctx.goal_handle->is_canceling()) {
+      cancel_move(ctx, "Execution canceled by user during record wait", 0.0);
+    } else {
+      abort_move(ctx, "Cancel signal received but goal handle failed to transition to CANCELING", 50.0);
+    }
     return;
   }
   if (received_sig == RecordCoordinationSignal::SAVE) {
@@ -655,8 +706,15 @@ ManipulationActionServer::build_active_phase_plan(
 {
   std::lock_guard<std::mutex> lock(planner_mutex_);
   if (goal->is_capture) {
-    const arm::ClearBinSide bin_side = (goal->pick_point.y >= 0.0) ?
-      arm::ClearBinSide::LEFT : arm::ClearBinSide::RIGHT;
+    arm::ClearBinSide bin_side = arm::ClearBinSide::LEFT;
+    if (goal->instruction.find("right") != std::string::npos) {
+      bin_side = arm::ClearBinSide::RIGHT;
+    } else if (goal->instruction.find("left") != std::string::npos) {
+      bin_side = arm::ClearBinSide::LEFT;
+    } else {
+      throw std::invalid_argument(
+        "Capture move instruction must explicitly specify 'left' or 'right' bin: " + goal->instruction);
+    }
     return {
       arm::ArmMotionPlanner::kClearPhases,
       arm_motion_planner_.build_clear_targets(pick_pair->approach, pick_pair->descend, bin_side)

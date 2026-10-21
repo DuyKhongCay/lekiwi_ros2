@@ -5,14 +5,15 @@
 Turn workflow management for autonomous chess moves.
 
 Encapsulates:
-1. Referee signal processing and FIDE game status verification (RefereeHandler)
+1. Referee signal processing and FIDE game status verification (GameStatusHandler)
 2. Reachability feasibility checking and move staging execution (MoveWorkflowCoordinator)
-3. Post-move active perception watchdog and vantage point repositioning (PostMoveWatchdog)
+3. Post-move active perception watchdog and vantage point repositioning (PostMoveVerifier)
 """
 
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -23,16 +24,17 @@ from rclpy.callback_groups import CallbackGroup
 from rclpy.node import Node
 from rclpy.timer import Timer
 
-from lekiwi_orchestrator.fsm import MacroMissionState
-from lekiwi_orchestrator.mission_types import ActionResult, ChessMoveGoal, ObservationIntent
-from lekiwi_orchestrator.move_planner import MovePlanBuilder
+from lekiwi_orchestrator.core.fsm import MacroMissionState
+from lekiwi_orchestrator.core.mission_types import ActionResult, ChessMoveGoal, ObservationIntent
+from lekiwi_orchestrator.core.utils import get_node_now_sec
+from lekiwi_orchestrator.planning.move_planner import MovePlanBuilder
 
 if TYPE_CHECKING:
-    from lekiwi_orchestrator.motion_client import MotionClient
-    from lekiwi_orchestrator.move_sequencer import MoveSequencer
-    from lekiwi_orchestrator.obs_navigator import ObsNavigator
-    from lekiwi_orchestrator.parameters import OrchestratorParameters
-    from lekiwi_orchestrator.perception_context import PerceptionContextManager
+    from lekiwi_orchestrator.core.parameters import OrchestratorParameters
+    from lekiwi_orchestrator.execution.motion_client import MotionClient
+    from lekiwi_orchestrator.execution.move_sequencer import MoveSequencer
+    from lekiwi_orchestrator.planning.obs_navigator import ObsNavigator
+    from lekiwi_orchestrator.supervision.perception_context import PerceptionContextManager
 
 
 class TurnHost(Protocol):
@@ -76,6 +78,7 @@ class GameStatusHandler:
         finalize_turn_fn: Callable[[], None],
         dispatch_workflow_fn: Callable[[str, Any], None],
         reset_obs_viewpoints_fn: Callable[[], None],
+        on_robot_color_updated_cb: Callable[[str], None] | None = None,
     ) -> None:
         self._node = node
         self._config = config
@@ -86,8 +89,16 @@ class GameStatusHandler:
         self._finalize_turn_fn = finalize_turn_fn
         self._dispatch_workflow_fn = dispatch_workflow_fn
         self._reset_obs_viewpoints_fn = reset_obs_viewpoints_fn
+        self._on_robot_color_updated_cb = on_robot_color_updated_cb
 
         self._last_processed_fen = ""
+        self._latest_full_fen = ""
+        self._robot_color = ""
+
+    @property
+    def robot_color(self) -> str:
+        with self._state_lock:
+            return self._robot_color
 
     @property
     def last_processed_fen(self) -> str:
@@ -96,6 +107,49 @@ class GameStatusHandler:
     @last_processed_fen.setter
     def last_processed_fen(self, fen: str) -> None:
         self._last_processed_fen = fen
+
+    @property
+    def latest_full_fen(self) -> str:
+        with self._state_lock:
+            return self._latest_full_fen
+
+    def on_fen_imported(self, canonical_fen: str) -> None:
+        """Handle newly imported FEN: invalidate last processed FEN and store latest canonical FEN."""
+        with self._state_lock:
+            self._last_processed_fen = ""
+            self._latest_full_fen = canonical_fen
+
+    def _handle_board_sync_if_active(self, msg: ChessGameStatus) -> bool:
+        """Evaluate board synchronization progress when in AWAITING_BOARD_SYNC state.
+
+        Returns True if event was fully handled or still waiting for physical sync,
+        False if board sync just completed on robot's turn (to allow immediate turn eligibility check).
+        """
+        with self._state_lock:
+            if self._get_mission_state() != MacroMissionState.AWAITING_BOARD_SYNC:
+                return False
+
+        # If referee is still waiting for board sync or vision is not yet stable, stay in AWAITING_BOARD_SYNC
+        if msg.game_phase == ChessGameStatus.PHASE_AWAITING_BOARD_SYNC or not msg.is_board_stable:
+            return True
+
+        # Physical board layout confirmed stable and matches imported FEN!
+        self._node.get_logger().info(
+            f">>> [BOARD SYNC] Physical board verified stable with imported FEN: {msg.full_fen}"
+        )
+
+        if self.handle_game_over_if_ended(msg):
+            return True
+
+        with self._state_lock:
+            current_color = self._robot_color
+
+        if msg.active_color == current_color:
+            self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE)
+            return False
+
+        self._transition_to_fn(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+        return True
 
     def handle_game_over_if_ended(self, msg: ChessGameStatus) -> bool:
         """Check and transition to GAME_OVER if referee reports checkmate or draw."""
@@ -129,7 +183,9 @@ class GameStatusHandler:
 
     def is_eligible_robot_turn(self, msg: ChessGameStatus) -> bool:
         """Determine if referee message indicates a valid turn ready for robot execution."""
-        is_robot_turn = msg.active_color == self._config.robot_color
+        with self._state_lock:
+            current_color = self._robot_color
+        is_robot_turn = msg.active_color == current_color
         best_uci = bool(msg.best_move_details.uci)
         is_phase_ready = msg.game_phase in (
             ChessGameStatus.PHASE_ROBOT_READY,
@@ -154,18 +210,47 @@ class GameStatusHandler:
         Thread-safety:
             Checks and updates `_last_processed_fen` under `_state_lock`.
         """
+        if msg.robot_color:
+            norm_color = msg.robot_color.lower().strip()
+            color_changed = False
+            with self._state_lock:
+                if norm_color != self._robot_color:
+                    self._robot_color = norm_color
+                    color_changed = True
+            if color_changed and self._on_robot_color_updated_cb is not None:
+                self._on_robot_color_updated_cb(norm_color)
+
+        if msg.full_fen:
+            with self._state_lock:
+                self._latest_full_fen = msg.full_fen
+            if clear_pending_recovery_cb is not None:
+                clear_pending_recovery_cb()
+
+        if self._handle_board_sync_if_active(msg):
+            return
+
         if self.handle_game_over_if_ended(msg):
             return
 
         if self.verify_post_move_board(msg):
             return
 
+        with self._state_lock:
+            current_color = self._robot_color
+
+        if (
+            msg.game_phase == ChessGameStatus.PHASE_ROBOT_THINKING
+            and current_color
+            and msg.active_color == current_color
+            and self._get_mission_state() == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        ):
+            self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE)
+            return
+
         if not self.is_eligible_robot_turn(msg):
             return
 
         with self._state_lock:
-            if clear_pending_recovery_cb is not None:
-                clear_pending_recovery_cb()
 
             eligible_state = self._get_mission_state() in (
                 MacroMissionState.WAITING_FOR_PLAYER_MOVE,
@@ -319,7 +404,7 @@ class MoveWorkflow:
         if not self._host.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE):
             return
 
-        self._pipeline_executor.start_pipeline(stages, resp)
+        self._pipeline_executor.start_pipeline(stages)
 
     def on_move_pipeline_completed(self) -> None:
         """Physical move pipeline completed: transition to POST_MOVE_VERIFYING and start active verification."""
@@ -353,6 +438,7 @@ class PostMoveVerifier:
         get_mission_state: Callable[[], MacroMissionState],
         get_last_interaction_pose: Callable[[], PoseStamped | None],
         on_finalize_turn: Callable[[], None],
+        chassis_settle_provider: Callable[[], bool] | None = None,
         callback_group: CallbackGroup | None = None,
     ) -> None:
         self._node = node
@@ -363,14 +449,25 @@ class PostMoveVerifier:
         self._get_mission_state = get_mission_state
         self._get_last_interaction_pose = get_last_interaction_pose
         self._on_finalize_turn = on_finalize_turn
+        self._chassis_settle_provider = chassis_settle_provider or (lambda: True)
         self._callback_group = callback_group
 
         self._timer: Timer | None = None
-        self._post_move_attempts = 0
+        self._is_repositioning: bool = False
+
+    @property
+    def is_repositioning(self) -> bool:
+        """True if actively repositioning the base to a candidate vantage point."""
+        with self._state_lock:
+            return self._is_repositioning
 
     @property
     def attempts(self) -> int:
-        return self._post_move_attempts
+        if self._observation_nav is None:
+            return 0
+        return self._observation_nav.get_viewpoint_index(
+            ObservationIntent.POST_MOVE_VERIFY
+        )
 
     @property
     def is_active(self) -> bool:
@@ -379,11 +476,39 @@ class PostMoveVerifier:
 
     def reset(self) -> None:
         self.stop()
-        self._post_move_attempts = 0
+        with self._state_lock:
+            self._is_repositioning = False
         if self._observation_nav is not None:
-            self._observation_nav.reset_viewpoint_index(
+            self._observation_nav.reset_tour(
                 ObservationIntent.POST_MOVE_VERIFY
             )
+
+    def _is_post_move_verifying(self) -> bool:
+        with self._state_lock:
+            return self._get_mission_state() == MacroMissionState.POST_MOVE_VERIFYING
+
+    def _wait_for_chassis_settle(self, timeout_sec: float) -> bool:
+        """Wait until chassis has fully settled (velocity within stop thresholds) or timeout expires."""
+        if not self._is_post_move_verifying() or timeout_sec <= 0.0:
+            return False
+        if self._chassis_settle_provider():
+            return True
+
+        start_ros = get_node_now_sec(self._node)
+        start_wall = time.monotonic()
+        poll_interval = min(0.02, timeout_sec / 4.0)
+
+        while self._is_post_move_verifying():
+            time.sleep(poll_interval)
+            if self._chassis_settle_provider():
+                return True
+            now_ros = get_node_now_sec(self._node)
+            if (now_ros - start_ros >= timeout_sec) or (
+                time.monotonic() - start_wall >= timeout_sec
+            ):
+                break
+
+        return self._is_post_move_verifying() and self._chassis_settle_provider()
 
     def start(self) -> None:
         """Start verification timer while in POST_MOVE_VERIFYING state."""
@@ -405,6 +530,70 @@ class PostMoveVerifier:
             self._node.destroy_timer(self._timer)
             self._timer = None
 
+    def _can_reposition(self) -> bool:
+        if not self._config.navigation:
+            self._node.get_logger().warn(
+                "[POST-MOVE VERIFICATION] Verification timed out and navigation disabled. Finalizing turn."
+            )
+            return False
+
+        if self._observation_nav.has_exhausted_viewpoints(
+            ObservationIntent.POST_MOVE_VERIFY
+        ):
+            self._node.get_logger().warn(
+                "[POST-MOVE VERIFICATION] Exhausted all candidate observation viewpoints. Finalizing turn."
+            )
+            return False
+        return True
+
+    def _on_repositioned(self, res: ActionResult) -> None:
+        if res.success:
+            self._wait_for_chassis_settle(self._config.chassis_settle_timeout_sec)
+
+        with self._state_lock:
+            self._is_repositioning = False
+            if self._get_mission_state() != MacroMissionState.POST_MOVE_VERIFYING:
+                return
+
+        if res.success:
+            self._node.get_logger().info(
+                "[ACTIVE PERCEPTION] Reached observation viewpoint and chassis settled. Resuming board scan."
+            )
+        else:
+            self._node.get_logger().warn(
+                f"[ACTIVE PERCEPTION] Failed to reach observation viewpoint: {res.message}"
+            )
+        self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
+        self.start()
+
+    def _dispatch_repositioning(self) -> None:
+        idx = self._observation_nav.get_viewpoint_index(
+            ObservationIntent.POST_MOVE_VERIFY
+        )
+        max_attempts = self._observation_nav.get_max_attempts(
+            ObservationIntent.POST_MOVE_VERIFY
+        )
+        self._node.get_logger().warn(
+            f"[ACTIVE VISION] Post-move board occluded/unverified ({self._config.observation_scan_timeout_sec:.1f}s). "
+            f"Attempt {idx + 1}/{max_attempts}. Repositioning base to next candidate vantage point..."
+        )
+        with self._state_lock:
+            self._is_repositioning = True
+        self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
+
+        dispatched = self._observation_nav.reposition_to_next_viewpoint(
+            intent=ObservationIntent.POST_MOVE_VERIFY,
+            timeout_sec=self._config.action_timeout_sec,
+            on_completed=self._on_repositioned,
+        )
+        if not dispatched:
+            with self._state_lock:
+                self._is_repositioning = False
+            self._node.get_logger().warn(
+                "[ACTIVE PERCEPTION] Failed to dispatch repositioning goal or viewpoints exhausted! Finalizing turn."
+            )
+            self._on_finalize_turn()
+
     def on_timeout(self) -> None:
         """Handle post-move verification timeout by repositioning base to alternative vantage point.
 
@@ -416,55 +605,11 @@ class PostMoveVerifier:
             if self._get_mission_state() != MacroMissionState.POST_MOVE_VERIFYING:
                 return
 
-        if not self._config.navigation:
-            self._node.get_logger().warn(
-                "[POST-MOVE VERIFICATION] Verification timed out and navigation disabled. Finalizing turn."
-            )
+        if not self._can_reposition():
             self._on_finalize_turn()
             return
 
-        max_attempts = self._observation_nav.get_max_attempts(
-            ObservationIntent.POST_MOVE_VERIFY
-        )
-        if self._post_move_attempts >= max_attempts:
-            self._node.get_logger().warn(
-                f"[POST-MOVE VERIFICATION] Reached max reposition attempts ({max_attempts}). Finalizing turn."
-            )
-            self._on_finalize_turn()
-            return
-
-        self._post_move_attempts += 1
-        self._node.get_logger().warn(
-            f"[ACTIVE VISION] Post-move board occluded/unverified ({self._config.observation_scan_timeout_sec:.1f}s). "
-            f"Attempt {self._post_move_attempts}/{max_attempts}. Repositioning base to next candidate vantage point..."
-        )
-        self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
-
-        def _on_repositioned(res: ActionResult) -> None:
-            with self._state_lock:
-                if self._get_mission_state() != MacroMissionState.POST_MOVE_VERIFYING:
-                    return
-            if res.success:
-                self._node.get_logger().info(
-                    "[ACTIVE PERCEPTION] Reached observation viewpoint. Resuming board scan."
-                )
-            else:
-                self._node.get_logger().warn(
-                    f"[ACTIVE PERCEPTION] Failed to reach observation viewpoint: {res.message}"
-                )
-            self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
-            self.start()
-
-        dispatched = self._observation_nav.reposition_to_next_viewpoint(
-            intent=ObservationIntent.POST_MOVE_VERIFY,
-            timeout_sec=self._config.action_timeout_sec,
-            on_completed=_on_repositioned,
-        )
-        if not dispatched:
-            self._node.get_logger().error(
-                "[ACTIVE PERCEPTION] Failed to dispatch repositioning goal! Finalizing turn."
-            )
-            self._on_finalize_turn()
+        self._dispatch_repositioning()
 
 
 __all__ = [

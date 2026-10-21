@@ -63,6 +63,8 @@ namespace lekiwi_chess_master
         return {"ROBOT MOVING", cv::Scalar(0, 200, 255)};
       case ChessGameStatus::PHASE_WAITING_PLAYER:
         return {"PLAYER TURN", cv::Scalar(240, 240, 240)};
+      case ChessGameStatus::PHASE_AWAITING_BOARD_SYNC:
+        return {"SYNCING BOARD", cv::Scalar(0, 180, 255)};
       default:
         return {"IDLE", cv::Scalar(255, 220, 0)};
       }

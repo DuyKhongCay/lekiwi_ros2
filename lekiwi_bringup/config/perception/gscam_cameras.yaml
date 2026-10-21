@@ -70,7 +70,7 @@
     output_size: 384
     active_contexts: [3]
     gscam_config: >
-      v4l2src device=/dev/usb_wrist io-mode=mmap extra-controls="c,power_line_frequency=1" !
+      v4l2src device=/dev/usb_wrist io-mode=mmap extra-controls="c,power_line_frequency=2" !
       valve name=gate drop=true !
       image/jpeg,width=1280,height=720,framerate=25/1 !
       queue leaky=downstream max-size-buffers=1 !

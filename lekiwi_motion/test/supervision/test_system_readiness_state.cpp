@@ -163,3 +163,120 @@ TEST_F(SystemReadinessEvaluatorTest, HighVarianceBlocksGrasp)
   EXPECT_FALSE(report.grasp_ready);
   EXPECT_NE(report.grasp_blocker_reason.find("Global EKF unconverged"), std::string::npos);
 }
+
+/**
+ * @brief Tests that reset_global_ekf_seed resets seeding and stationary latch.
+ */
+TEST_F(SystemReadinessEvaluatorTest, ResetGlobalEkfSeedClearsReadiness)
+{
+  // 1. Initial convergence seeds the filter
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_TRUE(report.nav_ready);
+  EXPECT_TRUE(evaluator_->is_global_ekf_seeded());
+
+  // 2. Calling reset_global_ekf_seed unseeds the filter
+  evaluator_->reset_global_ekf_seed();
+  EXPECT_FALSE(evaluator_->is_global_ekf_seeded());
+
+  // 3. Evaluation without new convergence must fail nav readiness if require_global_ekf_seed is true
+  global_odom_.pos_variance = 0.050; // unconverged
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_FALSE(report.nav_ready);
+  EXPECT_FALSE(report.grasp_ready);
+}
+
+/**
+ * @brief Tests that transient angular spikes (< 0.25s) do not break stationary latch or grasp readiness.
+ */
+TEST_F(SystemReadinessEvaluatorTest, TransientAngularSpikePreservesStationaryLatch)
+{
+  // 1. Initial convergence seeds filter and establishes stationary latch
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_TRUE(report.grasp_ready);
+  EXPECT_TRUE(report.stationary_latched);
+
+  // 2. Camera switches to actor mode (AprilTag lost / variance rises)
+  global_odom_.pos_variance = 0.050; // > 0.0012
+  global_odom_.yaw_variance = 0.050; // > 0.0030
+
+  // Verify latch holds grasp_ready when stationary
+  now_sec_ = 10.10;
+  local_odom_.stamp_sec = 10.08;
+  joints_.stamp_sec = 10.08;
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_TRUE(report.grasp_ready);
+  EXPECT_TRUE(report.stationary_latched);
+
+  // 3. Arm movement induces angular reaction spike wz = 0.15 rad/s (> default limit 0.08)
+  // First transient sample at t = 10.20s (elapsed 0.0s < 0.25s)
+  now_sec_ = 10.20;
+  local_odom_.stamp_sec = 10.19;
+  joints_.stamp_sec = 10.19;
+  local_odom_.wz = 0.15;
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_TRUE(report.is_stationary);
+  EXPECT_TRUE(report.stationary_latched);
+  EXPECT_TRUE(report.grasp_ready);
+
+  // Second transient sample at t = 10.30s (elapsed 0.10s < 0.25s)
+  now_sec_ = 10.30;
+  local_odom_.stamp_sec = 10.29;
+  joints_.stamp_sec = 10.29;
+  local_odom_.wz = 0.15;
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_TRUE(report.is_stationary);
+  EXPECT_TRUE(report.stationary_latched);
+  EXPECT_TRUE(report.grasp_ready);
+
+  // 4. Spike ceases, returning to complete rest at t = 10.35s
+  now_sec_ = 10.35;
+  local_odom_.stamp_sec = 10.34;
+  joints_.stamp_sec = 10.34;
+  local_odom_.wz = 0.0;
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_TRUE(report.is_stationary);
+  EXPECT_TRUE(report.stationary_latched);
+  EXPECT_TRUE(report.grasp_ready);
+}
+
+/**
+ * @brief Tests that sustained motion (>= 0.25s) breaks stationary latch and drops grasp readiness.
+ */
+TEST_F(SystemReadinessEvaluatorTest, SustainedMotionBreaksStationaryLatch)
+{
+  // 1. Initial convergence seeds filter and latches stationary
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_TRUE(report.grasp_ready);
+  EXPECT_TRUE(report.stationary_latched);
+
+  // 2. High variance state (AprilTag absent)
+  global_odom_.pos_variance = 0.050;
+  global_odom_.yaw_variance = 0.050;
+
+  // 3. Sustained motion begins at t = 10.10s with vx = 0.10 m/s
+  now_sec_ = 10.10;
+  local_odom_.stamp_sec = 10.09;
+  joints_.stamp_sec = 10.09;
+  local_odom_.vx = 0.10;
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_TRUE(report.is_stationary); // First sample within debounce window
+
+  // 4. Sustained motion exceeds debounce duration (t = 10.40s, elapsed = 0.30s >= 0.25s)
+  now_sec_ = 10.40;
+  local_odom_.stamp_sec = 10.39;
+  joints_.stamp_sec = 10.39;
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_FALSE(report.is_stationary);
+  EXPECT_FALSE(report.stationary_latched);
+  EXPECT_FALSE(report.grasp_ready);
+
+  // 5. Even after coming to complete stop, latch remains broken until new EKF convergence
+  now_sec_ = 10.50;
+  local_odom_.stamp_sec = 10.49;
+  joints_.stamp_sec = 10.49;
+  local_odom_.vx = 0.0;
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  EXPECT_TRUE(report.is_stationary);
+  EXPECT_FALSE(report.stationary_latched);
+  EXPECT_FALSE(report.grasp_ready);
+}

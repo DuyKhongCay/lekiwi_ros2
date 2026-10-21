@@ -17,7 +17,10 @@ except ImportError:
 try:
     import imageio.v3 as iio
 except ImportError:
-    import imageio as iio
+    try:
+        import imageio as iio
+    except ImportError:
+        iio = None
 
 from chess_rosbag_to_lerobot.config import FeatureSpec
 

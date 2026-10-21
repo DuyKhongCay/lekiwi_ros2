@@ -12,16 +12,18 @@ import pytest
 import rclpy
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
-from lekiwi_orchestrator.mission_types import (
+from lekiwi_orchestrator.core.mission_types import (
     ActionResult,
     ChessMoveGoal,
     ObservationIntent,
 )
-from lekiwi_orchestrator.motion_client import (
+from lekiwi_orchestrator.core.utils import get_node_now_sec
+from lekiwi_orchestrator.execution.motion_client import (
+    FakeMotionClient,
     NavigationClient,
     RosMotionClient,
 )
-from lekiwi_orchestrator.obs_navigator import ObsNavigator
+from lekiwi_orchestrator.planning.obs_navigator import ObsNavigator
 from rclpy.node import Node
 
 
@@ -37,7 +39,7 @@ def ros_context():
 def test_ros_action_dispatcher_mock_nav2(monkeypatch, ros_context):
     """Verify RosMotionClient with mock_nav2=True bypasses Nav2 without creating Nav2 client."""
     monkeypatch.setattr(
-        "lekiwi_orchestrator.motion_client.ActionClient",
+        "lekiwi_orchestrator.execution.motion_client.ActionClient",
         lambda *args, **kwargs: Mock(),
     )
     node = Node("test_mock_nav_disp_node")
@@ -148,7 +150,7 @@ def test_wrap_completed_action_status_matrix(
 ):
     """Verify standard and custom ROS 2 Action result unpacking across status codes."""
     monkeypatch.setattr(
-        "lekiwi_orchestrator.motion_client.ActionClient",
+        "lekiwi_orchestrator.execution.motion_client.ActionClient",
         lambda *args, **kwargs: Mock(),
     )
     dispatcher = RosMotionClient(node=Mock(), mock_nav2=True)
@@ -177,6 +179,10 @@ def test_obs_navigator_direct_geodesic_reposition(ros_context):
     dispatched_poses = []
 
     class DirectTrackingNav(NavigationClient):
+        @property
+        def is_navigating(self) -> bool:
+            return False
+
         def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None) -> bool:
             dispatched_poses.append(target_pose)
             if on_completed:
@@ -264,6 +270,10 @@ def test_azimuth_viewpoint_ranking_and_exhaustion(ros_context):
     dispatched_poses = []
 
     class MockNav(NavigationClient):
+        @property
+        def is_navigating(self) -> bool:
+            return False
+
         def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None) -> bool:
             dispatched_poses.append(target_pose)
             if on_completed:
@@ -309,6 +319,20 @@ def test_azimuth_viewpoint_ranking_and_exhaustion(ros_context):
         navigator.reposition_to_next_viewpoint(intent=ObservationIntent.RELOCALIZE, reference_pose=ref_pose)
         assert len(dispatched_poses) == 3
         assert navigator.has_exhausted_viewpoints(ObservationIntent.RELOCALIZE) is True
+
+        # Attempt 4: Should return False without dispatching because viewpoints are exhausted
+        assert (
+            navigator.reposition_to_next_viewpoint(
+                intent=ObservationIntent.RELOCALIZE, reference_pose=ref_pose
+            )
+            is False
+        )
+        assert len(dispatched_poses) == 3
+
+        # Reset session
+        navigator.reset_tour(ObservationIntent.RELOCALIZE)
+        assert navigator.has_exhausted_viewpoints(ObservationIntent.RELOCALIZE) is False
+        assert navigator.get_viewpoint_index(ObservationIntent.RELOCALIZE) == 0
     finally:
         node.destroy_node()
 
@@ -380,4 +404,104 @@ def test_action_watchdog_disabled_when_zero_or_negative_timeout(ros_context):
         assert client._action_watchdog_desc == ""
     finally:
         node.destroy_node()
+
+
+def test_ros_motion_client_is_navigating_lifecycle(monkeypatch, ros_context):
+    """Verify is_navigating correctly reflects Nav2 goal accepted, completed, cancelled, and rejected states."""
+    monkeypatch.setattr(
+        "lekiwi_orchestrator.execution.motion_client.ActionClient",
+        lambda *args, **kwargs: Mock(),
+    )
+    node = Node("test_is_navigating_node")
+    dispatcher = RosMotionClient(node=node, mock_nav2=False)
+
+    mock_nav = Mock()
+    mock_nav.server_is_ready.return_value = True
+    dispatcher._nav2_client = mock_nav
+
+    try:
+        assert not dispatcher.is_navigating
+
+        # 1. Goal accepted -> is_navigating becomes True
+        res_callback_holder = []
+        fake_goal_handle = Mock(accepted=True)
+        res_fut = Mock()
+        res_fut.add_done_callback = lambda cb: res_callback_holder.append(cb)
+        fake_goal_handle.get_result_async.return_value = res_fut
+
+        send_fut = Mock()
+        send_fut.result.return_value = fake_goal_handle
+        mock_nav.send_goal_async.return_value = send_fut
+
+        target_pose = PoseStamped()
+        success = dispatcher.send_navigation_goal(target_pose=target_pose)
+        assert success
+        # Fire goal response callback
+        send_fut.add_done_callback.call_args[0][0](send_fut)
+        assert dispatcher.is_navigating
+
+        # 2. Complete goal -> is_navigating becomes False
+        assert len(res_callback_holder) == 1
+        res_obj = Mock()
+        res_obj.status = GoalStatus.STATUS_SUCCEEDED
+        res_obj.result = Mock(success=True, message="Reached", execution_time_sec=1.0)
+        res_fut.result.return_value = res_obj
+        res_callback_holder[0](res_fut)
+        assert not dispatcher.is_navigating
+
+        # 3. Goal cancelled -> is_navigating becomes False
+        send_fut.add_done_callback.call_args[0][0](send_fut)
+        assert dispatcher.is_navigating
+        dispatcher.cancel_active_goal()
+        assert not dispatcher.is_navigating
+
+        # 4. Goal rejected -> is_navigating remains False
+        rejected_handle = Mock(accepted=False)
+        rejected_fut = Mock()
+        rejected_fut.result.return_value = rejected_handle
+        mock_nav.send_goal_async.return_value = rejected_fut
+        success = dispatcher.send_navigation_goal(target_pose=target_pose)
+        assert success
+        rejected_fut.add_done_callback.call_args[0][0](rejected_fut)
+        assert not dispatcher.is_navigating
+    finally:
+        dispatcher.destroy()
+        node.destroy_node()
+
+
+def test_fake_motion_client():
+    """Verify FakeMotionClient contract and state tracking for unit testing."""
+    client = FakeMotionClient()
+    assert not client.is_navigating
+    assert not client.cancelled
+    assert len(client.nav_goals) == 0
+    assert len(client.manip_goals) == 0
+
+    assert client.check_feasibility(ChessMoveGoal("e2e4", "e2", "e4"))
+    assert client.send_navigation_goal(PoseStamped())
+    assert len(client.nav_goals) == 1
+    assert client.send_manipulation_goal(Mock(instruction="move"))
+    assert len(client.manip_goals) == 1
+
+    client.cancel_active_goal()
+    assert client.cancelled
+    client.destroy()
+
+
+def test_get_node_now_sec_clock():
+    """Verify get_node_now_sec correctly retrieves seconds from ROS node clock."""
+    node = Mock()
+    clock = Mock()
+    clock.now.return_value.nanoseconds = 150 * 10**9
+    node.get_clock.return_value = clock
+    assert get_node_now_sec(node) == 150.0
+
+
+def test_get_node_now_sec_fallback():
+    """Verify get_node_now_sec falls back to monotonic time if node clock fails."""
+    node = Mock(spec=[])
+    t = get_node_now_sec(node)
+    assert isinstance(t, float)
+    assert t > 0.0
+
 

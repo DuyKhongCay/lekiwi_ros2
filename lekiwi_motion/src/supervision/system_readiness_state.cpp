@@ -35,6 +35,8 @@ namespace lekiwi_motion
   {
     global_ekf_seeded_ = false;
     stationary_latched_ = false;
+    was_stationary_ = false;
+    non_stationary_since_sec_ = -1.0;
   }
 
   SystemReadinessReport SystemReadinessEvaluator::evaluate(
@@ -53,11 +55,53 @@ namespace lekiwi_motion
       local_odom_fresh = policy::fresh(
           now_sec, local_odom.stamp_sec, config_.nav_odom_max_age_sec);
       report.current_speed = local_odom.speed();
-      report.is_stationary = local_odom_fresh &&
-                             policy::stationary(local_odom.vx, local_odom.vy, local_odom.wz,
-                                                config_.max_stop_velocity,
-                                                config_.max_stop_angular_vel);
+      if (local_odom_fresh)
+      {
+        const bool raw_stationary = policy::stationary(
+            local_odom.vx, local_odom.vy, local_odom.wz,
+            config_.max_stop_velocity, config_.max_stop_angular_vel);
+
+        if (raw_stationary)
+        {
+          non_stationary_since_sec_ = -1.0;
+          report.is_stationary = true;
+        }
+        else
+        {
+          if (was_stationary_ && config_.stationary_unlatch_debounce_sec > 0.0)
+          {
+            if (non_stationary_since_sec_ < 0.0)
+            {
+              non_stationary_since_sec_ = now_sec;
+            }
+            if ((now_sec - non_stationary_since_sec_) < config_.stationary_unlatch_debounce_sec)
+            {
+              report.is_stationary = true;
+            }
+            else
+            {
+              report.is_stationary = false;
+            }
+          }
+          else
+          {
+            report.is_stationary = false;
+          }
+        }
+      }
+      else
+      {
+        non_stationary_since_sec_ = -1.0;
+        report.is_stationary = false;
+      }
     }
+    else
+    {
+      non_stationary_since_sec_ = -1.0;
+      report.is_stationary = false;
+    }
+
+    was_stationary_ = report.is_stationary;
 
     // Invalidate stationary convergence latch if chassis is in motion or local odom is stale
     if (!report.is_stationary)

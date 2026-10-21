@@ -71,57 +71,91 @@ lekiwi_motion/
     └── supervision/                    # Readiness state, torque & gate gtests
 ```
 
+### 1. Động học & Đánh giá Khả thi Vùng làm việc (Kinematics & Reachability)
+
+```mermaid
+flowchart LR
+    subgraph InputLayer ["High-Level Input"]
+        ORCH["<b>lekiwi_orchestrator</b><br/>Mission State Machine"]
+    end
+
+    subgraph KinematicsModule ["Submodule: kinematics"]
+        CHECKER["<b>WorkspaceCheckerNode</b><br/><i>/workspace/check_move_feasibility</i>"]
+        MAPPER["<b>ChessboardMapper</b><br/>Algebraic FEN to 3D Base Frame"]
+        IK["<b>SO101AnalyticalSolver</b><br/>5-DoF Closed-form Analytical IK<br/>(Singularity guard: cos &le; 0.985)"]
+        PLANNER["<b>WorkspacePlanner</b><br/>Concentric Multi-Tier Standoff Search<br/>(Tier 0 Zero-Nav &rarr; Tier 3 Triple-Base)"]
+        MARKER["<b>FeasibilityMarkerBuilder</b><br/>RViz2 Interactive Telemetry Visuals"]
+    end
+
+    ORCH -->|"CheckMoveFeasibility.srv"| CHECKER
+    CHECKER --> MAPPER
+    MAPPER --> IK
+    IK --> PLANNER
+    PLANNER --> MARKER
+```
+
+### 2. Thực thi Quỹ đạo Tay máy & Điều khiển Jogging (Arm & Jogging Execution)
+
 ```mermaid
 flowchart TD
-    subgraph HighLevel ["1. High-Level Orchestration & Teleoperation"]
-        ORCH["<b>lekiwi_orchestrator</b><br/>- Mission & Chess Behavior Tree<br/>- Feasibility queries & Move action dispatch"]
-        TELEOP["<b>joy_teleop / Gamepad</b><br/>- Manual Cartesian Jogging (~/cmd_vel)<br/>- Named Landmark Poses (/arm/go_to_named_pose)"]
-        NAV2["<b>Nav2 Navigation Stack</b><br/>- Costmaps & Path Planners<br/>- Managed via Lifecycle Service"]
+    subgraph Clients ["Command & Teleop Sources"]
+        ORCH["<b>lekiwi_orchestrator</b><br/>ExecuteChessMove Action"]
+        TELEOP["<b>joy_teleop / Gamepad</b><br/>Cartesian Jogging & Named Poses"]
     end
 
-    subgraph KinematicsSub ["2. Submodule: kinematics (Reachability & Standoff)"]
-        CHECKER["<b>WorkspaceCheckerNode</b> (/workspace/check_move_feasibility)<br/>- Algebraic Notation to Metric 3D: ChessboardMapper<br/>- 5-DoF Geometric Analytical Inverse Kinematics: SO101AnalyticalSolver<br/>- Concentric Multi-Tier Standoff Search: WorkspacePlanner<br/>- Real-time RViz Visual Diagnostics: FeasibilityMarkerBuilder"]
+    subgraph ArmModule ["Submodule: arm"]
+        MANIP["<b>ManipulationActionServer</b><br/><i>/manipulation/execute_chess_move</i><br/>5-Phase Pick / Place & 8-Phase Monolithic"]
+        JOG["<b>CartesianJogServerNode</b><br/><i>~/cmd_vel</i><br/>Bumpless FK Sync + Low-Pass Filter"]
+        BUSY_LOCK{{"/arm/is_busy<br/>Lock Flag"}}
     end
 
-    subgraph ArmSub ["3. Submodule: arm (Trajectory Generation & Jogging)"]
-        MANIP["<b>ManipulationActionServer</b> (/manipulation/execute_chess_move)<br/>- Multi-Phase Pick & Place Trajectory Sequencing (ArmMotionPlanner)<br/>- Synchronous Named Poses (/arm/go_to_named_pose) & Gripper Toggle<br/>- Dataset Recording Coordination (/arm/save_episode, /arm/abort_episode)<br/>- Execution Lock Coordinator (/arm/is_busy)"]
-        JOG["<b>CartesianJogServerNode</b> (~/cmd_vel)<br/>- Analytical IK Cartesian Velocity Jogging with Bumpless FK Sync<br/>- Low-Pass Filter Smoothing & Velocity Rate Limiting (JointMotionFilter)<br/>- Suppressed during active arm lock (/arm/is_busy)"]
+    subgraph HW_Layer ["ros2_control & Actuators"]
+        TRAJ_CTRL["<b>arm_trajectory_controller</b><br/>50 Hz Quintic Spline Execution"]
+        FEETECH["<b>Feetech STS3215 Arm Bus</b><br/>6x Position-Mode UART Servos"]
     end
 
-    subgraph SupervSub ["4. Submodule: supervision (System Readiness & Safety)"]
-        READINESS["<b>SystemReadinessNode</b> (/system/nav_ready, /system/grasp_ready)<br/>- Dual-Odometry Covariance Check (/odometry/local, /odometry/global)<br/>- Stationary velocity ceiling verification & TF chain validation"]
-        NAV_GATE["<b>Nav2StartupGateNode</b><br/>- Debounced TF stabilization gatekeeper<br/>- Triggers /lifecycle_manager_navigation/manage_nodes"]
-        TORQUE["<b>TorqueManagerNode</b> (/set_torque_enabled)<br/>- Hardware Controller Switching via /controller_manager/switch_controller<br/>- Atomic Bus Torque Enable/Disable State Broadcasting"]
-    end
-
-    subgraph ControlHW ["5. Control & Hardware Execution Layer"]
-        ROS2_CTRL["<b>ros2_control Controller Manager</b><br/>- arm_trajectory_controller (50 Hz Quintic Spline Execution)<br/>- omni_base_controller (Base Velocity Command Interface)<br/>- joint_state_broadcaster (/joint_states telemetry)"]
-        EKF["<b>robot_localization (Dual EKF)</b><br/>- /odometry/local (High-rate velocity & continuity)<br/>- /odometry/global (Fused map/AMCL pose & covariance)"]
-        ACTUATORS["<b>Feetech STS3215 Actuator Bus</b><br/>- 9x Half-Duplex UART Servos at 1,000,000 baud (/dev/lekiwi_serial)<br/>- 6x Arm Servos (Position Mode) + 3x Omni Wheels (Velocity Mode)"]
-    end
-
-    %% Flow 1 -> 2 & 3 & 4
-    ORCH -->|"CheckMoveFeasibility"| CHECKER
-    ORCH -->|"ExecuteChessMove Action"| MANIP
-    ORCH -.->|"Query Readiness"| READINESS
-    TELEOP -->|"GoToNamedPose"| MANIP
+    ORCH -->|"ExecuteChessMove.action"| MANIP
+    TELEOP -->|"Named Landmark Poses"| MANIP
     TELEOP -->|"TwistStamped (~/cmd_vel)"| JOG
 
-    %% Inter-submodule coordination
-    MANIP -.->|"Lock flag (/arm/is_busy)"| JOG
+    MANIP -->|"Set busy lock"| BUSY_LOCK
+    BUSY_LOCK -.->|"Suppress jogging"| JOG
 
-    %% Flow 3 & 4 -> 5
-    MANIP -->|"FollowJointTrajectory (50 Hz)"| ROS2_CTRL
-    JOG -->|"Streaming JointTrajectory / Commands"| ROS2_CTRL
-    TORQUE -->|"SwitchController.srv"| ROS2_CTRL
-    TORQUE -->|"Torque enable vector"| ACTUATORS
-    ROS2_CTRL -->|"Hardware Bus I/O"| ACTUATORS
+    MANIP -->|"FollowJointTrajectory (50 Hz)"| TRAJ_CTRL
+    JOG -->|"JointTrajectory Stream"| TRAJ_CTRL
+    TRAJ_CTRL -->|"Half-Duplex UART (1 MBaud)"| FEETECH
+    TRAJ_CTRL -.->|"/joint_states (FK Sync)"| JOG
+```
 
-    %% Feedback & Lifecycle
+### 3. Giám sát An toàn, Trạng thái & Kích hoạt Nav2 (Supervision & Safety)
+
+```mermaid
+flowchart TD
+    subgraph SensorsLocalization ["Odometry & Telemetry Sources"]
+        EKF["<b>Dual EKF (robot_localization)</b><br/>/odometry/local & /odometry/global"]
+        CTRL["<b>ros2_control</b><br/>/joint_states telemetry"]
+        TF["<b>tf2 / TF Tree</b><br/>map &rarr; odom &rarr; base_footprint"]
+    end
+
+    subgraph SupervisionModule ["Submodule: supervision"]
+        READINESS["<b>SystemReadinessNode</b><br/>Stationary Ceiling & Covariance Audit<br/>Latched /system/nav_ready & /system/grasp_ready"]
+        NAV_GATE["<b>Nav2StartupGateNode</b><br/>Debounced TF Stabilization Gatekeeper"]
+        TORQUE["<b>TorqueManagerNode</b><br/>Atomic Bus Torque Switching"]
+    end
+
+    subgraph Consumers ["Managed Subsystems & Actuators"]
+        ORCH["<b>lekiwi_orchestrator</b><br/>Mission Readiness Leases"]
+        NAV2["<b>Nav2 Lifecycle Manager</b><br/>Path Planners & Costmaps"]
+        HW["<b>Actuator Controller Manager</b><br/>/controller_manager/switch_controller"]
+    end
+
     EKF -->|"Dual Odometry Streams"| READINESS
-    ROS2_CTRL -->|"/joint_states"| READINESS
-    ROS2_CTRL -->|"/joint_states (FK Sync)"| JOG
+    CTRL -->|"/joint_states"| READINESS
+    TF -->|"TF Chain Validation"| NAV_GATE
+
+    READINESS -->|"/system/nav_ready & grasp_ready"| ORCH
     NAV_GATE -->|"ManageLifecycleNodes.srv"| NAV2
+    TORQUE -->|"SwitchController.srv"| HW
 ```
 
 ---
@@ -136,7 +170,7 @@ flowchart TD
 - **`workspace_checker_node.hpp` / `workspace_checker_node.cpp`**: Composable node implementing `/workspace/check_move_feasibility`.
 
 ### 2. `arm`
-- **`arm_motion_planner.hpp` / `arm_motion_planner.cpp`**: Unified arm motion planning combining discrete phase sequencing, gripper modeling, strongly typed landmark poses (`NamedPosesConfig`), and smooth $C^2$-continuous 5th-order polynomial trajectory interpolation at configurable sampling rate (default 50 Hz). Supports atomic 5-phase `PICK` (concluding in transit `stow`), atomic 5-phase `PLACE` (starting from transit `stow`), monolithic 8-phase `PICK_AND_PLACE` (direct transit without mid-stow), and 7-phase capture moves (`DROP_CLEAR` to `CLEAR_LEFT` / `CLEAR_RIGHT`).
+- **`arm_motion_planner.hpp` / `arm_motion_planner.cpp`**: Unified arm motion planning combining discrete phase sequencing, gripper modeling, strongly typed landmark poses (`NamedPosesConfig`), and smooth $C^2$-continuous 5th-order polynomial trajectory interpolation at configurable sampling rate (default 50 Hz). Supports atomic 5-phase `PICK` (concluding in transit `stow`), atomic 5-phase `PLACE` (starting and ending at transit `stow`), monolithic 9-phase `PICK_AND_PLACE` (concluding in transit `stow` with closed gripper), and 7-phase capture moves (`DROP_CLEAR` to `CLEAR_LEFT` / `CLEAR_RIGHT` concluding in `RETRACT_STOW`).
 - **`cartesian_jogger.hpp` / `cartesian_jogger.cpp`**: Pure POCO domain controller for Cartesian jogging with bumpless transfer, orientation holding, and joint velocity damping.
 - **`cartesian_jog_server_node.hpp` / `cartesian_jog_server_node.cpp`**: Standalone ROS 2 node executing analytical IK Cartesian velocity jogging with bumpless transfer, joint velocity rate limiting (`max_joint_vel_rad_s`), and execution lock suppression via `/arm/is_busy`.
 - **`manipulation_action_server.hpp` / `manipulation_action_server.cpp`**: Unified composable ROS 2 node executing multi-phase chess manipulation trajectories (`ExecuteChessMove`) with live JIT inverse kinematics (`SO101AnalyticalSolver`), pure vertical Cartesian descent, capture bin sorting, synchronous exclusive named pose transitions (`/arm/go_to_named_pose` service via `lekiwi_interfaces/srv/GoToNamedPose`), gripper toggle service (`/arm/toggle_gripper`), episode recording lifecycle management (`/arm/save_episode`, `/arm/abort_episode`), and `/arm/is_busy` coordination publishing. Directly owns controller trajectory client and joint state telemetry.

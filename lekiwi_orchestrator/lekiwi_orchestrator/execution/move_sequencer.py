@@ -22,18 +22,19 @@ from lekiwi_interfaces.srv import CheckMoveFeasibility
 from rclpy.callback_groups import CallbackGroup
 from rclpy.node import Node
 
-from lekiwi_orchestrator.fsm import (
+from lekiwi_orchestrator.core.fsm import (
     MOTION_STATE_NAMES,
     MotionExecutionState,
     is_motion_transition_allowed,
 )
-from lekiwi_orchestrator.mission_types import ActionResult, ObservationIntent
-from lekiwi_orchestrator.move_planner import MoveStep, StepKind
+from lekiwi_orchestrator.core.mission_types import ActionResult, ObservationIntent
+from lekiwi_orchestrator.core.utils import get_node_now_sec
+from lekiwi_orchestrator.planning.move_planner import MoveStep, StepKind
 
 if TYPE_CHECKING:
-    from lekiwi_orchestrator.motion_client import MotionClient
-    from lekiwi_orchestrator.obs_navigator import ObsNavigator
-    from lekiwi_orchestrator.perception_context import PerceptionContextManager
+    from lekiwi_orchestrator.execution.motion_client import MotionClient
+    from lekiwi_orchestrator.planning.obs_navigator import ObsNavigator
+    from lekiwi_orchestrator.supervision.perception_context import PerceptionContextManager
 
 
 class MoveSequencer:
@@ -53,7 +54,8 @@ class MoveSequencer:
         on_pipeline_failed: Callable[[str], None] | None = None,
         on_motion_state_changed: Callable[[MotionExecutionState], None] | None = None,
         grasp_readiness_provider: Callable[[], bool] | None = None,
-        pre_grasp_settle_sec: float = 2.0,
+        chassis_settle_timeout_sec: float = 2.0,
+        chassis_settle_provider: Callable[[], bool] | None = None,
         navigation_enabled: bool = True,
         callback_group: CallbackGroup | None = None,
         observation_navigator: ObsNavigator | None = None,
@@ -79,9 +81,9 @@ class MoveSequencer:
 
         # Self-healing & grasp readiness parameters
         self._navigation_enabled = navigation_enabled
-        self._pre_grasp_settle_sec = max(0.0, float(pre_grasp_settle_sec))
+        self._chassis_settle_timeout_sec = max(0.0, float(chassis_settle_timeout_sec))
         self._grasp_readiness_provider = grasp_readiness_provider or (lambda: True)
-        self._relocalize_attempts = 0
+        self._chassis_settle_provider = chassis_settle_provider or (lambda: True)
         self._pending_stage: MoveStep | None = None
 
     @property
@@ -100,8 +102,8 @@ class MoveSequencer:
             return bool(self._stages or self._current_stage is not None)
 
     @property
-    def pre_grasp_settle_sec(self) -> float:
-        return self._pre_grasp_settle_sec
+    def chassis_settle_timeout_sec(self) -> float:
+        return self._chassis_settle_timeout_sec
 
     def transition_motion_to(self, target_state: MotionExecutionState) -> bool:
         """Safely transition Level 2 MotionExecutionState validating legal transition matrix."""
@@ -126,22 +128,13 @@ class MoveSequencer:
             self._on_motion_state_changed(target_state)
         return True
 
-    def start_pipeline(
-        self,
-        stages: list[MoveStep],
-        feasibility_resp: CheckMoveFeasibility.Response | None = None,
-    ) -> None:
+    def start_pipeline(self, stages: list[MoveStep]) -> None:
         """Begin execution of a newly built sequential move pipeline.
 
         Resets cancellation flags and recovery counters before triggering the first atomic stage.
 
         Args:
             stages: Ordered list of MoveStep primitives (approach, clear, pick, place, verify).
-            feasibility_resp: Optional kinematic response (kept for caller signature compatibility).
-
-        Thread-safety:
-            Pipeline initialization is synchronized using `_lock`. Stage execution is advanced
-            asynchronously across action client callback threads.
         """
         self._cancel_event.clear()
         with self._lock:
@@ -160,53 +153,46 @@ class MoveSequencer:
         if self._cancel_event.is_set():
             return
 
-        completed_cb = None
-        stage: MoveStep | None = None
         with self._lock:
             if not self._stages:
                 self._current_stage = None
                 self.transition_motion_to(MotionExecutionState.IDLE)
                 completed_cb = self._on_pipeline_completed
+                stage = None
             else:
                 stage = self._stages.pop(0)
                 self._current_stage = stage
+                completed_cb = None
 
         if stage is None:
             if completed_cb is not None:
                 completed_cb()
             return
 
+        self._execute_stage(stage)
+
+    def _gate_pre_grasp(self, stage: MoveStep) -> bool:
+        if not stage.requires_pre_grasp_gate:
+            self._node.get_logger().info(
+                f"Stage '{stage.name}' is an in-place continuation. "
+                "Bypassing pre-grasp readiness check."
+            )
+            return True
+
+        if self._wait_for_grasp_readiness(self._chassis_settle_timeout_sec):
+            return True
+
+        if not self._cancel_event.is_set():
+            self._handle_grasp_unready(stage)
+        return False
+
+    def _execute_stage(self, stage: MoveStep) -> None:
         if stage.target_pose is not None:
             self._execute_nav_stage(stage)
-        else:
-            if getattr(stage, "requires_pre_grasp_gate", True):
-                if not self._wait_for_grasp_readiness(self._pre_grasp_settle_sec):
-                    if not self._cancel_event.is_set():
-                        self._handle_grasp_unready(stage)
-                    return
-            else:
-                self._node.get_logger().info(
-                    f"Stage '{stage.name}' is an in-place continuation. "
-                    "Bypassing pre-grasp readiness check."
-                )
-            if not self._cancel_event.is_set():
-                self._execute_manip_stage(stage)
+            return
 
-    def _get_now_sec(self) -> float:
-        """Return current timestamp in seconds using node clock, fallback to monotonic."""
-        try:
-            if hasattr(self._node, "get_clock"):
-                clk = self._node.get_clock()
-                if clk is not None:
-                    now = clk.now()
-                    if hasattr(now, "nanoseconds") and isinstance(now.nanoseconds, (int, float)):
-                        return float(now.nanoseconds) * 1e-9
-                    if hasattr(now, "seconds_nanoseconds"):
-                        sec, nsec = now.seconds_nanoseconds()
-                        return float(sec) + float(nsec) * 1e-9
-        except Exception:
-            pass
-        return time.monotonic()
+        if self._gate_pre_grasp(stage) and not self._cancel_event.is_set():
+            self._execute_manip_stage(stage)
 
     # ==========================================================================
     # Grasp Readiness & Self-Healing (Non-blocking watchdog protection)
@@ -214,41 +200,40 @@ class MoveSequencer:
 
     def _reset_recovery_state(self) -> None:
         with self._lock:
-            self._relocalize_attempts = 0
             self._pending_stage = None
             if self._obs_nav is not None:
-                self._obs_nav.reset_viewpoint_index(ObservationIntent.RELOCALIZE)
+                self._obs_nav.reset_tour(ObservationIntent.RELOCALIZE)
 
-    def _wait_for_grasp_readiness(self, timeout_sec: float) -> bool:
-        """
-        Wait for grasp readiness provider until True, timeout_sec expires, or cancel requested.
-
-        Protected with both ROS clock and monotonic wall-clock watchdog to
-        prevent deadlocks or infinite loops if simulation time (use_sim_time) is paused.
-        """
-        if self._cancel_event.is_set():
+    def _wait_for_condition(
+        self, predicate: Callable[[], bool], timeout_sec: float
+    ) -> bool:
+        if self._cancel_event.is_set() or timeout_sec <= 0.0:
             return False
-        if self._grasp_readiness_provider():
+        if predicate():
             return True
-        if timeout_sec <= 0.0:
-            return False
 
-        start_ros = self._get_now_sec()
+        start_ros = get_node_now_sec(self._node)
         start_wall = time.monotonic()
-        poll_interval = min(0.02, timeout_sec / 4) if timeout_sec > 0 else 0.005
+        poll_interval = min(0.02, timeout_sec / 4.0)
 
-        while True:
-            if self._cancel_event.wait(timeout=poll_interval):
-                return False
-            if self._grasp_readiness_provider():
+        while not self._cancel_event.wait(timeout=poll_interval):
+            if predicate():
                 return True
 
-            elapsed_ros = self._get_now_sec() - start_ros
-            elapsed_wall = time.monotonic() - start_wall
-            if elapsed_ros >= timeout_sec or elapsed_wall >= timeout_sec:
+            if (get_node_now_sec(self._node) - start_ros >= timeout_sec) or (
+                time.monotonic() - start_wall >= timeout_sec
+            ):
                 break
 
-        return (not self._cancel_event.is_set()) and self._grasp_readiness_provider()
+        return (not self._cancel_event.is_set()) and predicate()
+
+    def _wait_for_grasp_readiness(self, timeout_sec: float) -> bool:
+        """Wait for grasp readiness provider until True, timeout_sec expires, or cancel requested."""
+        return self._wait_for_condition(self._grasp_readiness_provider, timeout_sec)
+
+    def _wait_for_chassis_settle(self, timeout_sec: float) -> bool:
+        """Wait until chassis has fully settled (velocity within stop thresholds) or timeout expires."""
+        return self._wait_for_condition(self._chassis_settle_provider, timeout_sec)
 
     def _handle_grasp_unready(self, stage: MoveStep) -> None:
         """Handle unready grasp state by triggering active relocalization self-healing."""
@@ -258,28 +243,28 @@ class MoveSequencer:
         if self._obs_nav is None or not self._navigation_enabled:
             self._handle_failure(
                 f"Grasp readiness check failed before stage '{stage.name}' "
-                f"(settle timeout {self._pre_grasp_settle_sec:.1f}s expired, active relocalization unavailable)"
+                f"(settle timeout {self._chassis_settle_timeout_sec:.1f}s expired, active relocalization unavailable)"
+            )
+            return
+
+        if self._obs_nav.has_exhausted_viewpoints(ObservationIntent.RELOCALIZE):
+            max_attempts = self._obs_nav.get_max_attempts(ObservationIntent.RELOCALIZE)
+            self._handle_failure(
+                f"Grasp readiness failed before stage '{stage.name}' "
+                f"and exhausted all {max_attempts} relocalization viewpoints"
             )
             return
 
         with self._lock:
-            max_attempts = self._obs_nav.get_max_attempts(ObservationIntent.RELOCALIZE)
-            if self._relocalize_attempts >= max_attempts:
-                self._handle_failure(
-                    f"Grasp readiness failed before stage '{stage.name}' "
-                    f"and exhausted all {max_attempts} relocalization viewpoints"
-                )
-                return
-
-            self._relocalize_attempts += 1
             self._pending_stage = stage
-            current_attempts = self._relocalize_attempts
 
         ref_pose = stage.target_pose or self._last_nav_pose
+        current_idx = self._obs_nav.get_viewpoint_index(ObservationIntent.RELOCALIZE)
+        max_attempts = self._obs_nav.get_max_attempts(ObservationIntent.RELOCALIZE)
 
         self._node.get_logger().warn(
             f"[SELF-HEALING] Grasp readiness false before stage '{stage.name}'. "
-            f"Initiating active relocalization (attempt {current_attempts}/{max_attempts})..."
+            f"Initiating active relocalization (attempt {current_idx + 1}/{max_attempts})..."
         )
         self.transition_motion_to(MotionExecutionState.NAV_TO_OBS)
         self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
@@ -294,6 +279,50 @@ class MoveSequencer:
             self._handle_failure(
                 f"Failed to dispatch Nav2 goal for relocalization before stage '{stage.name}'"
             )
+
+    def _dispatch_return_to_manip_pose(
+        self, stage: MoveStep, return_pose: PoseStamped
+    ) -> None:
+        self._node.get_logger().info(
+            f"[SELF-HEALING] Navigating base back to manipulation stance "
+            f"({return_pose.pose.position.x:.3f}, {return_pose.pose.position.y:.3f})..."
+        )
+        self.transition_motion_to(
+            stage.nav_motion_state or MotionExecutionState.NAV_TO_PICK
+        )
+        self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
+        dispatched = self._dispatcher.send_navigation_goal(
+            target_pose=return_pose,
+            timeout_sec=self._action_timeout_sec,
+            on_completed=lambda res: (
+                self._resume_stage(stage)
+                if res.success and not self._cancel_event.is_set()
+                else self._handle_failure(
+                    f"Failed to return to manipulation pose: {res.message}"
+                )
+            ),
+        )
+        if not dispatched:
+            self._handle_failure(
+                f"Failed to dispatch return navigation for '{stage.name}'"
+            )
+
+    def _resume_after_relocalization(self, stage: MoveStep) -> None:
+        with self._lock:
+            if self._obs_nav is not None:
+                self._obs_nav.reset_tour(ObservationIntent.RELOCALIZE)
+            self._pending_stage = None
+
+        return_pose = stage.target_pose or self._last_nav_pose
+        if (
+            stage.target_pose is None
+            and return_pose is not None
+            and self._obs_nav is not None
+        ):
+            self._dispatch_return_to_manip_pose(stage, return_pose)
+            return
+
+        self._resume_stage(stage)
 
     def _on_relocalize_nav_completed(self, result: ActionResult) -> None:
         """Called when Nav2 finishes navigating to relocalization observation viewpoint."""
@@ -314,63 +343,21 @@ class MoveSequencer:
 
         self._node.get_logger().info(
             f"[SELF-HEALING] Reached relocalization viewpoint for stage '{pending.name}'. "
-            f"Waiting for EKF convergence / grasp readiness ({self._pre_grasp_settle_sec:.1f}s)..."
+            f"Waiting for EKF convergence / grasp readiness ({self._chassis_settle_timeout_sec:.1f}s)..."
         )
-        if self._wait_for_grasp_readiness(self._pre_grasp_settle_sec):
-            if self._cancel_event.is_set():
-                return
-            self._node.get_logger().info(
-                f"[SELF-HEALING] Relocalization succeeded! Resuming pending stage '{pending.name}'."
-            )
-            with self._lock:
-                self._relocalize_attempts = 0
-                if self._obs_nav is not None:
-                    self._obs_nav.reset_viewpoint_index(ObservationIntent.RELOCALIZE)
-                stage_to_resume = self._pending_stage
-                self._pending_stage = None
-
-            if stage_to_resume is None:
-                return
-
-            return_pose = stage_to_resume.target_pose or self._last_nav_pose
-
-            if (
-                stage_to_resume.target_pose is None
-                and return_pose is not None
-                and self._obs_nav is not None
-            ):
-                self._node.get_logger().info(
-                    f"[SELF-HEALING] Navigating base back to manipulation stance "
-                    f"({return_pose.pose.position.x:.3f}, {return_pose.pose.position.y:.3f})..."
-                )
-                self.transition_motion_to(
-                    stage_to_resume.nav_motion_state or MotionExecutionState.NAV_TO_PICK
-                )
-                self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
-                dispatched = self._dispatcher.send_navigation_goal(
-                    target_pose=return_pose,
-                    timeout_sec=self._action_timeout_sec,
-                    on_completed=lambda res: (
-                        self._resume_stage(stage_to_resume)
-                        if res.success and not self._cancel_event.is_set()
-                        else self._handle_failure(
-                            f"Failed to return to manipulation pose: {res.message}"
-                        )
-                    ),
-                )
-                if not dispatched:
-                    self._handle_failure(
-                        f"Failed to dispatch return navigation for '{stage_to_resume.name}'"
-                    )
-                return
-
-            self._resume_stage(stage_to_resume)
-        else:
+        if not self._wait_for_grasp_readiness(self._chassis_settle_timeout_sec):
             if not self._cancel_event.is_set():
                 self._node.get_logger().warn(
                     "[SELF-HEALING] Grasp readiness still false at current viewpoint. Retrying next viewpoint..."
                 )
                 self._handle_grasp_unready(pending)
+            return
+
+        if not self._cancel_event.is_set():
+            self._node.get_logger().info(
+                f"[SELF-HEALING] Relocalization succeeded! Resuming pending stage '{pending.name}'."
+            )
+            self._resume_after_relocalization(pending)
 
     def _resume_stage(self, stage: MoveStep) -> None:
         if stage.target_pose is not None:
@@ -411,14 +398,18 @@ class MoveSequencer:
             self._handle_failure(f"Nav2 navigation failed: {result.message}")
             return
 
-        if stage.name in (StepKind.OBSERVATION, "OBSERVATION"):
+        if stage.name == StepKind.OBSERVATION:
             self._node.get_logger().info(
-                "Reached primary observation standoff. Physical move pipeline complete."
+                f"Nav2 completed for observation standoff. Waiting for chassis to settle ({self._chassis_settle_timeout_sec:.1f}s max)..."
+            )
+            self._wait_for_chassis_settle(self._chassis_settle_timeout_sec)
+            self._node.get_logger().info(
+                "Reached primary observation standoff and chassis settled. Physical move pipeline complete."
             )
             self._advance_stage()
             return
 
-        settle_sec = self._pre_grasp_settle_sec
+        settle_sec = self._chassis_settle_timeout_sec
         self._node.get_logger().info(
             f"Nav2 navigation for stage '{stage.name}' completed successfully! "
             f"Checking grasp readiness (settle window: {settle_sec:.1f}s)..."
@@ -484,7 +475,7 @@ class MoveSequencer:
             f"Manipulation execution successful in {result.execution_time_sec:.2f}s: {result.message}"
         )
 
-        if stage.name in (StepKind.PLACE, StepKind.MOVE, "PLACE", "MOVE"):
+        if stage.name in (StepKind.PLACE, StepKind.MOVE):
             if self._motion_state == MotionExecutionState.PICKING_PIECE:
                 self.transition_motion_to(MotionExecutionState.PLACING_PIECE)
         self._advance_stage()

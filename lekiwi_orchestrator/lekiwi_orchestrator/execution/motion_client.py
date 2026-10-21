@@ -25,7 +25,7 @@ from rclpy.callback_groups import CallbackGroup
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 
-from lekiwi_orchestrator.mission_types import ActionResult, ChessMoveGoal
+from lekiwi_orchestrator.core.mission_types import ActionResult, ChessMoveGoal
 
 try:
     from nav2_msgs.action import NavigateToPose
@@ -59,6 +59,11 @@ class FeasibilityClient(ABC):
 
 class NavigationClient(ABC):
     """Interface for dispatching mobile base navigation goals."""
+
+    @property
+    @abstractmethod
+    def is_navigating(self) -> bool:
+        """True if a mobile base navigation action goal is actively in flight."""
 
     @abstractmethod
     def send_navigation_goal(
@@ -133,6 +138,8 @@ class RosMotionClient(MotionClient):
         self._action_timer: Any = None
         self._feasibility_timer: Any = None
         self._action_watchdog_desc: str = ""
+        self._is_navigating: bool = False
+        self._lock = threading.Lock()
 
         self._feasibility_client = node.create_client(
             CheckMoveFeasibility,
@@ -204,6 +211,80 @@ class RosMotionClient(MotionClient):
             self._node.destroy_timer(self._feasibility_timer)
             self._feasibility_timer = None
 
+    @staticmethod
+    def _build_feasibility_request(goal: ChessMoveGoal) -> CheckMoveFeasibility.Request:
+        req = CheckMoveFeasibility.Request()
+        req.move.uci = goal.uci
+        req.move.from_square = goal.from_square
+        req.move.to_square = goal.to_square
+        req.move.is_capture = goal.is_capture
+        req.move.captured_square = goal.captured_square
+        if goal.promotion:
+            req.move.promotion_piece = goal.promotion
+        if goal.castling_rook_from:
+            req.move.castling_rook_from = goal.castling_rook_from
+            req.move.castling_rook_to = goal.castling_rook_to
+            req.move.is_castling = True
+        return req
+
+    @staticmethod
+    def _handle_feasibility_result(
+        fut: Any,
+        goal_uci: str,
+        logger: Any,
+        on_success: Callable[[CheckMoveFeasibility.Response], None] | None,
+        on_error: Callable[[str], None] | None,
+    ) -> None:
+        try:
+            resp = fut.result()
+            if resp.feasible:
+                if on_success:
+                    on_success(resp)
+                return
+            msg = resp.message or "Move declared not feasible"
+            logger.error(f"Move {goal_uci} declared NOT FEASIBLE: {msg}")
+            if on_error:
+                on_error(msg)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Feasibility query failed: {exc}")
+            if on_error:
+                on_error(str(exc))
+
+    def _create_feasibility_handlers(
+        self,
+        goal_uci: str,
+        timeout_sec: float,
+        on_success: Callable[[CheckMoveFeasibility.Response], None] | None,
+        on_error: Callable[[str], None] | None,
+    ) -> tuple[Callable[[], None], Callable[[Any], None]]:
+        handled = False
+        lock = threading.Lock()
+
+        def _timeout_cb() -> None:
+            nonlocal handled
+            with lock:
+                if handled:
+                    return
+                handled = True
+            self._cancel_feasibility_timer()
+            msg = f"Feasibility query for move {goal_uci} timed out after {timeout_sec:.1f}s"
+            self._node.get_logger().error(msg)
+            if on_error:
+                on_error(msg)
+
+        def _response_cb(fut: Any) -> None:
+            nonlocal handled
+            with lock:
+                if handled:
+                    return
+                handled = True
+            self._cancel_feasibility_timer()
+            self._handle_feasibility_result(
+                fut, goal_uci, self._node.get_logger(), on_success, on_error
+            )
+
+        return _timeout_cb, _response_cb
+
     def check_feasibility(
         self,
         goal: ChessMoveGoal,
@@ -214,15 +295,6 @@ class RosMotionClient(MotionClient):
         """Query reachability and inverse kinematics feasibility for a candidate chess move.
 
         Calls the `/workspace/check_move_feasibility` service asynchronously with a timeout timer.
-
-        Args:
-            goal: Move candidate goal specifying source/target squares and piece types.
-            timeout_sec: Maximum wait duration before triggering query timeout callback.
-            on_success: Callback invoked with feasibility response when query succeeds.
-            on_error: Callback invoked with diagnostic error message upon failure.
-
-        Returns:
-            True if request was sent to service server, False if client is unready.
         """
         if (
             self._feasibility_client is None
@@ -237,69 +309,59 @@ class RosMotionClient(MotionClient):
                 )
             return False
 
-        req = CheckMoveFeasibility.Request()
-        req.move.uci = goal.uci
-        req.move.from_square = goal.from_square
-        req.move.to_square = goal.to_square
-        req.move.is_capture = goal.is_capture
-        req.move.captured_square = goal.captured_square
-        if goal.promotion:
-            req.move.promotion_piece = goal.promotion
-        if goal.castling_rook_from:
-            req.move.castling_rook_from = goal.castling_rook_from
-            req.move.castling_rook_to = goal.castling_rook_to
-            req.move.is_castling = True
-
+        req = self._build_feasibility_request(goal)
         self._cancel_feasibility_timer()
         future = self._feasibility_client.call_async(req)
 
-        handled = False
-        lock = threading.Lock()
-
-        def _on_timeout() -> None:
-            nonlocal handled
-            with lock:
-                if handled:
-                    return
-                handled = True
-            self._cancel_feasibility_timer()
-            msg = f"Feasibility query for move {goal.uci} timed out after {timeout_sec:.1f}s"
-            self._node.get_logger().error(msg)
-            if on_error:
-                on_error(msg)
-
+        on_timeout, on_response = self._create_feasibility_handlers(
+            goal.uci, timeout_sec, on_success, on_error
+        )
         self._feasibility_timer = self._node.create_timer(
             timeout_sec,
-            _on_timeout,
+            on_timeout,
             callback_group=self._callback_group,
         )
-
-        def _on_response(fut: Any) -> None:
-            nonlocal handled
-            with lock:
-                if handled:
-                    return
-                handled = True
-            self._cancel_feasibility_timer()
-            try:
-                resp = fut.result()
-                if resp.feasible:
-                    if on_success:
-                        on_success(resp)
-                else:
-                    msg = resp.message or "Move declared not feasible"
-                    self._node.get_logger().error(
-                        f"Move {goal.uci} declared NOT FEASIBLE: {msg}"
-                    )
-                    if on_error:
-                        on_error(msg)
-            except Exception as exc:  # noqa: BLE001
-                self._node.get_logger().error(f"Feasibility query failed: {exc}")
-                if on_error:
-                    on_error(str(exc))
-
-        future.add_done_callback(_on_response)
+        future.add_done_callback(on_response)
         return True
+
+    @property
+    def is_navigating(self) -> bool:
+        """True if a mobile base navigation action goal is actively in flight."""
+        with self._lock:
+            return self._is_navigating
+
+    def _on_action_goal_response(
+        self,
+        fut: Any,
+        label: str,
+        is_nav: bool,
+        on_completed: Callable[[ActionResult], None] | None,
+    ) -> None:
+        try:
+            handle = fut.result()
+            if not handle.accepted:
+                self._cancel_action_watchdog()
+                with self._lock:
+                    self._is_navigating = False
+                self._node.get_logger().error(f"{label} rejected goal!")
+                if on_completed:
+                    on_completed(ActionResult(False, f"{label} rejected goal"))
+                return
+            with self._lock:
+                self._is_navigating = is_nav
+            self._active_goal_handle = handle
+            self._node.get_logger().info(f"{label} goal accepted.")
+            res_future = handle.get_result_async()
+            res_future.add_done_callback(
+                lambda rf: self._wrap_completed(rf, on_completed)
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._cancel_action_watchdog()
+            with self._lock:
+                self._is_navigating = False
+            self._node.get_logger().error(f"{label} goal submission error: {exc}")
+            if on_completed:
+                on_completed(ActionResult(False, str(exc)))
 
     def send_navigation_goal(
         self,
@@ -307,18 +369,7 @@ class RosMotionClient(MotionClient):
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
-        """Dispatch target_pose to Nav2 NavigateToPose action server with integrated watchdog.
-
-        Monitors goal acceptance and completion status, cancelling active goal if timeout expires.
-
-        Args:
-            target_pose: Target robot base pose expressed in map coordinate frame.
-            timeout_sec: Maximum duration in seconds before cancelling navigation.
-            on_completed: Callback invoked with ActionResult upon termination.
-
-        Returns:
-            True if action goal was accepted for submission, False if server is offline.
-        """
+        """Dispatch target_pose to Nav2 NavigateToPose action server with integrated watchdog."""
         if self._mock_nav2:
             self._node.get_logger().info(
                 f"[MOCK NAV2] Base repositioning bypassed to "
@@ -361,33 +412,11 @@ class RosMotionClient(MotionClient):
         )
 
         send_future = self._nav2_client.send_goal_async(goal_msg)
-
-        def _on_goal_response(fut: Any) -> None:
-            try:
-                handle = fut.result()
-                if not handle.accepted:
-                    self._cancel_action_watchdog()
-                    self._node.get_logger().error("Nav2 rejected navigation goal!")
-                    if on_completed:
-                        on_completed(
-                            ActionResult(False, "Nav2 rejected navigation goal")
-                        )
-                    return
-                self._active_goal_handle = handle
-                self._node.get_logger().info("Nav2 navigation goal accepted.")
-                res_future = handle.get_result_async()
-                res_future.add_done_callback(
-                    lambda rf: self._wrap_completed(rf, on_completed)
-                )
-            except Exception as exc:  # noqa: BLE001
-                self._cancel_action_watchdog()
-                self._node.get_logger().error(
-                    f"Navigation goal submission error: {exc}"
-                )
-                if on_completed:
-                    on_completed(ActionResult(False, str(exc)))
-
-        send_future.add_done_callback(_on_goal_response)
+        send_future.add_done_callback(
+            lambda fut: self._on_action_goal_response(
+                fut, "Nav2", is_nav=True, on_completed=on_completed
+            )
+        )
         return True
 
     def send_manipulation_goal(
@@ -397,19 +426,7 @@ class RosMotionClient(MotionClient):
         on_feedback: Callable[[Any], None] | None = None,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
-        """Dispatch a chess move trajectory goal to the arm manipulation action server.
-
-        Integrates feedback streaming and action watchdog timer to prevent robotic arm deadlocks.
-
-        Args:
-            goal: ExecuteChessMove.Goal action message.
-            timeout_sec: Maximum duration in seconds allowed for arm execution.
-            on_feedback: Optional callback invoked with action feedback messages.
-            on_completed: Callback invoked with ActionResult upon action completion or error.
-
-        Returns:
-            True if action goal was accepted for submission, False if server is unready.
-        """
+        """Dispatch a chess move trajectory goal to the arm manipulation action server."""
         if (
             self._manipulation_client is None
             or not self._manipulation_client.server_is_ready()
@@ -442,35 +459,11 @@ class RosMotionClient(MotionClient):
         send_future = self._manipulation_client.send_goal_async(
             goal, feedback_callback=on_feedback
         )
-
-        def _on_goal_response(fut: Any) -> None:
-            try:
-                handle = fut.result()
-                if not handle.accepted:
-                    self._cancel_action_watchdog()
-                    self._node.get_logger().error(
-                        "Manipulation server rejected chess move goal!"
-                    )
-                    if on_completed:
-                        on_completed(
-                            ActionResult(False, "Manipulation server rejected goal")
-                        )
-                    return
-                self._active_goal_handle = handle
-                self._node.get_logger().info("Manipulation goal accepted.")
-                res_future = handle.get_result_async()
-                res_future.add_done_callback(
-                    lambda rf: self._wrap_completed(rf, on_completed)
-                )
-            except Exception as exc:  # noqa: BLE001
-                self._cancel_action_watchdog()
-                self._node.get_logger().error(
-                    f"Manipulation goal submission error: {exc}"
-                )
-                if on_completed:
-                    on_completed(ActionResult(False, str(exc)))
-
-        send_future.add_done_callback(_on_goal_response)
+        send_future.add_done_callback(
+            lambda fut: self._on_action_goal_response(
+                fut, "Manipulation server", is_nav=False, on_completed=on_completed
+            )
+        )
         return True
 
     @staticmethod
@@ -488,16 +481,17 @@ class RosMotionClient(MotionClient):
     @staticmethod
     def _parse_action_message(result: Any, status: int | None, success: bool) -> str:
         """Resolve user-facing outcome message from action result."""
-        if hasattr(result, "message") and result.message:
-            return str(result.message)
-        if hasattr(result, "error_msg") and result.error_msg:
-            return str(result.error_msg)
+        msg = getattr(result, "message", None) or getattr(result, "error_msg", None)
+        if msg:
+            return str(msg)
         return "Action succeeded" if success else f"Action failed with status {status}"
 
     def _wrap_completed(
         self, future: Any, on_completed: Callable[[ActionResult], None] | None
     ) -> None:
         self._cancel_action_watchdog()
+        with self._lock:
+            self._is_navigating = False
         self._active_goal_handle = None
         if on_completed is None:
             return
@@ -523,6 +517,8 @@ class RosMotionClient(MotionClient):
         """Cancel active Nav2 or Manipulation goal asynchronously."""
         self._cancel_action_watchdog()
         self._cancel_feasibility_timer()
+        with self._lock:
+            self._is_navigating = False
         if self._active_goal_handle is not None:
             try:
                 self._node.get_logger().warn(
@@ -539,40 +535,20 @@ class RosMotionClient(MotionClient):
     def destroy(self) -> None:
         """Clean up action clients, timers, and active goal handles."""
         self.cancel_active_goal()
-        if (
-            hasattr(self, "_feasibility_client")
-            and self._feasibility_client is not None
-        ):
+        if self._feasibility_client is not None:
             self._node.destroy_client(self._feasibility_client)
             self._feasibility_client = None
-        if hasattr(self, "_nav2_client") and self._nav2_client is not None:
+        if self._nav2_client is not None:
             self._nav2_client.destroy()
             self._nav2_client = None
-        if (
-            hasattr(self, "_manipulation_client")
-            and self._manipulation_client is not None
-        ):
+        if self._manipulation_client is not None:
             self._manipulation_client.destroy()
             self._manipulation_client = None
-
-
-
 
 
 # ==============================================================================
 # In-Memory Fake Motion Client (for tests & tabletop mock)
 # ==============================================================================
-
-
-class _MockGoalHandle:
-    """Mock handle returned during simulated execution."""
-
-    def __init__(self) -> None:
-        self.accepted = True
-        self.cancelled = False
-
-    def cancel_goal_async(self) -> None:
-        self.cancelled = True
 
 
 class FakeMotionClient(MotionClient):
@@ -581,9 +557,19 @@ class FakeMotionClient(MotionClient):
     Does not require live ROS 2 action servers, preventing production code pollution.
     """
 
-    def __init__(self, node: Node | None = None) -> None:
+    def __init__(self, node: Node | None = None, auto_feasibility: bool = False) -> None:
         self._node = node
-        self._active_handle: _MockGoalHandle | None = None
+        self._auto_feasibility = auto_feasibility
+        self._is_navigating: bool = False
+        self.cancelled: bool = False
+        self.nav_goals: list[PoseStamped] = []
+        self.manip_goals: list[Any] = []
+        self.last_feasibility_callback: Callable[[CheckMoveFeasibility.Response], None] | None = None
+
+    @property
+    def is_navigating(self) -> bool:
+        """True if simulated navigation is active."""
+        return self._is_navigating
 
     def check_feasibility(
         self,
@@ -592,11 +578,12 @@ class FakeMotionClient(MotionClient):
         on_success: Callable[[CheckMoveFeasibility.Response], None] | None = None,
         on_error: Callable[[str], None] | None = None,
     ) -> bool:
-        resp = CheckMoveFeasibility.Response()
-        resp.feasible = True
-        resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
-        resp.message = "Simulated feasibility confirmed"
-        if on_success:
+        self.last_feasibility_callback = on_success
+        if self._auto_feasibility and on_success:
+            resp = CheckMoveFeasibility.Response()
+            resp.feasible = True
+            resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
+            resp.message = "Simulated feasibility confirmed"
             on_success(resp)
         return True
 
@@ -606,6 +593,7 @@ class FakeMotionClient(MotionClient):
         timeout_sec: float = 60.0,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
+        self.nav_goals.append(target_pose)
         if self._node is not None:
             self._node.get_logger().info(
                 f"[SIMULATED NAV2] Navigating to ({target_pose.pose.position.x:.2f}, "
@@ -628,6 +616,7 @@ class FakeMotionClient(MotionClient):
         on_feedback: Callable[[Any], None] | None = None,
         on_completed: Callable[[ActionResult], None] | None = None,
     ) -> bool:
+        self.manip_goals.append(goal)
         instruction = getattr(goal, "instruction", "move piece")
         if self._node is not None:
             self._node.get_logger().info(
@@ -644,9 +633,8 @@ class FakeMotionClient(MotionClient):
         return True
 
     def cancel_active_goal(self) -> None:
-        if self._active_handle is not None:
-            self._active_handle.cancel_goal_async()
-            self._active_handle = None
+        self.cancelled = True
+        self._is_navigating = False
 
     def destroy(self) -> None:
         self.cancel_active_goal()
