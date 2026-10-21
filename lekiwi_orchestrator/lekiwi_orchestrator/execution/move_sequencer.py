@@ -15,10 +15,11 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Point, PoseStamped
 from lekiwi_interfaces.action import ExecuteChessMove
 from lekiwi_interfaces.msg import PerceptionContext
 from lekiwi_interfaces.srv import CheckMoveFeasibility
+import rclpy
 from rclpy.callback_groups import CallbackGroup
 from rclpy.node import Node
 
@@ -27,11 +28,16 @@ from lekiwi_orchestrator.core.fsm import (
     MotionExecutionState,
     is_motion_transition_allowed,
 )
-from lekiwi_orchestrator.core.mission_types import ActionResult, ObservationIntent
+from lekiwi_orchestrator.core.mission_types import (
+    ActionResult,
+    ArmLandmarks,
+    ObservationIntent,
+)
 from lekiwi_orchestrator.core.utils import get_node_now_sec
 from lekiwi_orchestrator.planning.move_planner import MoveStep, StepKind
 
 if TYPE_CHECKING:
+    import tf2_ros
     from lekiwi_orchestrator.execution.motion_client import MotionClient
     from lekiwi_orchestrator.planning.obs_navigator import ObsNavigator
     from lekiwi_orchestrator.supervision.perception_context import PerceptionContextManager
@@ -59,18 +65,22 @@ class MoveSequencer:
         navigation_enabled: bool = True,
         callback_group: CallbackGroup | None = None,
         observation_navigator: ObsNavigator | None = None,
+        tf_buffer: tf2_ros.Buffer | None = None,
+        landmarks: ArmLandmarks | None = None,
     ) -> None:
         self._node = node
         self._dispatcher = dispatcher
         self._perception = perception
         self._board_frame = board_frame
         self._action_timeout_sec = action_timeout_sec
+        self._landmarks = landmarks if landmarks is not None else ArmLandmarks()
 
         self._on_pipeline_completed = on_pipeline_completed
         self._on_pipeline_failed = on_pipeline_failed
         self._on_motion_state_changed = on_motion_state_changed
         self._callback_group = callback_group
         self._obs_nav = observation_navigator
+        self._tf_buffer = tf_buffer
 
         self._lock = threading.RLock()
         self._cancel_event = threading.Event()
@@ -422,16 +432,100 @@ class MoveSequencer:
         if not self._cancel_event.is_set():
             self._execute_manip_stage(stage)
 
+    def _transform_point_to_base(
+        self, point: Point | None, target_frame: str
+    ) -> list[float]:
+        """Transforms a geometry_msgs/Point to base_footprint coordinate frame."""
+        if point is None:
+            return [0.0, 0.0, 0.0]
+        if self._tf_buffer is not None:
+            try:
+                tf_stamped = self._tf_buffer.lookup_transform(
+                    "base_footprint",
+                    target_frame,
+                    rclpy.time.Time(),
+                    timeout=rclpy.duration.Duration(seconds=0.2),
+                )
+                tx = tf_stamped.transform.translation.x
+                ty = tf_stamped.transform.translation.y
+                tz = tf_stamped.transform.translation.z
+                qx = tf_stamped.transform.rotation.x
+                qy = tf_stamped.transform.rotation.y
+                qz = tf_stamped.transform.rotation.z
+                qw = tf_stamped.transform.rotation.w
+
+                r00 = 1.0 - 2.0 * (qy * qy + qz * qz)
+                r01 = 2.0 * (qx * qy - qz * qw)
+                r02 = 2.0 * (qx * qz + qy * qw)
+                r10 = 2.0 * (qx * qy + qz * qw)
+                r11 = 1.0 - 2.0 * (qx * qx + qz * qz)
+                r12 = 2.0 * (qy * qz - qx * qw)
+                r20 = 2.0 * (qx * qz - qy * qw)
+                r21 = 2.0 * (qy * qz + qx * qw)
+                r22 = 1.0 - 2.0 * (qx * qx + qy * qy)
+
+                x = r00 * point.x + r01 * point.y + r02 * point.z + tx
+                y = r10 * point.x + r11 * point.y + r12 * point.z + ty
+                z = r20 * point.x + r21 * point.y + r22 * point.z + tz
+                return [float(x), float(y), float(z)]
+            except Exception as exc:
+                self._node.get_logger().warn(
+                    f"Could not transform point from {target_frame} to base_footprint: {exc}. Using raw values."
+                )
+        return [float(point.x), float(point.y), float(point.z)]
+
     def _build_manipulation_goal(self, stage: MoveStep) -> ExecuteChessMove.Goal:
-        """Build ExecuteChessMove.Goal message from a MoveStep domain object."""
+        """Build ExecuteChessMove.Goal message with 10D environment_state from a MoveStep domain object."""
         goal = ExecuteChessMove.Goal()
-        goal.instruction = stage.instruction
-        goal.from_square = stage.from_square
-        goal.to_square = stage.to_square
-        goal.is_capture = stage.is_capture
+        goal.target_frame = self._board_frame
         goal.pick_point = stage.pick_point
         goal.place_point = stage.place_point
-        goal.target_frame = self._board_frame
+        goal.instruction = stage.instruction
+
+        if stage.name == StepKind.MOVE:
+            goal.operation = ExecuteChessMove.Goal.OP_MOVE
+        elif stage.name == StepKind.CLEAR:
+            if "right" in stage.instruction.lower():
+                goal.operation = ExecuteChessMove.Goal.OP_CLEAR_RIGHT
+            else:
+                goal.operation = ExecuteChessMove.Goal.OP_CLEAR_LEFT
+        elif stage.name == StepKind.PICK:
+            goal.operation = ExecuteChessMove.Goal.OP_PICK
+        elif stage.name == StepKind.PLACE:
+            goal.operation = ExecuteChessMove.Goal.OP_PLACE
+        else:
+            raise ValueError(f"Unsupported stage for manipulation: {stage.name}")
+
+        # Compute 10D environment state: [src(3), tgt(3), one_hot(4)]
+        p_pick = self._transform_point_to_base(stage.pick_point, self._board_frame)
+        p_place = self._transform_point_to_base(stage.place_point, self._board_frame)
+
+        if goal.operation == ExecuteChessMove.Goal.OP_MOVE:
+            src, tgt, one_hot = p_pick, p_place, [1.0, 0.0, 0.0, 0.0]
+        elif goal.operation == ExecuteChessMove.Goal.OP_CLEAR_LEFT:
+            src, tgt, one_hot = p_pick, list(self._landmarks.clear_left), [0.0, 1.0, 0.0, 0.0]
+        elif goal.operation == ExecuteChessMove.Goal.OP_CLEAR_RIGHT:
+            src, tgt, one_hot = p_pick, list(self._landmarks.clear_right), [0.0, 1.0, 0.0, 0.0]
+        elif goal.operation == ExecuteChessMove.Goal.OP_PICK:
+            src, tgt, one_hot = p_pick, list(self._landmarks.stow), [0.0, 0.0, 1.0, 0.0]
+        elif goal.operation == ExecuteChessMove.Goal.OP_PLACE:
+            src, tgt, one_hot = list(self._landmarks.stow), p_place, [0.0, 0.0, 0.0, 1.0]
+        else:
+            src, tgt, one_hot = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]
+
+        goal.environment_state = [
+            float(src[0]),
+            float(src[1]),
+            float(src[2]),
+            float(tgt[0]),
+            float(tgt[1]),
+            float(tgt[2]),
+            float(one_hot[0]),
+            float(one_hot[1]),
+            float(one_hot[2]),
+            float(one_hot[3]),
+        ]
+
         return goal
 
     def _execute_manip_stage(self, stage: MoveStep) -> None:
@@ -444,7 +538,7 @@ class MoveSequencer:
         goal = self._build_manipulation_goal(stage)
 
         self._node.get_logger().info(
-            f"Sending ExecuteChessMove goal: '{goal.instruction}' (capture={goal.is_capture})..."
+            f"Sending ExecuteChessMove goal: operation={goal.operation} (stage='{stage.name}', '{stage.instruction}')..."
         )
 
         dispatched = self._dispatcher.send_manipulation_goal(

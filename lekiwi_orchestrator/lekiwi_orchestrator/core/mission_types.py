@@ -35,6 +35,15 @@ class ActionResult:
     execution_time_sec: float = 0.0
 
 
+@dataclass(frozen=True)
+class ArmLandmarks:
+    """Pre-calibrated arm landmark Cartesian positions in base_footprint [x, y, z]."""
+
+    clear_left: tuple[float, float, float] = (0.05, 0.20, 0.15)
+    clear_right: tuple[float, float, float] = (0.05, -0.20, 0.15)
+    stow: tuple[float, float, float] = (0.05, 0.0, 0.20)
+
+
 class ObservationIntent(str, Enum):
     """Semantic observation goal for robot base relocation.
 
