@@ -133,6 +133,15 @@ async_ros2_inference_client:
     fwd_cmd_topic: "/arm_forward_controller/commands"
     action_name: "/manipulation/execute_chess_move"
 
+    # Network Transport Timeouts
+    transport:
+      config_timeout_s: 60.0
+      infer_timeout_ms: 500
+
+    # Stream Integrity & Safety Watchdogs
+    stream_timeout_s: 2.0
+    min_policy_actions_for_convergence: 10
+
     # Convergence & Completion Criteria
     convergence:
       min_episode_duration_s: 3.0

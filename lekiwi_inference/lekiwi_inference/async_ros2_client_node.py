@@ -95,6 +95,12 @@ class AsyncRos2ClientNode(Node):
         self.declare_parameter("convergence.pos_tol_rad", 0.035)
         self.declare_parameter("convergence.vel_tol_rad", 0.015)
 
+        # Network Transport & Safety Watchdogs
+        self.declare_parameter("transport.config_timeout_s", 60.0)
+        self.declare_parameter("transport.infer_timeout_ms", 500)
+        self.declare_parameter("stream_timeout_s", 2.0)
+        self.declare_parameter("min_policy_actions_for_convergence", 10)
+
         # Retrieve parameters
         self.server_address = str(self.get_parameter("server_address").value)
         self.policy_type = str(self.get_parameter("policy_type").value)
@@ -120,6 +126,13 @@ class AsyncRos2ClientNode(Node):
         self.vel_tol_rad = float(self.get_parameter("convergence.vel_tol_rad").value)
         self.required_settle_steps = max(1, int(self.settle_window_s * self.control_rate))
 
+        self.config_timeout_s = float(self.get_parameter("transport.config_timeout_s").value)
+        self.infer_timeout_ms = int(self.get_parameter("transport.infer_timeout_ms").value)
+        self.stream_timeout_s = float(self.get_parameter("stream_timeout_s").value)
+        self.min_policy_actions_for_convergence = int(
+            self.get_parameter("min_policy_actions_for_convergence").value
+        )
+
         # -------------------------------------------------------------------
         # 2. State & Concurrency Structures
         # -------------------------------------------------------------------
@@ -144,12 +157,18 @@ class AsyncRos2ClientNode(Node):
         self._active_task: str = "Chess pick and place move"
         self._active_goal_start_time: float = 0.0
         self._active_settle_count: int = 0
+        self._active_policy_actions_executed: int = 0
+        self._active_starvation_start_time: Optional[float] = None
         self._goal_finished_event = threading.Event()
         self._goal_success = False
         self._goal_result_message = ""
 
         # Initialize Transport and Client
-        self.transport = ZmqPolicyTransport(server_address=self.server_address)
+        self.transport = ZmqPolicyTransport(
+            server_address=self.server_address,
+            timeout_ms=self.infer_timeout_ms,
+            config_timeout_ms=int(self.config_timeout_s * 1000),
+        )
         client_cfg = ClientConfig(
             server_address=self.server_address,
             policy_type=self.policy_type,
@@ -345,6 +364,12 @@ class AsyncRos2ClientNode(Node):
                 self.get_logger().warn("Rejecting goal: arm is currently busy with another active goal.")
                 return GoalResponse.REJECT
 
+            if not self._is_active or not self.transport.is_connected():
+                self.get_logger().error(
+                    "Rejecting ExecuteChessMove goal: inference client is inactive or transport is disconnected."
+                )
+                return GoalResponse.REJECT
+
         op = goal_request.operation
         if op not in TASK_DESCRIPTION_MAP:
             self.get_logger().error(f"Rejecting goal: unknown operation enum {op}.")
@@ -372,6 +397,8 @@ class AsyncRos2ClientNode(Node):
             self._active_task = task
             self._active_goal_start_time = time.time()
             self._active_settle_count = 0
+            self._active_policy_actions_executed = 0
+            self._active_starvation_start_time = None
             self._goal_finished_event.clear()
             self._goal_success = False
             self._goal_result_message = ""
@@ -467,16 +494,32 @@ class AsyncRos2ClientNode(Node):
                 }
                 self.client.submit_observation(raw_obs, timestamp=now)
 
-        # 2. Action Actuation
+        # 2. Action Actuation & Starvation Watchdog
         if self._estop_active:
             # E-stop holds current position
             safe_cmd = current_joints
         elif active_handle is not None and self.client.actions_available():
             candidate = self.client.pop_action()
-            safe_cmd = candidate if candidate is not None else current_joints
+            if candidate is not None:
+                safe_cmd = candidate
+                with self._active_goal_lock:
+                    self._active_policy_actions_executed += 1
+                    self._active_starvation_start_time = None
+            else:
+                safe_cmd = current_joints
         else:
             # Default hold position
             safe_cmd = current_joints
+            if active_handle is not None and active_handle.is_active:
+                with self._active_goal_lock:
+                    if self._active_starvation_start_time is None:
+                        self._active_starvation_start_time = now
+                    elif (now - self._active_starvation_start_time) >= self.stream_timeout_s:
+                        self._goal_success = False
+                        self._goal_result_message = (
+                            f"Policy action stream starved for > {self.stream_timeout_s:.1f}s."
+                        )
+                        self._goal_finished_event.set()
 
         msg = Float64MultiArray()
         msg.data = [float(val) for val in safe_cmd]
@@ -493,7 +536,18 @@ class AsyncRos2ClientNode(Node):
             feedback.instruction = task
             active_handle.publish_feedback(feedback)
 
-            if elapsed >= self.min_episode_duration_s and prev_joints is not None:
+            # ZERO BACKWARD-COMPATIBLE: Convergence requires sufficient executed policy actions
+            with self._active_goal_lock:
+                has_executed_policy = (
+                    self._active_policy_actions_executed >= self.min_policy_actions_for_convergence
+                )
+                executed_count = self._active_policy_actions_executed
+
+            if (
+                elapsed >= self.min_episode_duration_s
+                and prev_joints is not None
+                and has_executed_policy
+            ):
                 pos_err = float(np.max(np.abs(safe_cmd - current_joints)))
                 vel_mag = float(np.max(np.abs(current_joints - prev_joints)))
 
@@ -502,10 +556,14 @@ class AsyncRos2ClientNode(Node):
                     if self._active_settle_count >= self.required_settle_steps:
                         with self._active_goal_lock:
                             self._goal_success = True
-                            self._goal_result_message = f"Converged after {elapsed:.2f}s."
+                            self._goal_result_message = (
+                                f"Converged after {elapsed:.2f}s ({executed_count} actions executed)."
+                            )
                             self._goal_finished_event.set()
                 else:
                     self._active_settle_count = 0
+            else:
+                self._active_settle_count = 0
 
     def _produce_diagnostics(
         self, stat: DiagnosticStatusWrapper

@@ -184,11 +184,13 @@ class ZmqPolicyTransport(PolicyTransport):
         self,
         server_address: str = "127.0.0.1:8090",
         timeout_ms: int = 500,
+        config_timeout_ms: int = 60000,
         max_retries: int = 3,
     ) -> None:
         """Configures transport address and communication timeout deadlines."""
         self.server_address = server_address
         self.timeout_ms = timeout_ms
+        self.config_timeout_ms = config_timeout_ms
         self.max_retries = max_retries
 
         self._ctx: Optional[zmq.Context] = None
@@ -256,14 +258,14 @@ class ZmqPolicyTransport(PolicyTransport):
     def send_handshake(self) -> bool:
         """Verifies server responsiveness and resets session buffers."""
         req = {"type": "handshake"}
-        resp = self._send_request(req)
+        resp = self._send_request(req, timeout_ms=self.config_timeout_ms)
         return resp is not None and resp.get("status") == "ok"
 
     def send_policy_config(self, config: RemotePolicyConfig) -> bool:
         """Transmits neural policy specification to initiate remote weights loading."""
         cfg_bytes = serialize_policy_config(config)
         req = {"type": "policy_config", "data": cfg_bytes}
-        resp = self._send_request(req)
+        resp = self._send_request(req, timeout_ms=self.config_timeout_ms)
         return resp is not None and resp.get("status") == "ok"
 
     def infer(self, observation: TimedObservation) -> Optional[list[TimedAction]]:
@@ -289,14 +291,19 @@ class ZmqPolicyTransport(PolicyTransport):
         """Returns the most recent measured round-trip latency in milliseconds."""
         return self._last_rtt_ms
 
-    def _send_request(self, request_envelope: dict) -> Optional[dict]:
+    def _send_request(
+        self, request_envelope: dict, timeout_ms: Optional[int] = None
+    ) -> Optional[dict]:
         """Executes request-reply transaction with Lazy Pirate recovery on timeout."""
         with self._lock:
             if not self._connected or self._socket is None:
                 if not self._connect_internal():
                     return None
 
+            effective_timeout = timeout_ms if timeout_ms is not None else self.timeout_ms
             try:
+                self._socket.setsockopt(zmq.RCVTIMEO, effective_timeout)
+                self._socket.setsockopt(zmq.SNDTIMEO, effective_timeout)
                 msg_bytes = msgpack.packb(request_envelope, use_bin_type=True)
                 self._socket.send(msg_bytes)
                 reply_bytes = self._socket.recv()

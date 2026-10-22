@@ -151,7 +151,10 @@ def test_zmq_transport_lifecycle():
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    transport = ZmqPolicyTransport(server_address=f"127.0.0.1:{port}", timeout_ms=500)
+    transport = ZmqPolicyTransport(
+        server_address=f"127.0.0.1:{port}", timeout_ms=500, config_timeout_ms=10000
+    )
+    assert transport.config_timeout_ms == 10000
 
     try:
         assert transport.connect()
