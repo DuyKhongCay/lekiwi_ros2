@@ -11,7 +11,6 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/config", [
             "config/lekiwi_chess.yaml",
-            "config/lekiwi_chess_dev.yaml",
         ]),
     ],
     install_requires=[
