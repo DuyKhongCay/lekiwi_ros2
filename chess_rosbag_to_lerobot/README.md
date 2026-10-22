@@ -188,25 +188,109 @@ pixi run -e lerobot lerobot-info
 
 ### 4.2 Run Dataset Conversion
 
+#### Option A: Local Conversion Only (Offline)
 Convert recorded bags into a local LeRobot dataset:
 ```bash
+cd ~/lerobot_ws/lekiwi_ros2
 pixi run -e lerobot convert -- \
-  --input-dir /home/duykhongcay/lerobot_ws/lekiwi_ros2/ros_bag/chess_teleop_v3 \
-  --config /home/duykhongcay/lerobot_ws/lekiwi_ros2/chess_rosbag_to_lerobot/config/lekiwi_chess.yaml \
-  --repo-id local/lekiwi_chess_v3 \
+  --input-dir ros_bag/chess_teleop_v5 \
+  --config chess_rosbag_to_lerobot/config/lekiwi_chess.yaml \
+  --repo-id local/lekiwi_chess_v5 \
+  --task-types move clear pick place \
   --sync-p95 \
   --overwrite
 ```
 
+#### Option B: Convert & Push Directly to Hugging Face Hub
+To automatically upload the dataset to your Hugging Face Hub account right after conversion:
+
+1. **Authenticate Hugging Face CLI** (if not already logged in with write access):
+```bash
+# Set HF_TOKEN environment variable or run huggingface-cli
+export HF_TOKEN="hf_your_personal_access_token_here"
+# Or interactive login via pixi environment:
+pixi run -e lerobot python -m huggingface_hub.cli login
+```
+
+2. **Run conversion with `--push-hub` and your target Hub repo ID**:
+```bash
+cd ~/lerobot_ws/lekiwi_ros2
+pixi run -e lerobot convert -- \
+  --input-dir ros_bag/chess_teleop_v5 \
+  --config chess_rosbag_to_lerobot/config/lekiwi_chess.yaml \
+  --repo-id DuyKhongCay/lekiwi_chess_v5 \
+  --task-types move clear pick place \
+  --push-hub \
+  --sync-p95 \
+  --overwrite
+```
+
+#### Option C: Upload an Existing Converted Local Dataset to Hub
+If you already converted the dataset locally (e.g. at `~/.cache/huggingface/lerobot/local/lekiwi_chess_v5` or custom `--output-dir`), you can push it to Hugging Face Hub using Python or the HF CLI without re-converting all rosbags:
+
+**Using Python snippet in Pixi:**
+```bash
+pixi run -e lerobot python -c '
+from huggingface_hub import HfApi
+from pathlib import Path
+
+repo_id = "DuyKhongCay/lekiwi_chess_v5"
+dataset_dir = Path.home() / ".cache/huggingface/lerobot/local/lekiwi_chess_v5"
+
+api = HfApi()
+api.create_repo(repo_id=repo_id, repo_type="dataset", exist_ok=True)
+api.upload_folder(
+    folder_path=str(dataset_dir),
+    repo_id=repo_id,
+    repo_type="dataset",
+    commit_message="Upload converted LeKiwi chess dataset v5 (multi-primitive)"
+)
+print(f"Successfully uploaded dataset to https://huggingface.co/datasets/{repo_id}")
+'
+```
+
+**Or using Hugging Face CLI:**
+```bash
+pixi run -e lerobot hf upload DuyKhongCay/lekiwi_chess_v5 \
+  ~/.cache/huggingface/lerobot/local/lekiwi_chess_v5 \
+  . \
+  --repo-type dataset --no-private
+```
+
+> [!IMPORTANT]
+> **LeRobot v3.0 Tag Sync (`v3.0` vs `main`):**
+> LeRobot v3.0 automatically resolves `--dataset.revision` to Git Tag `v3.0` if that tag exists on your Hugging Face repo. When uploading a newly converted dataset to `main`, you must update or recreate tag `v3.0` to point to the latest commit of `main`, otherwise `lerobot-train` will continue pulling the older snapshot pinned to tag `v3.0`:
+> ```bash
+> pixi run -e lerobot python -c '
+> from huggingface_hub import HfApi
+> api = HfApi()
+> repo_id = "DuyKhongCay/lekiwi_chess_v5"
+> api.delete_tag(repo_id=repo_id, tag="v3.0", repo_type="dataset")
+> api.create_tag(repo_id=repo_id, tag="v3.0", revision="main", repo_type="dataset")
+> print("Successfully synced tag v3.0 to main!")
+> '
+> ```
+>
+> On cloud training environments (e.g., Kaggle / Colab), ensure full cache invalidation by deleting:
+> ```bash
+> !rm -rf /root/.cache/huggingface/lerobot/hub/datasets--DuyKhongCay--lekiwi_chess_v5
+> !rm -rf /root/.cache/huggingface/hub/datasets--DuyKhongCay--lekiwi_chess_v5
+> !rm -rf /root/.cache/huggingface/lerobot/DuyKhongCay/lekiwi_chess_v5
+> !rm -rf /kaggle/working/outputs/act_lekiwi_chess
+> ```
+
 #### Common CLI Arguments
 * `--input-dir <path>`: Root directory containing episode sub-folders (`episode_000000/`, etc.).
-* `--config <path>`: Path to conversion YAML configuration.
-* `--repo-id <id>`: Identifier for the dataset (e.g. `local/dataset_name` or `hf_username/repo_name`).
-* `--task-types <types...>`: (Optional) Filter episodes by manipulation primitive (`move`, `clear`, `pick`, `place`).
+* `--config <path>`: Path to conversion YAML configuration (default: `config/lekiwi_chess.yaml`).
+* `--repo-id <id>`: Identifier for the dataset:
+  * Local prefix: `local/lekiwi_chess_v5` (stored under `~/.cache/huggingface/lerobot/local/lekiwi_chess_v5`).
+  * Hub format: `<hf_username>/<dataset_name>` (e.g. `DuyKhongCay/lekiwi_chess_v5`).
+* `--task-types <types...>`: (Optional) Filter episodes by manipulation primitive (`move`, `clear`, `pick`, `place`). Omit or pass all 4 to convert complete multi-primitive datasets.
 * `--output-dir <path>`: (Optional) Override local destination folder (default: `~/.cache/huggingface/lerobot/<repo-id>`).
-* `--vcodec <codec>`: Video compression library (`libsvtav1` default, `libx264` for faster encoding, `h264_nvenc` for NVIDIA hardware encoding).
+* `--vcodec <codec>`: Video compression library (`libsvtav1` default, `libx264` for fast CPU encoding, `h264_nvenc` for NVIDIA hardware NVENC encoding).
 * `--sync-p95`: Enable detailed 95th-percentile latency diagnostic profiling table.
-* `--push-hub`: Automatically push to Hugging Face Hub upon successful conversion.
+* `--push-hub`: Automatically push to Hugging Face Hub (`dataset.push_to_hub()`) upon successful conversion completion.
+* `--overwrite`: Overwrite destination folder if already present.
 
 ### 4.3 Inspect and Visualize Dataset
 

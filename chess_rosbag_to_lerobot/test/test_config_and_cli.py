@@ -20,13 +20,15 @@ def test_load_config_lekiwi_chess():
     assert cfg.robot_type == "lekiwi"
     assert cfg.fps == 25
     assert cfg.reference_topic == "/cameras/usb_wrist/image_raw/compressed"
-    assert cfg.default_max_age_s == 0.04
+    assert cfg.default_max_age_s == 0.05
     assert cfg.include_task_types == ["move", "clear", "pick", "place"]
 
     # Chessboard check
     assert cfg.chessboard.board_frame == "chessboard_frame"
     assert cfg.chessboard.base_frame == "base_footprint"
-    assert cfg.chessboard.square_size_m == 0.037
+    assert cfg.chessboard.map_frame == "map"
+    assert cfg.chessboard.chessboard_pose_in_map == [0.0, 0.0, 0.006, 0.0, 0.0, 0.0]
+    assert cfg.chessboard.square_size_m == 0.0475
     assert cfg.chessboard.grasp_clearance_z_m == 0.035
 
     # Landmarks check (XYZ in base_footprint)

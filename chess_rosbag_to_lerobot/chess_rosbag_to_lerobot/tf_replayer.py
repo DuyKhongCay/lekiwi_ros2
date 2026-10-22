@@ -6,17 +6,36 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+import math
+from typing import Any, List, Optional, Sequence
 import numpy as np
 
 try:
     import tf2_ros
     from rclpy.time import Time
+    from geometry_msgs.msg import TransformStamped
     _TF2_AVAILABLE = True
 except ImportError:
     _TF2_AVAILABLE = False
+    TransformStamped = Any
 
 logger = logging.getLogger(__name__)
+
+
+def _rpy_to_quat(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
+    """Convert roll, pitch, yaw (radians) to quaternion (qx, qy, qz, qw)."""
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    return qx, qy, qz, qw
 
 
 def _quat_to_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
@@ -65,6 +84,53 @@ class TfReplayer:
             else:
                 self.buffer.set_transform(transform, "rosbag_dynamic")
 
+    def seed_static_transform(
+        self,
+        parent_frame: str,
+        child_frame: str,
+        pose_6d: Sequence[float],
+    ) -> None:
+        """Seed a nominal static transform (e.g. map -> chessboard_frame) into BufferCore.
+
+        Args:
+            parent_frame: Reference frame ID (e.g. 'map').
+            child_frame: Target child frame ID (e.g. 'chessboard_frame').
+            pose_6d: 6D pose [x, y, z, roll, pitch, yaw] in meters and radians.
+        """
+        if not self.enabled or self.buffer is None or len(pose_6d) < 6:
+            return
+
+        parent = (parent_frame or "").strip().lstrip("/")
+        child = (child_frame or "").strip().lstrip("/")
+        if not parent or not child or parent == child:
+            return
+
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp.sec = 0
+        tf_msg.header.stamp.nanosec = 0
+        tf_msg.header.frame_id = parent
+        tf_msg.child_frame_id = child
+
+        tf_msg.transform.translation.x = float(pose_6d[0])
+        tf_msg.transform.translation.y = float(pose_6d[1])
+        tf_msg.transform.translation.z = float(pose_6d[2])
+
+        qx, qy, qz, qw = _rpy_to_quat(float(pose_6d[3]), float(pose_6d[4]), float(pose_6d[5]))
+        tf_msg.transform.rotation.x = qx
+        tf_msg.transform.rotation.y = qy
+        tf_msg.transform.rotation.z = qz
+        tf_msg.transform.rotation.w = qw
+
+        self.buffer.set_transform_static(tf_msg, "nominal_config_seed")
+        logger.info(
+            "Seeded nominal static transform: '%s' -> '%s' (xyz=[%.3f, %.3f, %.3f])",
+            parent,
+            child,
+            pose_6d[0],
+            pose_6d[1],
+            pose_6d[2],
+        )
+
     def transform_point(
         self,
         point_xyz: np.ndarray,
@@ -80,33 +146,35 @@ class TfReplayer:
             return point_xyz.astype(np.float32)
 
         if not self.enabled or self.buffer is None:
-            return None
+            raise RuntimeError(
+                f"TF transformation required from '{src}' to '{tgt}', but tf2_ros BufferCore is disabled."
+            )
 
         try:
             lookup_time = Time(nanoseconds=time_ns)
             tf = self.buffer.lookup_transform_core(tgt, src, lookup_time)
+        except Exception:
+            # Fallback to latest available transform at Time(0) to tolerate edge timestamp jitter (e.g. final frame)
+            try:
+                tf = self.buffer.lookup_transform_core(tgt, src, Time(nanoseconds=0))
+            except Exception as e:
+                raise RuntimeError(
+                    f"CRITICAL TF TRANSFORMATION FAILURE: Failed to transform point from '{src}' to '{tgt}' at {time_ns} ns. "
+                    f"Likely missing transform chain (e.g. 'map' -> 'odom' or '/tf_static'). "
+                    f"Aborting episode conversion to avoid corrupting spatial conditioning. Underlying error: {e}"
+                ) from e
 
-            tx = float(tf.transform.translation.x)
-            ty = float(tf.transform.translation.y)
-            tz = float(tf.transform.translation.z)
+        tx = float(tf.transform.translation.x)
+        ty = float(tf.transform.translation.y)
+        tz = float(tf.transform.translation.z)
 
-            qx = float(tf.transform.rotation.x)
-            qy = float(tf.transform.rotation.y)
-            qz = float(tf.transform.rotation.z)
-            qw = float(tf.transform.rotation.w)
+        qx = float(tf.transform.rotation.x)
+        qy = float(tf.transform.rotation.y)
+        qz = float(tf.transform.rotation.z)
+        qw = float(tf.transform.rotation.w)
 
-            R = _quat_to_matrix(qx, qy, qz, qw)
-            t = np.array([tx, ty, tz], dtype=np.float64)
+        R = _quat_to_matrix(qx, qy, qz, qw)
+        t = np.array([tx, ty, tz], dtype=np.float64)
 
-            transformed = R @ point_xyz.astype(np.float64) + t
-            return transformed.astype(np.float32)
-
-        except Exception as e:
-            logger.debug(
-                "TF lookup failed from %s to %s at %d ns: %s",
-                src,
-                tgt,
-                time_ns,
-                e,
-            )
-            return None
+        transformed = R @ point_xyz.astype(np.float64) + t
+        return transformed.astype(np.float32)
