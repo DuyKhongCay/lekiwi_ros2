@@ -187,6 +187,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "manipulation": LaunchConfiguration("manipulation"),
         }.items(),
         condition=IfCondition(LaunchConfiguration("teleop_gamepad")),
     )

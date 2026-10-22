@@ -36,6 +36,7 @@
 #include <lekiwi_interfaces/srv/go_to_named_pose.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
@@ -48,6 +49,27 @@ namespace lekiwi_motion::arm
 {
 
 /**
+ * @enum ControllerMode
+ * @brief Target ros2_control controller type for streaming arm commands.
+ */
+enum class ControllerMode : uint8_t
+{
+  TRAJECTORY,  ///< Streams trajectory_msgs/msg/JointTrajectory to arm_trajectory_controller
+  FORWARD      ///< Streams std_msgs/msg/Float64MultiArray to arm_forward_controller
+};
+
+[[nodiscard]] constexpr std::string_view to_string(ControllerMode mode) noexcept
+{
+  switch (mode) {
+    case ControllerMode::TRAJECTORY:
+      return "trajectory";
+    case ControllerMode::FORWARD:
+      return "forward";
+  }
+  return "unknown";
+}
+
+/**
  * @class CartesianJogServerNode
  * @brief Unified ROS 2 interactive arm server node translating Cartesian velocity twists to joint commands,
  *        and delegating landmark named poses and gripper toggling to ArmTrajectoryExecutor.
@@ -57,7 +79,8 @@ namespace lekiwi_motion::arm
  * - /joint_states (sensor_msgs::msg::JointState): Telemetry used for bumpless FK sync.
  *
  * Publishes to:
- * - /arm_trajectory_controller/joint_trajectory (trajectory_msgs::msg::JointTrajectory): 50 Hz streaming.
+ * - /arm_trajectory_controller/joint_trajectory (trajectory_msgs::msg::JointTrajectory): 50 Hz streaming (if TRAJECTORY mode).
+ * - /arm_forward_controller/commands (std_msgs::msg::Float64MultiArray): 50 Hz streaming (if FORWARD mode).
  *
  * Services:
  * - ~/go_to_named_pose (lekiwi_interfaces::srv::GoToNamedPose): Landmark pose transition.
@@ -77,6 +100,7 @@ public:
   [[nodiscard]] std::string kinematics_error_msg() const;
   [[nodiscard]] bool is_active() const noexcept;
   [[nodiscard]] bool is_executing_trajectory() const noexcept;
+  [[nodiscard]] ControllerMode controller_mode() const noexcept { return controller_mode_; }
 
 private:
   void declare_all_parameters();
@@ -108,7 +132,9 @@ private:
   double lpf_alpha_{0.85};
   double max_joint_vel_rad_s_{2.0};
   std::string base_frame_{"base_footprint"};
+  ControllerMode controller_mode_{ControllerMode::TRAJECTORY};
   std::string arm_trajectory_topic_{"/arm_trajectory_controller/joint_trajectory"};
+  std::string arm_forward_topic_{"/arm_forward_controller/commands"};
 
   std::vector<std::string> jog_joint_names_{
     "arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex",
@@ -119,6 +145,7 @@ private:
   rclcpp::CallbackGroup::SharedPtr cb_group_services_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_vel_;
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr pub_trajectory_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_forward_cmd_;
   rclcpp::Service<GoToNamedPose>::SharedPtr named_pose_srv_;
   rclcpp::Service<Trigger>::SharedPtr toggle_gripper_srv_;
   rclcpp::TimerBase::SharedPtr timer_;

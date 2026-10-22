@@ -57,18 +57,26 @@ CartesianJogServerNode::CartesianJogServerNode(const rclcpp::NodeOptions & optio
     rclcpp::ServicesQoS(),
     cb_group_services_);
 
-  pub_trajectory_ = create_publisher<trajectory_msgs::msg::JointTrajectory>(
-    arm_trajectory_topic_, rclcpp::SystemDefaultsQoS());
+  if (controller_mode_ == ControllerMode::TRAJECTORY) {
+    pub_trajectory_ = create_publisher<trajectory_msgs::msg::JointTrajectory>(
+      arm_trajectory_topic_, rclcpp::SystemDefaultsQoS());
+    RCLCPP_INFO(
+      get_logger(),
+      "CartesianJogServerNode initialized in TRAJECTORY mode at %.1f Hz. Streaming JointTrajectory to '%s'",
+      publish_rate_hz_, arm_trajectory_topic_.c_str());
+  } else {
+    pub_forward_cmd_ = create_publisher<std_msgs::msg::Float64MultiArray>(
+      arm_forward_topic_, rclcpp::SystemDefaultsQoS());
+    RCLCPP_INFO(
+      get_logger(),
+      "CartesianJogServerNode initialized in FORWARD mode at %.1f Hz. Streaming Float64MultiArray to '%s'",
+      publish_rate_hz_, arm_forward_topic_.c_str());
+  }
 
   const auto period = std::chrono::duration<double>(1.0 / publish_rate_hz_);
   timer_ = create_wall_timer(
     std::chrono::duration_cast<std::chrono::nanoseconds>(period),
     std::bind(&CartesianJogServerNode::control_loop, this));
-
-  RCLCPP_INFO(
-    get_logger(),
-    "CartesianJogServerNode initialized at %.1f Hz. Streaming JointTrajectory to '%s'",
-    publish_rate_hz_, arm_trajectory_topic_.c_str());
 }
 
 CartesianJogServerNode::~CartesianJogServerNode()
@@ -86,8 +94,21 @@ void CartesianJogServerNode::declare_all_parameters()
   lpf_alpha_ = std::clamp(declare_or_get_param<double>(this, "lpf_alpha", 0.85), 0.0, 1.0);
   max_joint_vel_rad_s_ = std::max(0.01, declare_or_get_param<double>(this, "max_joint_vel_rad_s", 2.0));
   base_frame_ = declare_or_get_param<std::string>(this, "base_frame", "base_footprint");
+
+  const std::string mode_str = declare_or_get_param<std::string>(this, "controller_mode", "trajectory");
+  if (mode_str == "trajectory") {
+    controller_mode_ = ControllerMode::TRAJECTORY;
+  } else if (mode_str == "forward") {
+    controller_mode_ = ControllerMode::FORWARD;
+  } else {
+    throw std::invalid_argument(
+      "Invalid controller_mode: '" + mode_str + "'. Expected 'trajectory' or 'forward'.");
+  }
+
   arm_trajectory_topic_ = declare_or_get_param<std::string>(
     this, "arm_trajectory_topic", "/arm_trajectory_controller/joint_trajectory");
+  arm_forward_topic_ = declare_or_get_param<std::string>(
+    this, "arm_forward_topic", "/arm_forward_controller/commands");
 
   motion_filter_ = JointMotionFilter<5>(lpf_alpha_, max_joint_vel_rad_s_);
 }
@@ -259,18 +280,41 @@ void CartesianJogServerNode::dispatch_command(
   const std::array<double, 5> & target_joints,
   double dt)
 {
-  trajectory_msgs::msg::JointTrajectory traj;
-  traj.header.stamp = now();
-  traj.header.frame_id = base_frame_;
-  traj.joint_names = jog_joint_names_;
+  if (controller_mode_ == ControllerMode::TRAJECTORY) {
+    if (!pub_trajectory_) {
+      return;
+    }
+    trajectory_msgs::msg::JointTrajectory traj;
+    traj.header.stamp = now();
+    traj.header.frame_id = base_frame_;
+    traj.joint_names = jog_joint_names_;
 
-  trajectory_msgs::msg::JointTrajectoryPoint pt;
-  pt.positions.assign(target_joints.begin(), target_joints.end());
-  const double pt_time = std::max(point_dt_s_, dt * 1.5);
-  pt.time_from_start = rclcpp::Duration::from_seconds(pt_time);
-  traj.points.push_back(pt);
+    trajectory_msgs::msg::JointTrajectoryPoint pt;
+    pt.positions.assign(target_joints.begin(), target_joints.end());
+    const double pt_time = std::max(point_dt_s_, dt * 1.5);
+    pt.time_from_start = rclcpp::Duration::from_seconds(pt_time);
+    traj.points.push_back(std::move(pt));
 
-  pub_trajectory_->publish(traj);
+    pub_trajectory_->publish(traj);
+  } else if (controller_mode_ == ControllerMode::FORWARD) {
+    if (!pub_forward_cmd_) {
+      return;
+    }
+    std_msgs::msg::Float64MultiArray cmd;
+    cmd.data.reserve(6);
+    cmd.data.insert(cmd.data.end(), target_joints.begin(), target_joints.end());
+
+    double gripper_pos = 0.0;
+    if (executor_) {
+      const auto current_pos = executor_->get_current_positions_or_default();
+      if (!current_pos.empty()) {
+        gripper_pos = current_pos.back();
+      }
+    }
+    cmd.data.push_back(gripper_pos);
+
+    pub_forward_cmd_->publish(cmd);
+  }
 }
 
 void CartesianJogServerNode::handle_named_pose_request(

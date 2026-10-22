@@ -11,7 +11,7 @@ cartesian_jog_server_node, and gamepad_arm_teleop_node.
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -39,11 +39,16 @@ def generate_launch_description():
         "use_sim_time", default_value="false", description="Use simulation clock"
     )
 
-    # arm_teleop_arg = DeclareLaunchArgument(
-    #     "arm_teleop",
-    #     default_value="true",
-    #     description="Start manipulation_action_server and cartesian_jog_server_node for LeKiwi arm",
-    # )
+    manipulation_arg = DeclareLaunchArgument(
+        "manipulation",
+        default_value="kinematics",
+        choices=["kinematics", "policy"],
+        description="Arm manipulation mode: 'kinematics' (arm_trajectory_controller) or 'policy' (arm_forward_controller)",
+    )
+
+    controller_mode = PythonExpression(
+        ["'forward' if '", LaunchConfiguration("manipulation"), "' == 'policy' else 'trajectory'"]
+    )
 
     # 3. Define joy driver and joy_teleop nodes
     joy_node = Node(
@@ -74,7 +79,10 @@ def generate_launch_description():
         name="cartesian_jog_server_node",
         parameters=[
             jog_config_file,
-            {"use_sim_time": LaunchConfiguration("use_sim_time")},
+            {
+                "use_sim_time": LaunchConfiguration("use_sim_time"),
+                "controller_mode": controller_mode,
+            },
         ],
         output="screen",
         # condition=IfCondition(LaunchConfiguration("arm_teleop")),
@@ -84,6 +92,7 @@ def generate_launch_description():
     return LaunchDescription(
         [
             use_sim_time_arg,
+            manipulation_arg,
             # arm_teleop_arg,
             joy_node,
             joy_teleop_node,

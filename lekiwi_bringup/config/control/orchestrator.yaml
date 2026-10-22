@@ -104,7 +104,9 @@ cartesian_jog_server_node:
     stale_timeout_s: 0.25
     lpf_alpha: 0.85
     max_joint_vel_rad_s: 2.0
+    controller_mode: "trajectory"
     arm_trajectory_topic: "/arm_trajectory_controller/joint_trajectory"
+    arm_forward_topic: "/arm_forward_controller/commands"
 
 async_ros2_inference_client:
   ros__parameters:
@@ -138,17 +140,15 @@ async_ros2_inference_client:
       config_timeout_s: 60.0
       infer_timeout_ms: 500
 
-    # Stream Integrity & Safety Watchdogs
+    # Stream Integrity Watchdog
     stream_timeout_s: 2.0
-    min_policy_actions_for_convergence: 10
 
-    # Convergence & Completion Criteria
+    # Episode Convergence & Completion Criteria (Single Responsibility)
     convergence:
-      min_episode_duration_s: 3.0
-      max_episode_duration_s: 25.0
-      settle_window_s: 0.6
-      pos_tol_rad: 0.035
-      vel_tol_rad: 0.015
+      max_duration_s: 180.0       # Maximum rollout duration before aborting (timeout)
+      min_actions: 15             # Minimum executed policy actions before checking stow
+      stow_tolerance_rad: 0.20    # Max joint error to calibrated named_poses.stow
+      settle_steps: 25            # Steps robot must remain settled at stow (10 @ 25Hz = 0.4s)
 
 
 # ==============================================================================

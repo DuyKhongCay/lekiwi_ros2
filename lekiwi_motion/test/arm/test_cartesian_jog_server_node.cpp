@@ -26,6 +26,7 @@
 #include <lekiwi_interfaces/srv/go_to_named_pose.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
@@ -163,6 +164,96 @@ TEST_F(CartesianJogServerTest, KinematicsInitializationAndBumplessJogging)
   }
 
   EXPECT_FALSE(jog_node->is_active());
+}
+
+TEST_F(CartesianJogServerTest, InvalidControllerModeThrowsFailFast)
+{
+  rclcpp::NodeOptions opts;
+  opts.append_parameter_override("controller_mode", "non_existent_mode");
+
+  EXPECT_THROW(
+    {
+      auto node = std::make_shared<CartesianJogServerNode>(opts);
+      (void)node;
+    },
+    std::invalid_argument);
+}
+
+TEST_F(CartesianJogServerTest, ForwardControllerModeJogging)
+{
+  const std::string urdf_xml = load_test_urdf();
+  ASSERT_FALSE(urdf_xml.empty()) << "Failed to load fixture URDF from WORKSPACE_URDF_PATH";
+
+  rclcpp::NodeOptions opts;
+  opts.append_parameter_override("robot_description", urdf_xml);
+  opts.append_parameter_override("publish_rate_hz", 50.0);
+  opts.append_parameter_override("controller_mode", "forward");
+  opts.append_parameter_override("mock_execution", true);
+
+  auto jog_node = std::make_shared<CartesianJogServerNode>(opts);
+  EXPECT_TRUE(jog_node->is_kinematics_initialized());
+  EXPECT_EQ(jog_node->controller_mode(), ControllerMode::FORWARD);
+
+  auto test_node = std::make_shared<rclcpp::Node>("test_forward_client_node");
+
+  auto js_pub = test_node->create_publisher<sensor_msgs::msg::JointState>(
+    "/joint_states", rclcpp::SensorDataQoS());
+
+  auto twist_pub = test_node->create_publisher<geometry_msgs::msg::TwistStamped>(
+    "/cartesian_jog_server_node/cmd_vel", 10);
+
+  bool received_forward_cmd = false;
+  std_msgs::msg::Float64MultiArray last_cmd;
+
+  auto fwd_sub = test_node->create_subscription<std_msgs::msg::Float64MultiArray>(
+    "/arm_forward_controller/commands", 10,
+    [&](const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+      received_forward_cmd = true;
+      last_cmd = *msg;
+    });
+
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(jog_node);
+  exec.add_node(test_node);
+
+  // Send joint telemetry with gripper position = 0.42
+  sensor_msgs::msg::JointState js;
+  js.header.stamp = test_node->now();
+  js.name = {
+    "arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex",
+    "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"
+  };
+  js.position = {0.0, 0.0, 0.0, 0.0, 0.0, 0.42};
+
+  for (int i = 0; i < 5; ++i) {
+    js_pub->publish(js);
+    exec.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  // Send Cartesian Jog Twist
+  geometry_msgs::msg::TwistStamped twist;
+  twist.header.stamp = test_node->now();
+  twist.header.frame_id = "base_footprint";
+  twist.twist.linear.x = 0.02;  // 2 cm/s forward
+  twist_pub->publish(twist);
+
+  const auto start = std::chrono::steady_clock::now();
+  while (!received_forward_cmd &&
+    (std::chrono::steady_clock::now() - start) < std::chrono::seconds(2))
+  {
+    twist.header.stamp = test_node->now();
+    twist_pub->publish(twist);
+    exec.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  EXPECT_TRUE(received_forward_cmd);
+  EXPECT_TRUE(jog_node->is_active());
+  // 6 joints: 5 arm joints + 1 gripper joint
+  ASSERT_EQ(last_cmd.data.size(), 6u);
+  // Last element must be current gripper position
+  EXPECT_NEAR(last_cmd.data.back(), 0.42, 1e-4);
 }
 
 TEST_F(CartesianJogServerTest, InvalidUrdfParameterThrowsFailFast)
