@@ -134,14 +134,14 @@ class MockZmqServer:
                 continue
             except Exception:
                 break
-
-    def stop(self) -> None:
-        self.running = False
         try:
             self.socket.close(linger=0)
             self.ctx.term()
         except Exception:
             pass
+
+    def stop(self) -> None:
+        self.running = False
 
 
 def test_zmq_transport_lifecycle():

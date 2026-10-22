@@ -52,6 +52,16 @@
             contains: ['NPU', 'hailo']
             timeout: 5.0
 
+      manipulation:
+        type: diagnostic_aggregator/AnalyzerGroup
+        path: Manipulation
+        analyzers:
+          policy_inference:
+            type: diagnostic_aggregator/GenericAnalyzer
+            path: PolicyInference
+            contains: ['Policy Inference Status']
+            timeout: 5.0
+
 cpu_monitor:
   ros__parameters:
     warning_percentage: 90

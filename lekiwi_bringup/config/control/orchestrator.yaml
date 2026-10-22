@@ -106,6 +106,41 @@ cartesian_jog_server_node:
     max_joint_vel_rad_s: 2.0
     arm_trajectory_topic: "/arm_trajectory_controller/joint_trajectory"
 
+async_ros2_inference_client:
+  ros__parameters:
+    # Remote ZMQ Policy Server endpoint
+    server_address: "192.168.1.9:8090"
+
+    # Model Configuration (LeRobot Dataset v3.0 SSOT)
+    policy_type: "act"
+    repo_id: "DuyKhongCay/act_lekiwi_chess"
+    actions_per_chunk: 40
+    chunk_size_threshold: 0.5
+
+    # Rate and Freshness Parameters (25 Hz)
+    control_rate: 25.0
+    max_age_s: 0.04
+
+    # Smoothing & Auto-start
+    aggregation_fn: "weighted_average"
+    auto_start: true
+
+    # Camera & Joint Topics (3 compressed streams 384x384 @ 25Hz)
+    wrist_cam_topic: "/cameras/usb_wrist/image_raw/compressed"
+    side_cam_topic: "/cameras/usb_side/image_raw/compressed"
+    overhead_cam_topic: "/cameras/stereo_right/image_raw/compressed"
+    joints_topic: "/joint_states"
+    fwd_cmd_topic: "/arm_forward_controller/commands"
+    action_name: "/manipulation/execute_chess_move"
+
+    # Convergence & Completion Criteria
+    convergence:
+      min_episode_duration_s: 3.0
+      max_episode_duration_s: 25.0
+      settle_window_s: 0.6
+      pos_tol_rad: 0.035
+      vel_tol_rad: 0.015
+
 
 # ==============================================================================
 # TIER 4: Autonomous Chess Mission Orchestrator

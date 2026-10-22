@@ -24,7 +24,8 @@ import threading
 import time
 from typing import Optional
 
-from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
+from diagnostic_msgs.msg import DiagnosticStatus
+from diagnostic_updater import DiagnosticStatusWrapper, Updater
 from lekiwi_interfaces.action import ExecuteChessMove
 import numpy as np
 import rclpy
@@ -34,8 +35,8 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, JointState
-from std_msgs.msg import Bool, Float64MultiArray
-from std_srvs.srv import SetBool
+from std_msgs.msg import Float64MultiArray
+from std_srvs.srv import SetBool, Trigger
 
 from lekiwi_inference.async_client import AsyncInferenceClient, ClientConfig
 from lekiwi_inference.transport.zmq_transport import ZmqPolicyTransport
@@ -202,22 +203,10 @@ class AsyncRos2ClientNode(Node):
             qos_profile_sensor_data,
             callback_group=self._sub_cb_group,
         )
-        self.sub_estop = self.create_subscription(
-            Bool,
-            "/lekiwi/estop",
-            self._estop_callback,
-            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
-            callback_group=self._sub_cb_group,
-        )
 
         self.cmd_pub = self.create_publisher(
             Float64MultiArray,
             self.fwd_cmd_topic,
-            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
-        )
-        self.diag_pub = self.create_publisher(
-            DiagnosticStatus,
-            "/lekiwi/inference/status",
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
         )
 
@@ -226,6 +215,14 @@ class AsyncRos2ClientNode(Node):
             SetBool,
             "/lekiwi/inference/enable",
             self._handle_enable_service,
+            callback_group=self._action_cb_group,
+        )
+
+        # Service for triggering emergency stop
+        self.srv_estop = self.create_service(
+            Trigger,
+            "/lekiwi/estop",
+            self._handle_estop_service,
             callback_group=self._action_cb_group,
         )
 
@@ -241,11 +238,17 @@ class AsyncRos2ClientNode(Node):
         )
 
         # -------------------------------------------------------------------
-        # 4. Deterministic Timers
+        # 4. Standard ROS 2 Diagnostic Updater
+        # -------------------------------------------------------------------
+        self.updater = Updater(self)
+        self.updater.setHardwareID("RaspberryPi5-ZeroMQ")
+        self.updater.add("Policy Inference Status", self._produce_diagnostics)
+
+        # -------------------------------------------------------------------
+        # 5. Deterministic Timers
         # -------------------------------------------------------------------
         dt = 1.0 / self.control_rate
         self.control_timer = self.create_timer(dt, self._control_timer_callback)
-        self.diag_timer = self.create_timer(1.0, self._diagnostic_timer_callback)
 
         if self.auto_start:
             self._start_inference()
@@ -293,10 +296,23 @@ class AsyncRos2ClientNode(Node):
                 self._latest_joint_positions = positions
                 self._latest_joint_stamp = time.time()
 
-    def _estop_callback(self, msg: Bool) -> None:
-        self._estop_active = msg.data
-        if msg.data:
-            self.get_logger().warn("E-STOP triggered via /lekiwi/estop! Halting motion.")
+    def _handle_estop_service(
+        self, request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """Triggers emergency stop, halts policy streaming, and aborts any active goal."""
+        del request
+        self._estop_active = True
+        self.get_logger().warn("E-STOP triggered via /lekiwi/estop service! Halting motion.")
+
+        with self._active_goal_lock:
+            if self._active_goal_handle is not None and self._active_goal_handle.is_active:
+                self._goal_success = False
+                self._goal_result_message = "Emergency stop triggered via /lekiwi/estop service"
+                self._goal_finished_event.set()
+
+        response.success = True
+        response.message = "Emergency stop activated; arm motion halted"
+        return response
 
     def _is_sensor_data_fresh(self, now: float) -> bool:
         max_age = self.max_age_s
@@ -491,19 +507,43 @@ class AsyncRos2ClientNode(Node):
                 else:
                     self._active_settle_count = 0
 
-    def _diagnostic_timer_callback(self) -> None:
-        """Publishes 1 Hz diagnostic telemetry."""
-        diag = DiagnosticStatus()
-        diag.name = "LeKiwi Policy Inference"
-        diag.hardware_id = "RaspberryPi5-ZeroMQ"
-        diag.level = DiagnosticStatus.OK if self.transport.is_connected() else DiagnosticStatus.WARN
-        diag.message = "Connected" if self.transport.is_connected() else "Disconnected"
-        diag.values = [
-            KeyValue(key="transport_connected", value=str(self.transport.is_connected())),
-            KeyValue(key="queue_size", value=str(self.client.get_queue_size())),
-            KeyValue(key="rtt_latency_ms", value=f"{self.transport.ping():.1f}"),
-        ]
-        self.diag_pub.publish(diag)
+    def _produce_diagnostics(
+        self, stat: DiagnosticStatusWrapper
+    ) -> DiagnosticStatusWrapper:
+        """Produces diagnostic telemetry for the standard ROS /diagnostics pipeline."""
+        is_connected = self.transport.is_connected()
+        rtt_latency = self.transport.ping()
+
+        # Determine health status level and summary
+        if self._estop_active:
+            stat.summary(DiagnosticStatus.WARN, "Emergency Stop Active")
+        elif not is_connected:
+            stat.summary(DiagnosticStatus.ERROR, "ZeroMQ Policy Server Disconnected")
+        elif rtt_latency > 150.0:
+            stat.summary(DiagnosticStatus.WARN, f"High Latency ({rtt_latency:.1f} ms)")
+        elif not self._is_active:
+            stat.summary(DiagnosticStatus.OK, "Idle (Inference Paused)")
+        else:
+            stat.summary(DiagnosticStatus.OK, "Streaming Active")
+
+        # Telemetry key-values
+        stat.add("transport_connected", str(is_connected))
+        stat.add("inference_active", str(self._is_active))
+        stat.add("estop_active", str(self._estop_active))
+        stat.add("queue_size", str(self.client.get_queue_size()))
+        stat.add("rtt_latency_ms", f"{rtt_latency:.1f}")
+        stat.add("server_address", self.server_address)
+        stat.add("policy_type", self.policy_type)
+        stat.add("repo_id", self.repo_id)
+
+        with self._active_goal_lock:
+            is_goal_active = (
+                self._active_goal_handle is not None and self._active_goal_handle.is_active
+            )
+            stat.add("active_goal", str(is_goal_active))
+            stat.add("active_task", self._active_task if is_goal_active else "None")
+
+        return stat
 
     def _handle_enable_service(
         self, request: SetBool.Request, response: SetBool.Response

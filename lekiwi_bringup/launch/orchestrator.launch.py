@@ -106,16 +106,37 @@ def generate_launch_description():
                 extra_arguments=[{"use_intra_process_comms": True}],
             )
         ],
-        # condition=UnlessCondition(
-        #     PythonExpression(
-        #         [
-        #             "'", LaunchConfiguration("manipulation"), "' == 'false'"
-        #         ]
-        #     )
-        # ),
+        condition=IfCondition(
+            PythonExpression(
+                [
+                    "'", LaunchConfiguration("manipulation"), "' == 'kinematics'"
+                ]
+            )
+        ),
     )
 
-    # 5. Define Python chess mission conductor node (independent process)
+    # 5. Conditionally start async policy inference client node (Phase 1: Async ZeroMQ)
+    async_inference_client_node = Node(
+        package="lekiwi_inference",
+        executable="async_ros2_client_node",
+        name="async_ros2_inference_client",
+        output="screen",
+        parameters=[
+            params_file,
+            {
+                "use_sim_time": use_sim_time,
+            },
+        ],
+        condition=IfCondition(
+            PythonExpression(
+                [
+                    "'", LaunchConfiguration("manipulation"), "' == 'policy'"
+                ]
+            )
+        ),
+    )
+
+    # 6. Define Python chess mission conductor node (independent process)
     chess_mission_node = Node(
         package="lekiwi_orchestrator",
         executable="chess_mission_orchestrator",
@@ -130,7 +151,7 @@ def generate_launch_description():
         ],
     )
 
-    # 6. Assemble LaunchDescription
+    # 7. Assemble LaunchDescription
     return LaunchDescription(
         [
             params_file_arg,
@@ -140,6 +161,7 @@ def generate_launch_description():
             record_arg,
             orchestrator_container,
             load_manipulation_action,
+            async_inference_client_node,
             chess_mission_node,
         ]
     )

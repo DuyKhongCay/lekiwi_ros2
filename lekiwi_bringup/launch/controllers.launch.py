@@ -14,6 +14,7 @@ from launch.event_handlers import OnProcessExit
 from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
+    PythonExpression,
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -44,9 +45,17 @@ def generate_launch_description():
             description="Use simulation clock if true",
         ),
         DeclareLaunchArgument(
+            "manipulation",
+            default_value="kinematics",
+            choices=["kinematics", "policy", "false"],
+            description="Manipulation subsystem mode: "
+            "'kinematics' (spawns arm_trajectory_controller), "
+            "'policy' (spawns arm_forward_controller), or 'false' (disabled)",
+        ),
+        DeclareLaunchArgument(
             "arm_controller",
             default_value="true",
-            description="Spawn and activate arm_trajectory_controller",
+            description="Spawn and activate arm controller (trajectory or forward depending on manipulation mode)",
         ),
         DeclareLaunchArgument(
             "base_controller",
@@ -94,7 +103,7 @@ def generate_launch_description():
         output="screen",
     )
 
-    arm_controller_spawner = Node(
+    arm_trajectory_controller_spawner = Node(
         package="controller_manager",
         executable="spawner",
         arguments=[
@@ -103,7 +112,33 @@ def generate_launch_description():
             "/controller_manager",
         ],
         output="screen",
-        condition=IfCondition(LaunchConfiguration("arm_controller")),
+        condition=IfCondition(
+            PythonExpression(
+                [
+                    "'", LaunchConfiguration("arm_controller"), "' == 'true' and '",
+                    LaunchConfiguration("manipulation"), "' == 'kinematics'",
+                ]
+            )
+        ),
+    )
+
+    arm_forward_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[
+            "arm_forward_controller",
+            "--controller-manager",
+            "/controller_manager",
+        ],
+        output="screen",
+        condition=IfCondition(
+            PythonExpression(
+                [
+                    "'", LaunchConfiguration("arm_controller"), "' == 'true' and '",
+                    LaunchConfiguration("manipulation"), "' == 'policy'",
+                ]
+            )
+        ),
     )
 
     omni_base_controller_spawner = Node(
@@ -199,7 +234,13 @@ def generate_launch_description():
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=joint_state_broadcaster,
-                    on_exit=[arm_controller_spawner],
+                    on_exit=[arm_trajectory_controller_spawner],
+                )
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=joint_state_broadcaster,
+                    on_exit=[arm_forward_controller_spawner],
                 )
             ),
             RegisterEventHandler(

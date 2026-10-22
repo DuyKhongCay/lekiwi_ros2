@@ -22,6 +22,7 @@
 #    - Back + B (Button 1): Trigger Orchestrator Recover (/orchestrator/recover)
 #    - Back + X (Button 2): Toggle Arm Torque (/set_torque_enabled target 1)
 #    - Back + Y (Button 3): Enable Global EKF (/ekf_filter_node_map/enable)
+#    - L3 + R3 (Buttons [9, 10]): Emergency Stop (/lekiwi/estop)
 #
 # 4. Episode Recorder Services: Deadman = Start / Menu (Button 7 + D-Pad)
 #    - Start + D-Pad Up (Axis 7 > 0): Start Episode (/episode_recorder_node/start_episode)
@@ -91,6 +92,13 @@ joy_teleop:
       interface_type: std_srvs/srv/Empty
       service_name: /ekf_filter_node_map/enable
       buttons: [6, 3] # Back + Y
+
+    # ── EMERGENCY STOP SERVICE (L3 + R3: Buttons [9, 10]) ────────────────────
+    lekiwi_estop:
+      type: service
+      interface_type: std_srvs/srv/Trigger
+      service_name: /lekiwi/estop
+      buttons: [9, 10] # L3 + R3
 
     # ── EPISODE RECORDER SERVICES (Deadman: Start / Button 7 + D-Pad) ─────────
     lekiwi_episode_start:

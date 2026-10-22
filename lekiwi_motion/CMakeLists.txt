@@ -117,6 +117,7 @@ target_include_directories(arm_trajectory_executor PUBLIC
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
 target_link_libraries(arm_trajectory_executor PUBLIC
+  arm_motion_planner
   workspace_model
   rclcpp::rclcpp
   rclcpp_action::rclcpp_action
@@ -140,8 +141,8 @@ target_include_directories(manipulation_action_component PUBLIC
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
 target_link_libraries(manipulation_action_component
-  arm_motion_planner
   arm_trajectory_executor
+  arm_motion_planner
   workspace_model
   rclcpp::rclcpp
   rclcpp_action::rclcpp_action
@@ -174,8 +175,8 @@ target_include_directories(cartesian_jog_server_component PUBLIC
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
 target_link_libraries(cartesian_jog_server_component
-  arm_motion_planner
   arm_trajectory_executor
+  arm_motion_planner
   workspace_model
   rclcpp::rclcpp
   rclcpp_action::rclcpp_action
