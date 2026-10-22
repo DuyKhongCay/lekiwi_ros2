@@ -21,12 +21,16 @@ class LandmarksConfig:
 
 @dataclass
 class ChessboardConfig:
-    """Chessboard geometry and landmark targets."""
+    """Chessboard geometry, landmark targets, and nominal transform seeding."""
     board_frame: str = "chessboard_frame"
     base_frame: str = "base_footprint"
+    map_frame: str = "map"
     square_size_m: float = 0.037
     grasp_clearance_z_m: float = 0.035
     landmarks: LandmarksConfig = field(default_factory=LandmarksConfig)
+    chessboard_pose_in_map: Optional[List[float]] = field(
+        default_factory=lambda: [0.0, 0.0, 0.006, 0.0, 0.0, 0.0]
+    )
 
 
 @dataclass
@@ -78,12 +82,17 @@ def load_config(path: Path | str) -> Config:
         clear_right=[float(x) for x in lm_data.get("clear_right", default_lm.clear_right)],
     )
 
+    raw_cb_pose = cb_data.get("chessboard_pose_in_map")
+    cb_pose_in_map = [float(x) for x in raw_cb_pose] if raw_cb_pose is not None else [0.0, 0.0, 0.006, 0.0, 0.0, 0.0]
+
     cb_cfg = ChessboardConfig(
         board_frame=str(cb_data.get("board_frame", "chessboard_frame")),
         base_frame=str(cb_data.get("base_frame", "base_footprint")),
+        map_frame=str(cb_data.get("map_frame", "map")),
         square_size_m=float(cb_data.get("square_size_m", 0.037)),
         grasp_clearance_z_m=float(cb_data.get("grasp_clearance_z_m", 0.035)),
         landmarks=landmarks,
+        chessboard_pose_in_map=cb_pose_in_map,
     )
 
     # Features

@@ -16,8 +16,20 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
+import os
+
+
+@dataclass
+class InferenceEngineConfig:
+    """Configuration parameters for the policy inference pipeline."""
+
+    fps: int = 30
+
+    @property
+    def environment_dt(self) -> float:
+        """Target time delta per step in seconds."""
+        return 1.0 / max(1, self.fps)
 
 
 @dataclass
@@ -27,9 +39,6 @@ class ZmqServerConfig:
     host: str = "0.0.0.0"
     port: int = 8090
     fps: int = 30
-    inference_latency: float = 0.033
-    obs_queue_timeout: float = 2.0
-    device: str = "cuda"
 
     @property
     def environment_dt(self) -> float:
@@ -43,22 +52,4 @@ class ZmqServerConfig:
             host=os.getenv("POLICY_SERVER_HOST", "0.0.0.0"),
             port=int(os.getenv("POLICY_SERVER_PORT", "8090")),
             fps=int(os.getenv("POLICY_SERVER_FPS", "30")),
-            inference_latency=float(os.getenv("POLICY_SERVER_INFERENCE_LATENCY", "0.033")),
-            obs_queue_timeout=float(os.getenv("POLICY_SERVER_OBS_TIMEOUT", "2.0")),
-            device=os.getenv("POLICY_SERVER_DEVICE", "cuda"),
         )
-
-
-@dataclass
-class InferenceEngineConfig:
-    """Configuration parameters for the policy inference pipeline."""
-
-    fps: int = 30
-    inference_latency: float = 0.033
-    obs_queue_timeout: float = 2.0
-    device: str = "cuda"
-
-    @property
-    def environment_dt(self) -> float:
-        """Target time delta per step in seconds."""
-        return 1.0 / max(1, self.fps)

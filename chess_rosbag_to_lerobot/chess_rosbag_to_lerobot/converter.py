@@ -294,6 +294,26 @@ def convert_one_bag(
     tf_msg_cls = get_message("tf2_msgs/msg/TFMessage") if "tf2_msgs/msg/TFMessage" in bag_topic_types.values() else None
     tf_replayer = TfReplayer()
 
+    # Seed nominal static transform (e.g. map -> chessboard_frame) if defined in config
+    if cfg.chessboard.chessboard_pose_in_map:
+        tf_replayer.seed_static_transform(
+            parent_frame=cfg.chessboard.map_frame,
+            child_frame=cfg.chessboard.board_frame,
+            pose_6d=cfg.chessboard.chessboard_pose_in_map,
+        )
+
+    # Pre-scan and load all TF transforms into buffer before chronological playback
+    # This prevents transient startup latency where the first reference image message
+    # arrives slightly before the first TF message in the sequential reader.
+    if tf_msg_cls is not None:
+        tf_scan_reader = open_reader(bag_dir)
+        while tf_scan_reader.has_next():
+            topic, data, _ = tf_scan_reader.read_next()
+            if topic in ("/tf", "/tf_static"):
+                msg = deserialize_message(data, tf_msg_cls)
+                tf_replayer.handle_tf_message(msg, is_static=(topic == "/tf_static"))
+        del tf_scan_reader
+
     frame_count = 0
     dropped_count = 0
 

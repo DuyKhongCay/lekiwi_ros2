@@ -61,3 +61,23 @@ def test_buffer_reservoir_p95():
     assert stats["match_rate"] == 1.0
     assert stats["p95_dt_s"] is not None
     assert pytest.approx(stats["p95_dt_s"], abs=1e-3) == 0.010
+
+def test_tf_replayer_seed_and_missing_chain_raises():
+    from chess_rosbag_to_lerobot.tf_replayer import TfReplayer
+    replayer = TfReplayer()
+    if not replayer.enabled:
+        return
+
+    # Seed nominal map -> chessboard_frame
+    replayer.seed_static_transform("map", "chessboard_frame", [0.0, 0.0, 0.006, 0.0, 0.0, 0.0])
+
+    # Trying to transform to base_footprint when map -> odom or odom -> base_footprint is missing
+    # MUST raise RuntimeError, NEVER silently fall back or assume map == odom!
+    with pytest.raises(RuntimeError) as excinfo:
+        replayer.transform_point(
+            np.array([0.1, 0.2, 0.035]),
+            source_frame="chessboard_frame",
+            target_frame="base_footprint",
+            time_ns=1_000_000_000,
+        )
+    assert "CRITICAL TF TRANSFORMATION FAILURE" in str(excinfo.value)

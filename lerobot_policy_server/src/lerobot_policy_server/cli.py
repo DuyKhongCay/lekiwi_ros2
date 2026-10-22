@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Construct command-line argument parser."""
     parser = argparse.ArgumentParser(
         prog="lerobot-policy-server",
-        description="ZeroMQ Policy Inference Server for LeKiwi robot (LeRobot)",
+        description="ZeroMQ Policy Inference Server for LeKiwi robot (LeRobot v0.6.1)",
     )
     parser.add_argument(
         "--host",
@@ -57,24 +57,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=int(os.getenv("POLICY_SERVER_FPS", "30")),
         help="Target inference frames per second (default: 30)",
-    )
-    parser.add_argument(
-        "--inference-latency",
-        type=float,
-        default=float(os.getenv("POLICY_SERVER_INFERENCE_LATENCY", "0.033")),
-        help="Target inference latency in seconds (default: 0.033)",
-    )
-    parser.add_argument(
-        "--obs-queue-timeout",
-        type=float,
-        default=float(os.getenv("POLICY_SERVER_OBS_TIMEOUT", "2.0")),
-        help="Observation timeout in seconds (default: 2.0)",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default=os.getenv("POLICY_SERVER_DEVICE", "cuda"),
-        help="Computation device ('cuda' or 'cpu', default: cuda)",
     )
     parser.add_argument(
         "--log-level",
@@ -99,9 +81,6 @@ def main(argv: list[str] | None = None) -> int:
         host=args.host,
         port=args.port,
         fps=args.fps,
-        inference_latency=args.inference_latency,
-        obs_queue_timeout=args.obs_queue_timeout,
-        device=args.device,
     )
 
     server = ZmqPolicyServer(config)
