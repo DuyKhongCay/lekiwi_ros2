@@ -88,18 +88,22 @@ class AsyncRos2ClientNode(Node):
         self.declare_parameter("aggregation_fn", "weighted_average")
         self.declare_parameter("auto_start", True)
 
-        # Convergence settings
-        self.declare_parameter("convergence.min_episode_duration_s", 3.0)
-        self.declare_parameter("convergence.max_episode_duration_s", 25.0)
-        self.declare_parameter("convergence.settle_window_s", 0.6)
-        self.declare_parameter("convergence.pos_tol_rad", 0.035)
-        self.declare_parameter("convergence.vel_tol_rad", 0.015)
+        # Landmark poses (SSOT injected from Tier 0 orchestrator.yaml:L41)
+        self.declare_parameter(
+            "named_poses.stow",
+            [1.5616, -1.7411, 1.5570, 0.7747, -2.7888, 0.0813],
+        )
 
-        # Network Transport & Safety Watchdogs
+        # Episode convergence & completion criteria (Single Responsibility)
+        self.declare_parameter("convergence.max_duration_s", 180.0)
+        self.declare_parameter("convergence.min_actions", 15)
+        self.declare_parameter("convergence.stow_tolerance_rad", 0.20)
+        self.declare_parameter("convergence.settle_steps", 10)
+
+        # Network transport & safety watchdogs
         self.declare_parameter("transport.config_timeout_s", 60.0)
         self.declare_parameter("transport.infer_timeout_ms", 500)
         self.declare_parameter("stream_timeout_s", 2.0)
-        self.declare_parameter("min_policy_actions_for_convergence", 10)
 
         # Retrieve parameters
         self.server_address = str(self.get_parameter("server_address").value)
@@ -119,18 +123,31 @@ class AsyncRos2ClientNode(Node):
         self.aggregation_fn = str(self.get_parameter("aggregation_fn").value)
         self.auto_start = bool(self.get_parameter("auto_start").value)
 
-        self.min_episode_duration_s = float(self.get_parameter("convergence.min_episode_duration_s").value)
-        self.max_episode_duration_s = float(self.get_parameter("convergence.max_episode_duration_s").value)
-        self.settle_window_s = float(self.get_parameter("convergence.settle_window_s").value)
-        self.pos_tol_rad = float(self.get_parameter("convergence.pos_tol_rad").value)
-        self.vel_tol_rad = float(self.get_parameter("convergence.vel_tol_rad").value)
-        self.required_settle_steps = max(1, int(self.settle_window_s * self.control_rate))
+        self.stow_pose = np.array(
+            self.get_parameter("named_poses.stow").value,
+            dtype=np.float64,
+        )
+        self.max_duration_s = float(
+            self.get_parameter("convergence.max_duration_s").value
+        )
+        self.min_actions = int(
+            self.get_parameter("convergence.min_actions").value
+        )
+        self.stow_tolerance_rad = float(
+            self.get_parameter("convergence.stow_tolerance_rad").value
+        )
+        self.settle_steps = int(
+            self.get_parameter("convergence.settle_steps").value
+        )
 
-        self.config_timeout_s = float(self.get_parameter("transport.config_timeout_s").value)
-        self.infer_timeout_ms = int(self.get_parameter("transport.infer_timeout_ms").value)
-        self.stream_timeout_s = float(self.get_parameter("stream_timeout_s").value)
-        self.min_policy_actions_for_convergence = int(
-            self.get_parameter("min_policy_actions_for_convergence").value
+        self.config_timeout_s = float(
+            self.get_parameter("transport.config_timeout_s").value
+        )
+        self.infer_timeout_ms = int(
+            self.get_parameter("transport.infer_timeout_ms").value
+        )
+        self.stream_timeout_s = float(
+            self.get_parameter("stream_timeout_s").value
         )
 
         # -------------------------------------------------------------------
@@ -407,7 +424,7 @@ class AsyncRos2ClientNode(Node):
         self.client.reset_episode()
 
         poll_interval = 0.05
-        max_duration = self.max_episode_duration_s
+        max_duration = self.max_duration_s
 
         while not self._goal_finished_event.wait(timeout=poll_interval):
             if goal_handle.is_cancel_requested:
@@ -528,7 +545,7 @@ class AsyncRos2ClientNode(Node):
         # 3. Publish Feedback & Evaluate Convergence
         if active_handle is not None and active_handle.is_active:
             elapsed = now - start_time
-            progress = min(100.0, float((elapsed / self.max_episode_duration_s) * 100.0))
+            progress = min(100.0, float((elapsed / self.max_duration_s) * 100.0))
 
             feedback = ExecuteChessMove.Feedback()
             feedback.current_phase = "POLICY_ROLLOUT"
@@ -536,34 +553,60 @@ class AsyncRos2ClientNode(Node):
             feedback.instruction = task
             active_handle.publish_feedback(feedback)
 
-            # ZERO BACKWARD-COMPATIBLE: Convergence requires sufficient executed policy actions
             with self._active_goal_lock:
-                has_executed_policy = (
-                    self._active_policy_actions_executed >= self.min_policy_actions_for_convergence
-                )
                 executed_count = self._active_policy_actions_executed
 
-            if (
-                elapsed >= self.min_episode_duration_s
-                and prev_joints is not None
-                and has_executed_policy
-            ):
-                pos_err = float(np.max(np.abs(safe_cmd - current_joints)))
-                vel_mag = float(np.max(np.abs(current_joints - prev_joints)))
+            is_terminal, message = self._evaluate_convergence(
+                current_joints=current_joints,
+                elapsed=elapsed,
+                executed_actions=executed_count,
+            )
 
-                if pos_err < self.pos_tol_rad and vel_mag < self.vel_tol_rad:
-                    self._active_settle_count += 1
-                    if self._active_settle_count >= self.required_settle_steps:
-                        with self._active_goal_lock:
-                            self._goal_success = True
-                            self._goal_result_message = (
-                                f"Converged after {elapsed:.2f}s ({executed_count} actions executed)."
-                            )
-                            self._goal_finished_event.set()
-                else:
-                    self._active_settle_count = 0
-            else:
-                self._active_settle_count = 0
+            if is_terminal and message:
+                with self._active_goal_lock:
+                    self._goal_success = ("Successfully converged" in message)
+                    self._goal_result_message = message
+                    self._goal_finished_event.set()
+
+    def _evaluate_convergence(
+        self,
+        current_joints: np.ndarray,
+        elapsed: float,
+        executed_actions: int,
+    ) -> tuple[bool, Optional[str]]:
+        """Evaluates whether the policy rollout has reached terminal stow posture.
+
+        Single Responsibility: Verifies execution gating, timeout watchdogs,
+        and kinematic convergence to the pre-calibrated landmark stow pose.
+
+        Returns:
+            Tuple of (is_terminal, optional_result_message).
+        """
+        # 1. Episode timeout watchdog
+        if elapsed >= self.max_duration_s:
+            return True, f"Episode timed out after {elapsed:.1f}s without reaching stow posture."
+
+        # 2. Minimum execution prerequisite
+        if executed_actions < self.min_actions:
+            self._active_settle_count = 0
+            return False, None
+
+        # 3. Kinematic proximity to stow landmark (first 5 arm joints)
+        arm_stow_target = self.stow_pose[:5]
+        arm_current = current_joints[:5]
+        stow_err = float(np.max(np.abs(arm_current - arm_stow_target)))
+
+        if stow_err < self.stow_tolerance_rad:
+            self._active_settle_count += 1
+            if self._active_settle_count >= self.settle_steps:
+                return True, (
+                    f"Successfully converged to stow posture after {elapsed:.2f}s "
+                    f"({executed_actions} actions executed, stow_err={stow_err:.3f} rad)."
+                )
+        else:
+            self._active_settle_count = 0
+
+        return False, None
 
     def _produce_diagnostics(
         self, stat: DiagnosticStatusWrapper

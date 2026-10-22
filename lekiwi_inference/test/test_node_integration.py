@@ -202,24 +202,27 @@ def test_diagnostic_updater_integration_and_zero_backward_compat():
 
 
 def test_stream_starvation_watchdog_and_strict_convergence():
-    """Validates that empty stream aborts goal after stream_timeout_s and prevents false convergence."""
+    """Validates stream starvation, non-stow rejection, stow convergence, and timeout watchdog."""
+    stow_val = [1.56, -1.74, 1.55, 0.77, -2.78, 0.08]
     node = AsyncRos2ClientNode(
         parameter_overrides=[
             Parameter("auto_start", value=False),
             Parameter("stream_timeout_s", value=0.2),
-            Parameter("min_policy_actions_for_convergence", value=5),
-            Parameter("convergence.min_episode_duration_s", value=0.1),
-            Parameter("convergence.settle_window_s", value=0.05),
+            Parameter("named_poses.stow", value=stow_val),
+            Parameter("convergence.min_actions", value=5),
+            Parameter("convergence.stow_tolerance_rad", value=0.20),
+            Parameter("convergence.settle_steps", value=3),
+            Parameter("convergence.max_duration_s", value=10.0),
         ]
     )
 
     node._is_active = True
     node.transport._connected = True
 
-    # Populate joint states
+    # Initial joint state (reaching away from stow)
     js = JointState()
     js.name = node.arm_joints
-    js.position = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    js.position = [0.17, 0.50, 0.14, 0.67, -1.52, 0.42]  # Mid-reach pose
     node._joint_state_callback(js)
 
     # Mock an active goal
@@ -234,7 +237,7 @@ def test_stream_starvation_watchdog_and_strict_convergence():
     node._active_goal_handle = mock_handle
     node._active_env_state = np.zeros(10, dtype=np.float32)
     node._active_task = "Test Task"
-    node._active_goal_start_time = time.time() - 0.5  # already passed min_episode_duration_s
+    node._active_goal_start_time = time.time()
     node._active_policy_actions_executed = 0  # No actions executed!
 
     # Step 1: Control tick with no actions available
@@ -252,21 +255,41 @@ def test_stream_starvation_watchdog_and_strict_convergence():
     assert node._goal_success is False
     assert "stream starved" in node._goal_result_message
 
-    # Step 3: Test valid convergence when sufficient policy actions executed
+    # Step 3: Mid-reach rejection - sufficient actions executed, but arm NOT at stow
     node._goal_finished_event.clear()
     node._goal_success = False
     node._active_policy_actions_executed = 10  # sufficient actions
     node._active_starvation_start_time = None
     node.client.actions_available = lambda: True
-    # Return same target as current joints so pos_err = 0
-    node.client.pop_action = lambda: np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+    node.client.pop_action = lambda: np.array([0.17, 0.50, 0.14, 0.67, -1.52, 0.42])
 
-    # Tick enough times to satisfy required_settle_steps
-    for _ in range(node.required_settle_steps + 1):
+    for _ in range(5):
+        node._control_timer_callback()
+
+    # MUST NOT converge because arm is at mid-reach pose, far from stow
+    assert node._active_settle_count == 0
+    assert not node._goal_finished_event.is_set()
+
+    # Step 4: True convergence - arm folds back into stow pose
+    js_stow = JointState()
+    js_stow.name = node.arm_joints
+    js_stow.position = [1.56, -1.74, 1.55, 0.77, -2.78, 0.08]
+    node._joint_state_callback(js_stow)
+    node.client.pop_action = lambda: np.array([1.56, -1.74, 1.55, 0.77, -2.78, 0.08])
+
+    for _ in range(node.settle_steps):
         node._control_timer_callback()
 
     assert node._goal_finished_event.is_set()
     assert node._goal_success is True
-    assert "Converged" in node._goal_result_message
+    assert "converged to stow posture" in node._goal_result_message
+
+    # Step 5: Test episode timeout watchdog
+    node._goal_finished_event.clear()
+    node._goal_success = False
+    node._active_goal_start_time = time.time() - 15.0  # exceeded max_duration_s (10.0s)
+    is_term, msg = node._evaluate_convergence(np.zeros(6), 15.0, 10)
+    assert is_term is True
+    assert "timed out" in msg
 
     node.destroy_node()
