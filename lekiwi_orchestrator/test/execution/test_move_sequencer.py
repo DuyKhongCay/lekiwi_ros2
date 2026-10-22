@@ -39,6 +39,21 @@ def ros_context():
         rclpy.shutdown()
 
 
+def create_mock_tf_buffer():
+    """Create a mock tf_buffer transforming board to base_footprint."""
+    mock_tf = Mock()
+    mock_stamped = Mock()
+    mock_stamped.transform.translation.x = 0.40
+    mock_stamped.transform.translation.y = 0.18
+    mock_stamped.transform.translation.z = 0.01
+    mock_stamped.transform.rotation.x = 0.0
+    mock_stamped.transform.rotation.y = 0.0
+    mock_stamped.transform.rotation.z = 0.0
+    mock_stamped.transform.rotation.w = 1.0
+    mock_tf.lookup_transform.return_value = mock_stamped
+    return mock_tf
+
+
 @pytest.fixture
 def base_goal() -> ChessMoveGoal:
     return ChessMoveGoal(
@@ -201,6 +216,7 @@ def test_move_pipeline_executor_lifecycle(ros_context):
         perception=perception,
         board_frame="chessboard_frame",
         action_timeout_sec=5.0,
+        tf_buffer=create_mock_tf_buffer(),
         on_pipeline_completed=lambda: completed_events.append(True),
         on_pipeline_failed=lambda err: failed_events.append(err),
         on_motion_state_changed=lambda st: motion_transitions.append(st),
@@ -388,6 +404,7 @@ def test_move_pipeline_grasp_readiness_settle_success(ros_context):
         perception=perception,
         grasp_readiness_provider=_flapping_provider,
         chassis_settle_timeout_sec=0.2,
+        tf_buffer=create_mock_tf_buffer(),
         on_pipeline_completed=lambda: completed_events.append(True),
         on_pipeline_failed=lambda err: failed_events.append(err),
     )
@@ -446,6 +463,7 @@ def test_active_relocalization_on_grasp_unready_success(ros_context):
         grasp_readiness_provider=_readiness_provider,
         chassis_settle_timeout_sec=0.01,
         observation_navigator=obs_nav,
+        tf_buffer=create_mock_tf_buffer(),
         on_pipeline_completed=lambda: completed_events.append(True),
         on_pipeline_failed=lambda err: failed_events.append(err),
     )
@@ -563,6 +581,7 @@ def test_stage_pipeline_dispatch_and_execution_failures(ros_context, fail_type, 
         node=node,
         dispatcher=dispatcher,
         perception=perception,
+        tf_buffer=create_mock_tf_buffer(),
         on_pipeline_failed=lambda err: failed_events.append(err),
     )
 
@@ -609,6 +628,7 @@ def test_observation_step_waits_for_chassis_settle(ros_context):
         perception=perception,
         chassis_settle_timeout_sec=0.5,
         chassis_settle_provider=_settle_provider,
+        tf_buffer=create_mock_tf_buffer(),
         on_pipeline_completed=lambda: completed_events.append(True),
     )
 
@@ -632,3 +652,124 @@ def test_observation_step_waits_for_chassis_settle(ros_context):
         perception.destroy()
         dispatcher.destroy()
         node.destroy_node()
+
+
+def test_move_sequencer_transforms_points_to_base_footprint(ros_context):
+    """Verify that MoveSequencer transforms board-frame coordinates into base_footprint frame for environment_state."""
+    node = Node("test_transform_accuracy_node")
+    dispatcher = FakeMotionClient()
+    perception = PerceptionContextManager(
+        node=node,
+        perception_context_topic="/test/tf_acc/perception_context",
+        set_perception_service_name="/test/tf_acc/set_context",
+    )
+
+    mock_tf = Mock()
+    mock_tf_stamped = Mock()
+    mock_tf_stamped.transform.translation.x = 0.4027
+    mock_tf_stamped.transform.translation.y = 0.1862
+    mock_tf_stamped.transform.translation.z = 0.0060
+    mock_tf_stamped.transform.rotation.x = 0.0
+    mock_tf_stamped.transform.rotation.y = 0.0
+    mock_tf_stamped.transform.rotation.z = 0.3877
+    mock_tf_stamped.transform.rotation.w = 0.9218
+    mock_tf.lookup_transform.return_value = mock_tf_stamped
+
+    executor = MoveSequencer(
+        node=node,
+        dispatcher=dispatcher,
+        perception=perception,
+        board_frame="chessboard_frame",
+        tf_buffer=mock_tf,
+    )
+
+    try:
+        from lekiwi_orchestrator.planning.move_planner import MoveStep, StepKind
+
+        stage = MoveStep(
+            name=StepKind.MOVE,
+            target_pose=None,
+            instruction="Pick c7, place c5",
+            from_square="c7",
+            to_square="c5",
+            is_capture=False,
+            pick_point=Point(x=-0.07125, y=0.11875, z=0.025),
+            place_point=Point(x=-0.07125, y=0.02375, z=0.025),
+            motion_state=MotionExecutionState.PICKING_PIECE,
+        )
+
+        goal = executor._build_manipulation_goal(stage)
+
+        # Expected base coordinates from forward transformation P_base = R * P_board + T
+        expected_src = [0.2680, 0.2183, 0.0310]
+        expected_tgt = [0.3359, 0.1519, 0.0310]
+
+        assert len(goal.environment_state) == 10
+        for i in range(3):
+            assert math.isclose(goal.environment_state[i], expected_src[i], abs_tol=1e-3)
+            assert math.isclose(goal.environment_state[3 + i], expected_tgt[i], abs_tol=1e-3)
+
+        assert list(goal.environment_state[6:]) == [1.0, 0.0, 0.0, 0.0]
+    finally:
+        perception.destroy()
+        dispatcher.destroy()
+        node.destroy_node()
+
+
+def test_move_sequencer_fails_fast_on_missing_or_failed_tf(ros_context):
+    """Verify Fail-Fast behavior: MoveSequencer aborts without dispatching goals when TF is missing or lookup fails."""
+    node = Node("test_fail_fast_tf_node")
+    dispatcher = FakeMotionClient()
+    perception = PerceptionContextManager(
+        node=node,
+        perception_context_topic="/test/fail_fast/perception_context",
+        set_perception_service_name="/test/fail_fast/set_context",
+    )
+    failed_events = []
+
+    from lekiwi_orchestrator.planning.move_planner import MoveStep, StepKind
+
+    stage = MoveStep(
+        name=StepKind.MOVE,
+        target_pose=None,
+        instruction="Pick c7, place c5",
+        from_square="c7",
+        to_square="c5",
+        is_capture=False,
+        pick_point=Point(x=-0.07125, y=0.11875, z=0.025),
+        place_point=Point(x=-0.07125, y=0.02375, z=0.025),
+        motion_state=MotionExecutionState.PICKING_PIECE,
+    )
+
+    # Case 1: tf_buffer is None -> must fail fast and not dispatch
+    executor_no_tf = MoveSequencer(
+        node=node,
+        dispatcher=dispatcher,
+        perception=perception,
+        tf_buffer=None,
+        on_pipeline_failed=lambda err: failed_events.append(err),
+    )
+
+    executor_no_tf._execute_manip_stage(stage)
+    assert len(failed_events) == 1
+    assert "tf_buffer was not provided" in failed_events[0]
+
+    # Case 2: lookup_transform raises exception -> must fail fast and not dispatch
+    mock_tf_error = Mock()
+    mock_tf_error.lookup_transform.side_effect = RuntimeError("TF lookup timeout")
+
+    executor_lookup_fail = MoveSequencer(
+        node=node,
+        dispatcher=dispatcher,
+        perception=perception,
+        tf_buffer=mock_tf_error,
+        on_pipeline_failed=lambda err: failed_events.append(err),
+    )
+
+    executor_lookup_fail._execute_manip_stage(stage)
+    assert len(failed_events) == 2
+    assert "TF lookup timeout" in failed_events[1]
+
+    perception.destroy()
+    dispatcher.destroy()
+    node.destroy_node()

@@ -110,14 +110,13 @@ class ChessMissionOrchestrator(Node):
         if tf_buffer is not None:
             self._tf_buffer = tf_buffer
             self._tf_listener = None
-        elif motion_client is not None and not isinstance(
-            motion_client, RosMotionClient
-        ):
-            self._tf_buffer = None
-            self._tf_listener = None
         else:
             self._tf_buffer = tf2_ros.Buffer()
-            self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
+            if motion_client is None or isinstance(motion_client, RosMotionClient):
+                self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
+            else:
+                self._tf_listener = None
+                self._seed_mock_transforms(self._tf_buffer)
 
         # Callback Groups
         self._cb_group_sub = MutuallyExclusiveCallbackGroup()
@@ -205,6 +204,33 @@ class ChessMissionOrchestrator(Node):
             "ChessMissionOrchestrator initialized. "
             f"Waiting for Navigation Readiness on {self.parameters.nav_ready_topic} and Grasp Readiness on {self.parameters.grasp_ready_topic}..."
         )
+
+    def _seed_mock_transforms(self, buffer: tf2_ros.Buffer) -> None:
+        """Seed mock TF buffer with canonical baseline transforms for offline testing."""
+        from geometry_msgs.msg import TransformStamped
+
+        t_map_board = TransformStamped()
+        t_map_board.header.frame_id = self.parameters.map_frame
+        t_map_board.child_frame_id = self.parameters.board_frame
+        t_map_board.transform.rotation.w = 1.0
+
+        t_base_board = TransformStamped()
+        t_base_board.header.frame_id = "base_footprint"
+        t_base_board.child_frame_id = self.parameters.board_frame
+        t_base_board.transform.translation.x = 0.40
+        t_base_board.transform.translation.y = 0.18
+        t_base_board.transform.translation.z = 0.01
+        t_base_board.transform.rotation.w = 1.0
+
+        t_map_base = TransformStamped()
+        t_map_base.header.frame_id = self.parameters.map_frame
+        t_map_base.child_frame_id = "base_footprint"
+        t_map_base.transform.translation.x = -0.40
+        t_map_base.transform.rotation.w = 1.0
+
+        buffer.set_transform_static(t_map_board, "mock_authority")
+        buffer.set_transform_static(t_base_board, "mock_authority")
+        buffer.set_transform_static(t_map_base, "mock_authority")
 
     def _wire_subsystems(
         self, motion_client: MotionClient | None = None
@@ -308,6 +334,7 @@ class ChessMissionOrchestrator(Node):
             navigation_enabled=config.navigation,
             callback_group=self._cb_group_client,
             observation_navigator=obs_navigator,
+            tf_buffer=self._tf_buffer,
         )
 
         # 5. Post-Move Verifier

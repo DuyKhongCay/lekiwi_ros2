@@ -435,44 +435,56 @@ class MoveSequencer:
     def _transform_point_to_base(
         self, point: Point | None, target_frame: str
     ) -> list[float]:
-        """Transforms a geometry_msgs/Point to base_footprint coordinate frame."""
+        """Transforms a geometry_msgs/Point to base_footprint coordinate frame.
+
+        Fail-Fast: Raises RuntimeError if tf_buffer is missing or transform lookup fails.
+        """
         if point is None:
             return [0.0, 0.0, 0.0]
-        if self._tf_buffer is not None:
-            try:
-                tf_stamped = self._tf_buffer.lookup_transform(
-                    "base_footprint",
-                    target_frame,
-                    rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=0.2),
-                )
-                tx = tf_stamped.transform.translation.x
-                ty = tf_stamped.transform.translation.y
-                tz = tf_stamped.transform.translation.z
-                qx = tf_stamped.transform.rotation.x
-                qy = tf_stamped.transform.rotation.y
-                qz = tf_stamped.transform.rotation.z
-                qw = tf_stamped.transform.rotation.w
 
-                r00 = 1.0 - 2.0 * (qy * qy + qz * qz)
-                r01 = 2.0 * (qx * qy - qz * qw)
-                r02 = 2.0 * (qx * qz + qy * qw)
-                r10 = 2.0 * (qx * qy + qz * qw)
-                r11 = 1.0 - 2.0 * (qx * qx + qz * qz)
-                r12 = 2.0 * (qy * qz - qx * qw)
-                r20 = 2.0 * (qx * qz - qy * qw)
-                r21 = 2.0 * (qy * qz + qx * qw)
-                r22 = 1.0 - 2.0 * (qx * qx + qy * qy)
+        if self._tf_buffer is None:
+            raise RuntimeError(
+                f"MoveSequencer cannot transform point from '{target_frame}' to 'base_footprint': "
+                "tf_buffer was not provided."
+            )
 
-                x = r00 * point.x + r01 * point.y + r02 * point.z + tx
-                y = r10 * point.x + r11 * point.y + r12 * point.z + ty
-                z = r20 * point.x + r21 * point.y + r22 * point.z + tz
-                return [float(x), float(y), float(z)]
-            except Exception as exc:
-                self._node.get_logger().warn(
-                    f"Could not transform point from {target_frame} to base_footprint: {exc}. Using raw values."
-                )
-        return [float(point.x), float(point.y), float(point.z)]
+        try:
+            tf_stamped = self._tf_buffer.lookup_transform(
+                "base_footprint",
+                target_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.2),
+            )
+        except Exception as exc:
+            self._node.get_logger().error(
+                f"MoveSequencer: Failed to lookup transform from '{target_frame}' to 'base_footprint': {exc}"
+            )
+            raise RuntimeError(
+                f"Cannot build manipulation goal: TF transform from '{target_frame}' to 'base_footprint' unavailable: {exc}"
+            ) from exc
+
+        tx = tf_stamped.transform.translation.x
+        ty = tf_stamped.transform.translation.y
+        tz = tf_stamped.transform.translation.z
+        qx = tf_stamped.transform.rotation.x
+        qy = tf_stamped.transform.rotation.y
+        qz = tf_stamped.transform.rotation.z
+        qw = tf_stamped.transform.rotation.w
+
+        r00 = 1.0 - 2.0 * (qy * qy + qz * qz)
+        r01 = 2.0 * (qx * qy - qz * qw)
+        r02 = 2.0 * (qx * qz + qy * qw)
+        r10 = 2.0 * (qx * qy + qz * qw)
+        r11 = 1.0 - 2.0 * (qx * qx + qz * qz)
+        r12 = 2.0 * (qy * qz - qx * qw)
+        r20 = 2.0 * (qx * qz - qy * qw)
+        r21 = 2.0 * (qy * qz + qx * qw)
+        r22 = 1.0 - 2.0 * (qx * qx + qy * qy)
+
+        x = r00 * point.x + r01 * point.y + r02 * point.z + tx
+        y = r10 * point.x + r11 * point.y + r12 * point.z + ty
+        z = r20 * point.x + r21 * point.y + r22 * point.z + tz
+        return [float(x), float(y), float(z)]
 
     def _build_manipulation_goal(self, stage: MoveStep) -> ExecuteChessMove.Goal:
         """Build ExecuteChessMove.Goal message with 10D environment_state from a MoveStep domain object."""
@@ -533,7 +545,13 @@ class MoveSequencer:
         self.transition_motion_to(stage.motion_state)
         self._perception.set_context(PerceptionContext.MANIPULATION_ACTOR)
 
-        goal = self._build_manipulation_goal(stage)
+        try:
+            goal = self._build_manipulation_goal(stage)
+        except Exception as exc:
+            self._handle_failure(
+                f"Failed to build manipulation goal for stage '{stage.name}': {exc}"
+            )
+            return
 
         self._node.get_logger().info(
             f"Sending ExecuteChessMove goal: operation={goal.operation} (stage='{stage.name}', '{stage.instruction}')..."
