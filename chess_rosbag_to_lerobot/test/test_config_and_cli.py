@@ -45,9 +45,20 @@ def test_load_config_lekiwi_chess():
     assert "action" in feature_keys
     assert "observation.environment_state" in feature_keys
 
-    # Check 10D environment_state feature shape
+    # Check 12D environment_state feature shape
     env_spec = next(f for f in cfg.features if f.key == "observation.environment_state")
-    assert env_spec.shape == [10]
+    assert env_spec.shape == [12]
+
+    # Phase conditioning checks
+    pc = cfg.phase_conditioning
+    assert pc.trim_leading_idle_frames == 5
+    assert pc.target_trailing_stow_frames == 25
+    assert pytest.approx(pc.motion_onset_delta_rad) == 0.03
+    assert pytest.approx(pc.stow_settle_delta_rad) == 0.02
+    assert pytest.approx(pc.arm_extended_lift_min_rad) == -1.0
+    assert pytest.approx(pc.gripper_open_min_rad) == 0.22
+    assert pytest.approx(pc.gripper_closed_max_rad) == 0.12
+    assert pytest.approx(pc.min_transport_duration_s) == 0.5
 
 
 def test_cli_parser_and_task_types():
