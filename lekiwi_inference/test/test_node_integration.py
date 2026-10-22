@@ -16,6 +16,8 @@
 
 import time
 
+from diagnostic_msgs.msg import DiagnosticStatus
+from diagnostic_updater import DiagnosticStatusWrapper
 from geometry_msgs.msg import Point
 from lekiwi_interfaces.action import ExecuteChessMove
 import numpy as np
@@ -25,7 +27,7 @@ from rclpy.action import GoalResponse
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 
 from lekiwi_inference.async_ros2_client_node import TASK_DESCRIPTION_MAP, AsyncRos2ClientNode
 
@@ -114,5 +116,75 @@ def test_node_lifecycle_and_interfaces():
     resp = SetBool.Response()
     node._handle_enable_service(req, resp)
     assert resp.success is True
+
+    # Test estop service handler
+    estop_req = Trigger.Request()
+    estop_resp = Trigger.Response()
+    node._handle_estop_service(estop_req, estop_resp)
+    assert estop_resp.success is True
+    assert node._estop_active is True
+
+    node.destroy_node()
+
+
+def test_diagnostic_updater_integration_and_zero_backward_compat():
+    """Validates diagnostic_updater registration, zero backward compatibility, and telemetry generation."""
+    node = AsyncRos2ClientNode(
+        parameter_overrides=[
+            Parameter("auto_start", value=False),
+        ]
+    )
+
+    # 1. Zero backward compatibility: ensure old custom topic/publisher/timer are gone
+    assert not hasattr(node, "diag_pub"), "Legacy diag_pub publisher must be completely removed"
+    assert not hasattr(node, "diag_timer"), "Legacy diag_timer must be completely removed"
+    assert not hasattr(node, "_diagnostic_timer_callback"), "Legacy _diagnostic_timer_callback must be removed"
+
+    publishers = node.get_publisher_names_and_types_by_node(node.get_name(), node.get_namespace())
+    topic_names = [name for name, _ in publishers]
+    assert "/lekiwi/inference/status" not in topic_names
+
+    # 2. Verify updater exists and is attached
+    assert hasattr(node, "updater")
+
+    # 3. Test _produce_diagnostics callback under disconnected state
+    stat = DiagnosticStatusWrapper()
+    result = node._produce_diagnostics(stat)
+    assert result.level == DiagnosticStatus.ERROR
+    assert "Disconnected" in result.message
+
+    val_dict = {kv.key: kv.value for kv in result.values}
+    assert "transport_connected" in val_dict
+    assert "inference_active" in val_dict
+    assert "estop_active" in val_dict
+    assert "queue_size" in val_dict
+    assert "rtt_latency_ms" in val_dict
+    assert val_dict["transport_connected"] == "False"
+    assert val_dict["estop_active"] == "False"
+    assert val_dict["active_goal"] == "False"
+
+    # 4. Test _produce_diagnostics when E-Stop is active
+    node._estop_active = True
+    stat_estop = DiagnosticStatusWrapper()
+    result_estop = node._produce_diagnostics(stat_estop)
+    assert result_estop.level == DiagnosticStatus.WARN
+    assert "Emergency Stop" in result_estop.message
+    val_dict_estop = {kv.key: kv.value for kv in result_estop.values}
+    assert val_dict_estop["estop_active"] == "True"
+
+    # 5. Test _produce_diagnostics when connected
+    node._estop_active = False
+    node.transport._connected = True
+    node.transport.ping = lambda: 5.2
+    stat_conn = DiagnosticStatusWrapper()
+    result_conn = node._produce_diagnostics(stat_conn)
+    assert result_conn.level == DiagnosticStatus.OK
+    assert "Idle" in result_conn.message
+
+    node._is_active = True
+    stat_active = DiagnosticStatusWrapper()
+    result_active = node._produce_diagnostics(stat_active)
+    assert result_active.level == DiagnosticStatus.OK
+    assert "Streaming Active" in result_active.message
 
     node.destroy_node()
