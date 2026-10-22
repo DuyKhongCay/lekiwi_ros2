@@ -31,6 +31,7 @@ from chess_rosbag_to_lerobot.buffers import LastBuffer
 from chess_rosbag_to_lerobot.chess_spatial_bridge import (
     EpisodeSpatialPlan,
     assemble_environment_state,
+    condition_episode_frames,
     resolve_episode_spatial_plan,
 )
 from chess_rosbag_to_lerobot.config import Config, FeatureSpec
@@ -41,11 +42,14 @@ logger = logging.getLogger(__name__)
 
 POS_KEYS = {"observation.state", "action"}
 
-ENV_STATE_10D_NAMES = [
+ENV_STATE_12D_NAMES = [
     "source_x", "source_y", "source_z",
     "target_x", "target_y", "target_z",
     "is_move", "is_clear", "is_pick", "is_place",
+    "has_grasped", "has_released",
 ]
+# Retain 10D alias for backwards compatibility
+ENV_STATE_10D_NAMES = ENV_STATE_12D_NAMES[:10]
 
 
 def _is_visual(spec: FeatureSpec) -> bool:
@@ -88,11 +92,11 @@ def build_lerobot_features(cfg: Config, use_videos: bool = True) -> Dict[str, An
                 "names": ["height", "width", "channels"],
             }
         elif spec.msg_type.startswith("spatial/"):
-            # Chess spatial environment state (10D: [source(3), target(3), one_hot(4)])
+            # Chess spatial environment state (12D: [source(3), target(3), one_hot(4), has_grasped, has_released])
             features[spec.key] = {
                 "dtype": "float32",
-                "shape": (10,),
-                "names": ENV_STATE_10D_NAMES,
+                "shape": (12,),
+                "names": ENV_STATE_12D_NAMES,
             }
         else:
             names = list(spec.names) if spec.names is not None else None
@@ -207,7 +211,7 @@ def _build_reference_frame(
         "task": spatial_plan.canonical_task,
     }
 
-    # Transform board-frame landmarks if needed
+    # Store transform callback for deferred conditioning across the episode
     def transform_endpoint(pt: np.ndarray) -> Optional[np.ndarray]:
         if cfg.chessboard.base_frame == cfg.chessboard.board_frame:
             return pt
@@ -215,10 +219,7 @@ def _build_reference_frame(
             pt, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
         )
 
-    env_state = assemble_environment_state(spatial_plan, transform_endpoint)
-    for f_spec in cfg.features:
-        if f_spec.key == "observation.environment_state":
-            frame[f_spec.key] = env_state
+    frame["_transform_fn"] = transform_endpoint
 
     # Sample remaining buffered features
     for other_spec in cfg.features:
@@ -253,7 +254,8 @@ def _log_and_save_episode(
         logger.info("  %s", _format_sync_line(topic, buf.summary()))
 
     if frame_count > 0:
-        dataset.save_episode()
+        if dataset is not None:
+            dataset.save_episode()
     else:
         logger.warning("Episode %s produced 0 valid frames, skipping save", bag_dir.name)
 
@@ -316,6 +318,7 @@ def convert_one_bag(
 
     frame_count = 0
     dropped_count = 0
+    raw_frames: List[Dict[str, Any]] = []
 
     while reader.has_next():
         topic, data, bag_ts_ns = reader.read_next()
@@ -339,10 +342,27 @@ def convert_one_bag(
             if frame is None:
                 dropped_count += 1
             else:
-                dataset.add_frame(frame)
-                frame_count += 1
+                raw_frames.append(frame)
         else:
             buffers[topic].push(ts_ns, decode(msg, spec))
+
+    if not raw_frames:
+        return _log_and_save_episode(bag_dir, 0, dropped_count, buffers, dataset)
+
+    try:
+        conditioned_frames = condition_episode_frames(raw_frames, spatial_plan, cfg)
+    except ValueError as exc:
+        logger.warning(
+            "Skipping episode %s: kinematic conditioning failed: %s",
+            bag_dir.name,
+            exc,
+        )
+        return _log_and_save_episode(bag_dir, 0, dropped_count + len(raw_frames), buffers, dataset)
+
+    for frame in conditioned_frames:
+        if dataset is not None:
+            dataset.add_frame(frame)
+        frame_count += 1
 
     return _log_and_save_episode(bag_dir, frame_count, dropped_count, buffers, dataset)
 
@@ -417,6 +437,10 @@ def convert_all_bags(
         )
         total_frames += frames
         total_dropped += dropped
+
+    if total_frames > 0:
+        logger.info("Finalizing LeRobot dataset...")
+        dataset.finalize()
 
     if push_to_hub:
         logger.info("Pushing dataset to Hugging Face Hub: %s", repo_id)

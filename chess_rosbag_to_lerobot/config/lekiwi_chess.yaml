@@ -77,9 +77,20 @@ features:
     max_age_s: 0.04
     names: *arm_joints
 
-  # --- 4. Chess Context: 10D Multi-Primitive Spatial conditioning ---
-  # LeRobot Environment State vector: [source(3), target(3), is_move, is_clear, is_pick, is_place]
+  # --- 4. Chess Context: 12D Multi-Primitive Spatial conditioning ---
+  # LeRobot Environment State vector: [source(3), target(3), is_move, is_clear, is_pick, is_place, has_grasped, has_released]
   - key: "observation.environment_state"
     msg_type: "spatial/environment_state"
-    shape: [10]
+    shape: [12]
+
+# Dynamic phase conditioning and episode boundary normalization
+phase_conditioning:
+  trim_leading_idle_frames: 5        # Giữ tối đa 0.2s (5 frames @ 25Hz) trước khi tay bắt đầu di chuyển
+  target_trailing_stow_frames: 25    # Chuẩn hóa đoạn đứng yên tại stow cuối episode về đúng 1.0s (25 frames)
+  motion_onset_delta_rad: 0.03       # Ngưỡng lệch góc khớp phát hiện bắt đầu chuyển động
+  stow_settle_delta_rad: 0.02        # Ngưỡng lệch góc khớp phát hiện đã dừng hẳn tại stow
+  arm_extended_lift_min_rad: -1.0    # arm_shoulder_lift > -1.0 rad xác nhận tay đang vươn khỏi vùng stow
+  gripper_open_min_rad: 0.22         # arm_gripper > 0.22 rad xác nhận kẹp mở
+  gripper_closed_max_rad: 0.12       # arm_gripper < 0.12 rad xác nhận kẹp đã đóng giữ quân cờ
+  min_transport_duration_s: 0.5      # Khoảng trễ tối thiểu giữa t_grasp và t_release cho MOVE/CLEAR
 

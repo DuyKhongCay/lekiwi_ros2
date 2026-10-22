@@ -4,13 +4,21 @@
 import pytest
 import numpy as np
 
-from chess_rosbag_to_lerobot.config import ChessboardConfig, LandmarksConfig
+from chess_rosbag_to_lerobot.config import (
+    ChessboardConfig,
+    Config,
+    LandmarksConfig,
+    PhaseConditioningConfig,
+)
 from chess_rosbag_to_lerobot.chess_spatial_bridge import (
     ClearBinSide,
     EpisodeSpatialPlan,
+    KinematicMilestones,
     SpatialEndpoint,
     TaskType,
     assemble_environment_state,
+    condition_episode_frames,
+    detect_kinematic_milestones,
     parse_chess_task,
     resolve_episode_spatial_plan,
     square_to_metric,
@@ -98,7 +106,7 @@ def test_parse_chess_task_standard_value_error():
         parse_chess_task("Invalid task instruction without squares")
 
 
-def test_resolve_episode_spatial_plan_and_assemble_10d():
+def test_resolve_episode_spatial_plan_and_assemble_12d():
     cfg = ChessboardConfig(
         square_size_m=0.040,
         grasp_clearance_z_m=0.025,
@@ -116,6 +124,7 @@ def test_resolve_episode_spatial_plan_and_assemble_10d():
     assert plan_move.source.is_board_frame is True
     assert plan_move.target.is_board_frame is True
     assert np.array_equal(plan_move.task_one_hot, [1.0, 0.0, 0.0, 0.0])
+    assert np.allclose(plan_move.stow_xyz, [0.070, -0.188, 0.175])
 
     # 2. CLEAR plan
     plan_clear = resolve_episode_spatial_plan("Clear d4 to left onboard bin", cfg)
@@ -142,17 +151,216 @@ def test_resolve_episode_spatial_plan_and_assemble_10d():
     assert np.allclose(plan_place.source.xyz, [0.070, -0.188, 0.175])
     assert np.array_equal(plan_place.task_one_hot, [0.0, 0.0, 0.0, 1.0])
 
-    # Assemble 10D environment state vector
+    # Assemble 12D environment state vector
     def mock_transform(pt: np.ndarray) -> np.ndarray:
         return pt + np.array([1.0, 2.0, 3.0], dtype=np.float32)
 
-    vec_10d = assemble_environment_state(plan_clear, mock_transform)
-    assert vec_10d.shape == (10,)
-    assert vec_10d.dtype == np.float32
+    vec_12d = assemble_environment_state(plan_clear, mock_transform)
+    assert vec_12d.shape == (12,)
+    assert vec_12d.dtype == np.float32
 
     # Source was in board frame -> mock_transform was applied
-    assert np.allclose(vec_10d[:3], plan_clear.source.xyz + np.array([1.0, 2.0, 3.0]))
+    assert np.allclose(vec_12d[:3], plan_clear.source.xyz + np.array([1.0, 2.0, 3.0]))
     # Target was in base_footprint (is_board_frame=False) -> mock_transform was NOT applied
-    assert np.allclose(vec_10d[3:6], plan_clear.target.xyz)
+    assert np.allclose(vec_12d[3:6], plan_clear.target.xyz)
     # One-hot is clear [0, 1, 0, 0]
-    assert np.allclose(vec_10d[6:10], [0.0, 1.0, 0.0, 0.0])
+    assert np.allclose(vec_12d[6:10], [0.0, 1.0, 0.0, 0.0])
+    # Latches default to [0, 0]
+    assert np.allclose(vec_12d[10:12], [0.0, 0.0])
+
+
+def test_assemble_environment_state_all_phases_and_override():
+    """Verify 12D assembly across all 4 tasks, phase combinations, and stow override."""
+    cfg = ChessboardConfig(
+        landmarks=LandmarksConfig(stow=[0.10, -0.20, 0.15]),
+    )
+    def dummy_tf(pt: np.ndarray) -> np.ndarray:
+        return pt
+
+    tasks = ["Pick c7, place c5", "Clear d4 to left onboard bin", "Pick d5", "Place e4"]
+    for task_str in tasks:
+        plan = resolve_episode_spatial_plan(task_str, cfg)
+
+        # Phase 0: [0, 0]
+        v0 = assemble_environment_state(plan, dummy_tf, has_grasped=0.0, has_released=0.0)
+        assert v0.shape == (12,)
+        assert np.allclose(v0[10:12], [0.0, 0.0])
+
+        # Phase 1: [1, 0]
+        v1 = assemble_environment_state(plan, dummy_tf, has_grasped=1.0, has_released=0.0)
+        assert np.allclose(v1[10:12], [1.0, 0.0])
+
+        # Phase 2: [1, 1] with override_to_stow=True
+        v2 = assemble_environment_state(
+            plan, dummy_tf, has_grasped=1.0, has_released=1.0, override_to_stow=True
+        )
+        assert np.allclose(v2[10:12], [1.0, 1.0])
+        # Crucial invariant: when override_to_stow=True, both src and tgt are set to stow_xyz
+        assert np.allclose(v2[:3], plan.stow_xyz)
+        assert np.allclose(v2[3:6], plan.stow_xyz)
+
+
+def _generate_synthetic_trajectory(
+    task_type: TaskType,
+    n_lead_idle: int = 15,
+    n_transport: int = 20,
+    n_tail_hold: int = 40,
+) -> list[np.ndarray]:
+    """Helper creating joint state trajectory [pan, lift, elbow, wrist_flex, wrist_roll, gripper]."""
+    stow_q = np.array([1.55, -1.73, 1.55, 0.0, 0.0, 0.0], dtype=np.float32)
+    traj: list[np.ndarray] = []
+
+    # 1. Leading idle frames at stow
+    for _ in range(n_lead_idle):
+        traj.append(stow_q.copy())
+
+    # 2. Movement onset & reach
+    # Open gripper and lift arm
+    reach_steps = 10
+    for s in range(reach_steps):
+        q = stow_q.copy()
+        q[0] += 0.05 * (s + 1)  # motion onset
+        q[1] = -1.73 + (1.2 * (s + 1) / reach_steps)  # lift reaches > -1.0
+        q[5] = 0.25  # gripper opened > 0.22
+        traj.append(q)
+
+    # 3. Grasp event (for MOVE, CLEAR, PICK)
+    if task_type != TaskType.PLACE:
+        q_grasp = traj[-1].copy()
+        q_grasp[5] = 0.05  # gripper closed < 0.12 while lift > -1.0
+        traj.append(q_grasp)
+
+    # 4. Transport piece
+    for s in range(n_transport):
+        q = traj[-1].copy()
+        q[0] += 0.02
+        traj.append(q)
+
+    # 5. Release event (for MOVE, CLEAR, PLACE)
+    if task_type != TaskType.PICK:
+        q_rel = traj[-1].copy()
+        q_rel[5] = 0.30  # gripper open > 0.22
+        traj.append(q_rel)
+
+    # 6. Retract to stow
+    retract_steps = 10
+    for s in range(retract_steps):
+        q = traj[-1].copy()
+        q[1] = -0.5 - (1.23 * (s + 1) / retract_steps)  # reaches -1.73
+        q[5] = 0.0
+        traj.append(q)
+
+    # 7. Trailing hold at stow (lift < -1.35)
+    for _ in range(n_tail_hold):
+        traj.append(stow_q.copy())
+
+    return traj
+
+
+def test_kinematic_milestones_and_conditioning_move():
+    """Verify milestone detection and frame conditioning for MOVE task."""
+    cb_cfg = ChessboardConfig()
+    plan = resolve_episode_spatial_plan("Pick c7, place c5", cb_cfg)
+    cfg = Config(
+        robot_type="lekiwi",
+        fps=25,
+        reference_topic="/cam",
+        default_max_age_s=0.1,
+        task="Pick c7, place c5",
+        chessboard=cb_cfg,
+        phase_conditioning=PhaseConditioningConfig(
+            trim_leading_idle_frames=5,
+            target_trailing_stow_frames=25,
+            motion_onset_delta_rad=0.03,
+            stow_settle_delta_rad=0.02,
+            arm_extended_lift_min_rad=-1.0,
+            gripper_open_min_rad=0.22,
+            gripper_closed_max_rad=0.12,
+            min_transport_duration_s=0.5,
+        ),
+    )
+
+    states = _generate_synthetic_trajectory(TaskType.MOVE, n_lead_idle=15, n_tail_hold=40)
+    raw_frames = [
+        {"observation.state": q.copy(), "action": q.copy()}
+        for q in states
+    ]
+
+    milestones = detect_kinematic_milestones(states, TaskType.MOVE, cfg.phase_conditioning, 25)
+    assert milestones.onset_idx == 15
+    assert milestones.grasp_idx is not None and milestones.grasp_idx > milestones.onset_idx
+    assert milestones.release_idx is not None and milestones.release_idx > milestones.grasp_idx
+    assert milestones.settle_idx > milestones.release_idx
+
+    conditioned = condition_episode_frames(raw_frames, plan, cfg)
+
+    # Trimmed leading idle: exactly 5 frames before onset (onset was 15 -> start at 10)
+    # Trailing hold: clamped from 40 down to exactly 25 frames
+    assert len(conditioned) > 0
+    # First frame has [0, 0] latch
+    assert np.allclose(conditioned[0]["observation.environment_state"][10:12], [0.0, 0.0])
+    # Last frame has [1, 1] latch and stow override
+    assert np.allclose(conditioned[-1]["observation.environment_state"][10:12], [1.0, 1.0])
+    assert np.allclose(conditioned[-1]["observation.environment_state"][:3], plan.stow_xyz)
+    assert np.allclose(conditioned[-1]["observation.environment_state"][3:6], plan.stow_xyz)
+
+
+def test_kinematic_conditioning_pick_place_and_padding():
+    """Verify PICK (no release), PLACE (already grasped), and tail padding when hold < 25 frames."""
+    cb_cfg = ChessboardConfig()
+    cfg = Config(
+        robot_type="lekiwi",
+        fps=25,
+        reference_topic="/cam",
+        default_max_age_s=0.1,
+        task="test",
+        chessboard=cb_cfg,
+        phase_conditioning=PhaseConditioningConfig(
+            trim_leading_idle_frames=5,
+            target_trailing_stow_frames=25,
+        ),
+    )
+
+    # 1. PICK test (has_released is always 0.0, overrides to stow after grasp)
+    plan_pick = resolve_episode_spatial_plan("Pick d5", cb_cfg)
+    states_pick = _generate_synthetic_trajectory(TaskType.PICK, n_lead_idle=10, n_tail_hold=30)
+    raw_pick = [{"observation.state": q.copy(), "action": q.copy()} for q in states_pick]
+    cond_pick = condition_episode_frames(raw_pick, plan_pick, cfg)
+
+    # Final frame of PICK must have has_grasped=1.0 and has_released=0.0
+    assert np.allclose(cond_pick[-1]["observation.environment_state"][10:12], [1.0, 0.0])
+    assert np.allclose(cond_pick[-1]["observation.environment_state"][:3], plan_pick.stow_xyz)
+    assert np.allclose(cond_pick[-1]["observation.environment_state"][3:6], plan_pick.stow_xyz)
+
+    # 2. PLACE test (starts with has_grasped=1.0, switches to [1, 1] after release)
+    plan_place = resolve_episode_spatial_plan("Place e4", cb_cfg)
+    states_place = _generate_synthetic_trajectory(TaskType.PLACE, n_lead_idle=10, n_tail_hold=30)
+    raw_place = [{"observation.state": q.copy(), "action": q.copy()} for q in states_place]
+    cond_place = condition_episode_frames(raw_place, plan_place, cfg)
+
+    assert np.allclose(cond_place[0]["observation.environment_state"][10:12], [1.0, 0.0])
+    assert np.allclose(cond_place[-1]["observation.environment_state"][10:12], [1.0, 1.0])
+
+    # 3. Trailing stow hold padding (n_tail < 25)
+    states_short_tail = _generate_synthetic_trajectory(TaskType.MOVE, n_lead_idle=10, n_tail_hold=5)
+    raw_short = [{"observation.state": q.copy(), "action": np.ones(6, dtype=np.float32)} for q in states_short_tail]
+    cond_short = condition_episode_frames(raw_short, resolve_episode_spatial_plan("Pick c7, place c5", cb_cfg), cfg)
+
+    # Check that padded frames at end have action == observation.state (zero velocity attractor)
+    assert np.allclose(cond_short[-1]["action"], cond_short[-1]["observation.state"])
+
+
+def test_milestone_detection_raises_value_error_on_missing_events():
+    """Verify explicit ValueError when required events are missing from trajectory."""
+    pc = PhaseConditioningConfig()
+    stow_q = np.array([1.55, -1.73, 1.55, 0.0, 0.0, 0.0], dtype=np.float32)
+
+    # Trajectory that stays at stow (never grasps)
+    idle_states = [stow_q.copy() for _ in range(50)]
+    with pytest.raises(ValueError) as exc:
+        detect_kinematic_milestones(idle_states, TaskType.MOVE, pc, 25)
+    assert "Missing grasp event" in str(exc.value)
+
+    # Empty states
+    with pytest.raises(ValueError):
+        detect_kinematic_milestones([], TaskType.MOVE, pc, 25)
