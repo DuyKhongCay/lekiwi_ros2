@@ -1,87 +1,122 @@
-# LeRobot Policy Server (ZeroMQ) for LeKiwi Robot
+# LeRobot Policy Server (ZeroMQ) for LeKiwi Robot (LeRobot v0.6.1)
 
-GPU/Host-side policy inference server for **LeKiwi ROS 2**, serving [HuggingFace LeRobot](https://github.com/huggingface/lerobot) policy predictions over **ZeroMQ (ZMQ)**.
+High-performance GPU/Host policy inference server for **LeKiwi ROS 2**, serving [HuggingFace LeRobot v0.6.1](https://github.com/huggingface/lerobot) policy predictions over **ZeroMQ (ZMQ)**.
 
-This package is optimized for real-time robotic teleoperation and autonomous manipulation (e.g. ACT, SmolVLA, Diffusion Policy), allowing policies to run on a dedicated GPU workstation or cloud instance (Vast.ai, RunPod) and communicate with the robot with low latency.
-
----
-
-## Key Features
-
-- **Pure ZeroMQ Transport**: Single high-performance `zmq.REP` socket handling handshakes, dynamic policy configuration, streaming inference, and graceful teardown. No gRPC/Protobuf compilation or dependencies.
-- **Binary Wire Protocol**: Low latency serialization using `msgpack` metadata header + raw contiguous array bytes (no Python `pickle`).
-- **Dynamic Observation Handling**: Supports stereo/wrist cameras (JPEG compressed or raw RGB) and joint state telemetry without hardcoded joint dimensions.
-- **VLA Aspect-Ratio Preservation**: Avoids premature image resizing to ensure compatibility with vision-language-action policies (SmolVLA, Pi0).
-- **Dual Build Compatibility**: Fully compatible with PyPA standards (`pyproject.toml`, PEP 621, PEP 561) and ROS 2 build tools (`colcon build`).
+This package adheres strictly to **Clean Code and SOLID principles** with a **Zero Backward-Compatibility** posture:
+- 100% pure Python GPU host stack (isolated with `COLCON_IGNORE` to avoid contaminating ROS 2 workspace builds).
+- Elimination of mock/fallback paths and legacy gRPC artifacts.
+- Native integration with LeRobot v0.6.1 processors and policies (`ACTPolicy`, `SmolVLA`, `Diffusion`).
+- Full support for multi-modal observations including compressed JPEG image streams (`wrist`, `side`, `overhead`), `observation.state` (6D), and `observation.environment_state` (10D) as trained in `act_lekiwi_chess`.
 
 ---
 
-## Installation
+## 1. Architecture
 
-### Option 1: Editable Install (Development)
+```mermaid
+flowchart LR
+    subgraph Client["lekiwi_inference (ROS 2 Client)"]
+        Node["AsyncRos2ClientNode"] --> ZmqReq["ZmqPolicyTransport (REQ)"]
+    end
 
-```bash
-cd /root/docker_ws/lekiwi_ros2/lerobot_policy_server
-pip install -e .
-```
+    subgraph Server["lerobot_policy_server (Pure Python GPU Host)"]
+        ZmqRep["server.py: ZmqPolicyServer (REP)"]
+        Proto["protocol.py: Wire Codec"]
+        Eng["engine.py: InferenceEngine"]
+        Cfg["config.py: ZmqServerConfig"]
+    end
 
-### Option 2: Build via Colcon in ROS 2 Workspace
+    subgraph LeRobot["lerobot v0.6.1 + act_lekiwi_chess"]
+        Helpers["lerobot.async_inference.helpers"]
+        Factory["get_policy_class / make_pre_post_processors"]
+        ACT["ACTPolicy (chunk_size=40)"]
+    end
 
-```bash
-cd /root/docker_ws/lekiwi_ros2
-colcon build --packages-select lerobot_policy_server --symlink-install
-source install/setup.bash
+    ZmqReq <==>|"msgpack + raw bytes (JPEG/float32)"| ZmqRep
+    ZmqRep --> Proto
+    ZmqRep --> Eng
+    Eng --> Factory --> ACT
+    Proto --> Helpers
+    Eng --> Helpers
 ```
 
 ---
 
-## Running the Server
+## 2. Directory Structure
 
-### Using the Console Script:
-
-```bash
-lerobot-policy-server --host 0.0.0.0 --port 8090 --fps 50 --device cuda
+```text
+lekiwi_ros2/lerobot_policy_server/
+├── COLCON_IGNORE                          # Prevents ROS 2 colcon build from scanning this GPU package
+├── pyproject.toml                         # Standard PEP 621 metadata (Python >=3.12, torch, cv2, pyzmq, msgpack)
+├── README.md                              # Complete architectural & operational documentation
+├── src/
+│   └── lerobot_policy_server/
+│       ├── __init__.py                    # Public API exports
+│       ├── __main__.py                    # Enables `python -m lerobot_policy_server`
+│       ├── py.typed                       # PEP 561 typing marker
+│       ├── config.py                      # ZmqServerConfig & InferenceEngineConfig
+│       ├── protocol.py                    # Binary wire codec matching lekiwi_inference transport
+│       ├── engine.py                      # Pure LeRobot v0.6.1 inference pipeline
+│       ├── server.py                      # Synchronous ZeroMQ REP server with background thread support
+│       └── cli.py                         # CLI entry point (--host, --port, --fps, --log-level)
+└── tests/
+    ├── conftest.py                        # Fixtures matching act_lekiwi_chess (3 JPEG streams, 6D state, 10D env_state)
+    ├── test_protocol.py                   # Two-way wire compatibility tests with lekiwi_inference
+    ├── test_engine.py                     # Direct policy execution test with act_lekiwi_chess
+    └── test_server.py                     # End-to-end integration tests over ZeroMQ sockets
 ```
 
-### Using Python Module:
+---
+
+## 3. Running the Server
+
+### Option A: Using Pixi (Recommended)
+
+From `lekiwi_ros2/`:
 
 ```bash
-python3 -m lerobot_policy_server --host 0.0.0.0 --port 8090 --fps 50 --device cuda
+pixi run -e lerobot server
 ```
 
-### Available CLI Options:
+### Option B: Direct Python Execution
+
+```bash
+python -m lerobot_policy_server.cli --host 0.0.0.0 --port 8090 --fps 30 --log-level INFO
+```
+
+### Available CLI Options
 
 | Flag | Default | Environment Variable | Description |
 | :--- | :--- | :--- | :--- |
-| `--host` | `0.0.0.0` | `POLICY_SERVER_HOST` | Host address to bind ZMQ socket |
+| `--host` | `0.0.0.0` | `POLICY_SERVER_HOST` | Host IP address to bind ZeroMQ REP socket |
 | `--port` | `8090` | `POLICY_SERVER_PORT` | TCP port |
 | `--fps` | `30` | `POLICY_SERVER_FPS` | Target inference frame rate |
-| `--inference-latency` | `0.033` | `POLICY_SERVER_INFERENCE_LATENCY` | Target inference latency budget (s) |
-| `--device` | `cuda` | `POLICY_SERVER_DEVICE` | Compute device (`cuda` or `cpu`) |
-| `--log-level` | `INFO` | `LOGLEVEL` | Logging level (`DEBUG`, `INFO`, `WARNING`) |
+| `--log-level` | `INFO` | `LOGLEVEL` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
 ---
 
-## Wire Protocol Specification
+## 4. Wire Protocol Specification
 
-Communication uses ZeroMQ `REQ` (Client / Robot) and `REP` (Server).
+Communication uses ZeroMQ `REQ` (Robot / Edge client) and `REP` (GPU host server).
 
 ### Message Types:
 
 1. **`handshake`**:
-   - Client sends `{"type": "handshake"}`
-   - Server resets session state and returns `{"status": "ok"}`
+   - Request: `{"type": "handshake"}`
+   - Response: `{"status": "ok"}`
 2. **`policy_config`**:
-   - Client sends `{"type": "policy_config", "data": <serialized_remote_policy_config>}`
-   - Server loads model weights and returns `{"status": "ok"}`
+   - Request: `{"type": "policy_config", "data": <msgpack_serialized_RemotePolicyConfig>}`
+   - Response: `{"status": "ok"}`
 3. **`infer`**:
-   - Client sends `{"type": "infer", "data": <binary_timed_observation>}`
-   - Server predicts action chunk and returns `{"status": "ok", "actions": <binary_actions_chunk>}`
+   - Request: `{"type": "infer", "data": <binary_timed_observation>}`
+   - Response: `{"status": "ok", "actions": <binary_actions_chunk>}`
 4. **`disconnect`**:
-   - Client sends `{"type": "disconnect"}`
-   - Server releases policy, cleans CUDA cache (`torch.cuda.empty_cache()`), returns `{"status": "ok"}`
+   - Request: `{"type": "disconnect"}`
+   - Response: `{"status": "ok"}`
 
 ### Binary Observation Format:
+
 ```
-[4 bytes: uint32-LE header length] + [msgpack metadata header] + [raw binary array/tensor parts]
+[4 bytes: uint32-LE header length] + [msgpack metadata header] + [concatenated raw array / image bytes]
 ```
+- JPEG images are transmitted with `dtype="bytes"` and `shape=[len(bytes)]` in `header["arrays"]`.
+- The server automatically decodes JPEGs to RGB uint8 without distortion and converts states to PyTorch float32 tensors.

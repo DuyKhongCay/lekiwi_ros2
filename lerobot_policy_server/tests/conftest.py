@@ -12,33 +12,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pytest fixtures for lerobot_policy_server testing."""
+"""Pytest fixtures for lerobot_policy_server testing matching act_lekiwi_chess."""
+
+from __future__ import annotations
 
 import time
+
+import cv2
 import numpy as np
 import pytest
 
-from lerobot_policy_server.config import ZmqServerConfig
-from lerobot_policy_server.protocol import (
+from lerobot.async_inference.helpers import (
     RemotePolicyConfig,
     TimedAction,
     TimedObservation,
 )
 
 
+def make_dummy_jpeg(h: int = 384, w: int = 384) -> bytes:
+    """Helper to generate a valid JPEG byte sequence."""
+    img = np.zeros((h, w, 3), dtype=np.uint8)
+    img[:, :] = (120, 180, 240)
+    success, enc = cv2.imencode(".jpg", img)
+    if not success:
+        raise RuntimeError("Failed to encode dummy JPEG")
+    return enc.tobytes()
+
+
 @pytest.fixture
 def dummy_timed_observation() -> TimedObservation:
-    """Fixture providing a mock TimedObservation with state and image."""
-    img_rgb = np.zeros((64, 64, 3), dtype=np.uint8)
-    joint_state = np.array([0.1, -0.2, 0.5, 0.0, 1.2, -0.8], dtype=np.float32)
+    """Fixture providing a TimedObservation matching act_lekiwi_chess schema."""
+    jpeg_bytes = make_dummy_jpeg(384, 384)
+    state = np.array([0.1, -0.2, 0.5, 0.0, 1.2, -0.8], dtype=np.float32)
+    env_state = np.array([1.0, 0.0, -1.0, 0.5, 0.2, -0.2, 0.0, 0.1, 0.9, -0.5], dtype=np.float32)
 
     return TimedObservation(
         timestamp=time.time(),
         timestep=42,
         observation={
-            "observation.images.camera_overhead": img_rgb,
-            "observation.state": joint_state,
-            "task": "pick_and_place",
+            "observation.images.wrist": jpeg_bytes,
+            "observation.images.side": jpeg_bytes,
+            "observation.images.overhead": jpeg_bytes,
+            "observation.state": state,
+            "observation.environment_state": env_state,
+            "task": "play chess",
         },
         must_go=False,
     )
@@ -46,32 +63,26 @@ def dummy_timed_observation() -> TimedObservation:
 
 @pytest.fixture
 def dummy_actions_chunk() -> list[TimedAction]:
-    """Fixture providing a chunk of predicted TimedActions."""
+    """Fixture providing a chunk of 40 predicted TimedActions (6D)."""
     t0 = time.time()
-    dt = 0.02
-    actions = []
-    for i in range(10):
-        actions.append(
-            TimedAction(
-                timestamp=t0 + i * dt,
-                timestep=i,
-                action=np.full(6, fill_value=float(i) * 0.1, dtype=np.float32),
-            )
+    dt = 1.0 / 30.0
+    return [
+        TimedAction(
+            timestamp=t0 + i * dt,
+            timestep=i,
+            action=np.full(6, fill_value=float(i) * 0.05, dtype=np.float32),
         )
-    return actions
+        for i in range(40)
+    ]
 
 
 @pytest.fixture
 def dummy_policy_config() -> RemotePolicyConfig:
-    """Fixture providing a sample RemotePolicyConfig."""
+    """Fixture providing RemotePolicyConfig pointing to act_lekiwi_chess."""
     return RemotePolicyConfig(
-        repo_id="lekiwi/act_chessboard_manipulation",
         policy_type="act",
-        lerobot_features={
-            "observation.state": {"dtype": "float32", "shape": [6], "names": ["j1", "j2", "j3", "j4", "j5", "j6"]},
-            "action": {"dtype": "float32", "shape": [6], "names": ["a1", "a2", "a3", "a4", "a5", "a6"]},
-        },
-        fps=50.0,
-        actions_per_chunk=10,
-        chunk_size_threshold=0.6,
+        pretrained_name_or_path="/home/duykhongcay/lerobot_ws/act_lekiwi_chess",
+        lerobot_features={},
+        actions_per_chunk=40,
+        device="cpu",
     )

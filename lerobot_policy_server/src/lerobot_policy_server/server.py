@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ZeroMQ Policy Server implementation for LeKiwi robot."""
+"""ZeroMQ Policy Server implementation for LeKiwi robot (LeRobot v0.6.1)."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ import threading
 import time
 from typing import Any
 
+import msgpack
 import zmq
 
 from lerobot_policy_server.config import InferenceEngineConfig, ZmqServerConfig
@@ -28,7 +29,6 @@ from lerobot_policy_server.engine import InferenceEngine
 from lerobot_policy_server.protocol import (
     deserialize_observation,
     deserialize_policy_config,
-    msgpack,
     serialize_actions,
 )
 
@@ -54,9 +54,6 @@ class ZmqPolicyServer:
         self.engine = engine or InferenceEngine(
             InferenceEngineConfig(
                 fps=self.config.fps,
-                inference_latency=self.config.inference_latency,
-                obs_queue_timeout=self.config.obs_queue_timeout,
-                device=self.config.device,
             )
         )
         self._running: bool = False
@@ -82,7 +79,10 @@ class ZmqPolicyServer:
         except Exception as exc:
             logger.error("Failed to decode message envelope: %s", exc)
             rep_socket.send(
-                msgpack.packb({"status": "error", "message": f"Malformed envelope: {exc}"}, use_bin_type=True)
+                msgpack.packb(
+                    {"status": "error", "message": f"Malformed envelope: {exc}"},
+                    use_bin_type=True,
+                )
             )
             return
 
@@ -139,7 +139,7 @@ class ZmqPolicyServer:
                     total_ms,
                     t_infer_ms,
                     t_ser_ms,
-                    metrics["avg_fps"],
+                    metrics.get("avg_fps", 0.0),
                 )
 
                 rep_socket.send(
@@ -155,7 +155,7 @@ class ZmqPolicyServer:
                 )
 
         elif msg_type == "disconnect":
-            logger.info("Client requested disconnect. Resetting session.")
+            logger.info("Client requested disconnect. Clearing policy session.")
             self.engine.clear_session()
             rep_socket.send(msgpack.packb({"status": "ok"}, use_bin_type=True))
 
@@ -169,15 +169,16 @@ class ZmqPolicyServer:
             )
 
     def _run_loop(self, rep_socket: zmq.Socket) -> None:
-        """Main event loop running on the worker thread."""
+        """Main event loop running on worker thread."""
         poller = zmq.Poller()
         poller.register(rep_socket, zmq.POLLIN)
 
-        logger.info("ZmqPolicyServer event loop started on %s:%d", self.config.host, self._bound_port)
+        logger.info(
+            "ZmqPolicyServer event loop started on %s:%d", self.config.host, self._bound_port
+        )
 
         while self._running:
             try:
-                # Poll with 100ms timeout to allow checking self._running
                 socks = dict(poller.poll(timeout=100))
                 if rep_socket in socks and socks[rep_socket] == zmq.POLLIN:
                     msg = rep_socket.recv()

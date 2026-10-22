@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""lerobot_policy_server — ZeroMQ policy inference server for LeKiwi robot."""
+"""lerobot_policy_server — ZeroMQ policy inference server for LeKiwi robot (LeRobot v0.6.1)."""
 
 from lerobot_policy_server.config import InferenceEngineConfig, ZmqServerConfig
 from lerobot_policy_server.engine import InferenceEngine
@@ -20,14 +20,16 @@ from lerobot_policy_server.protocol import (
     RemotePolicyConfig,
     TimedAction,
     TimedObservation,
+    deserialize_actions,
     deserialize_observation,
     deserialize_policy_config,
     serialize_actions,
     serialize_observation,
+    serialize_policy_config,
 )
 from lerobot_policy_server.server import ZmqPolicyServer
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "__version__",
     "ZmqServerConfig",
@@ -38,7 +40,9 @@ __all__ = [
     "TimedAction",
     "RemotePolicyConfig",
     "serialize_actions",
-    "deserialize_observation",
+    "deserialize_actions",
     "serialize_observation",
+    "deserialize_observation",
+    "serialize_policy_config",
     "deserialize_policy_config",
 ]
