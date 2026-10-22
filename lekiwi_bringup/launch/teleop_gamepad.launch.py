@@ -31,7 +31,7 @@ def generate_launch_description():
     )
 
     jog_config_file = PathJoinSubstitution(
-        [bringup_share, "config", "control", "cartesian_jog_server.yaml"]
+        [bringup_share, "config", "control", "orchestrator.yaml"]
     )
 
     # 2. Declare launch arguments
@@ -39,11 +39,11 @@ def generate_launch_description():
         "use_sim_time", default_value="false", description="Use simulation clock"
     )
 
-    arm_teleop_arg = DeclareLaunchArgument(
-        "arm_teleop",
-        default_value="true",
-        description="Start manipulation_action_server and cartesian_jog_server_node for LeKiwi arm",
-    )
+    # arm_teleop_arg = DeclareLaunchArgument(
+    #     "arm_teleop",
+    #     default_value="true",
+    #     description="Start manipulation_action_server and cartesian_jog_server_node for LeKiwi arm",
+    # )
 
     # 3. Define joy driver and joy_teleop nodes
     joy_node = Node(
@@ -77,14 +77,14 @@ def generate_launch_description():
             {"use_sim_time": LaunchConfiguration("use_sim_time")},
         ],
         output="screen",
-        condition=IfCondition(LaunchConfiguration("arm_teleop")),
+        # condition=IfCondition(LaunchConfiguration("arm_teleop")),
     )
 
     # 4. Assemble LaunchDescription
     return LaunchDescription(
         [
             use_sim_time_arg,
-            arm_teleop_arg,
+            # arm_teleop_arg,
             joy_node,
             joy_teleop_node,
             jog_server_node,

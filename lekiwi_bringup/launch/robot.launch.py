@@ -144,6 +144,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "manipulation": LaunchConfiguration("manipulation"),
             "arm_controller": LaunchConfiguration("arm_controller"),
             "base_controller": LaunchConfiguration("base_controller"),
             "imu_broadcaster": LaunchConfiguration("imu_broadcaster"),
