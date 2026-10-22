@@ -314,3 +314,7 @@ void CartesianJogServerNode::handle_toggle_gripper(
 }
 
 }  // namespace lekiwi_motion::arm
+
+#include "rclcpp_components/register_node_macro.hpp"
+RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_motion::arm::CartesianJogServerNode)
+

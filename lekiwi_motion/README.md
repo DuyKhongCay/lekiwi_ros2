@@ -237,8 +237,7 @@ flowchart TD
 ### 6. Configuration Parameters (Summary)
 
 Node parameters are centralized in `lekiwi_bringup` configuration YAMLs:
-- **`orchestrator.yaml`**: SSOT for universal coordinate frames (`map`, `odom`, `base_footprint`, `chessboard_frame`, `gripperframe`), physical arm joint topology, gripper open/closed bounds, readiness variance and velocity thresholds, and landmark named poses (`approach`, `stow`, `clear_left`, `clear_right`).
-- **`cartesian_jog_server.yaml`**: Configures jog loop frequency (`publish_rate_hz: 50.0`), spline point step (`point_dt_s: 0.08`), command timeout (`stale_timeout_s: 0.25`), LPF smoothing (`lpf_alpha: 0.85`), and joint velocity limits (`max_joint_vel_rad_s: 2.0`).
+- **`orchestrator.yaml`**: SSOT for universal coordinate frames (`map`, `odom`, `base_footprint`, `chessboard_frame`, `gripperframe`), physical arm joint topology, gripper open/closed bounds, readiness variance and velocity thresholds, landmark named poses (`approach`, `stow`, `clear_left`, `clear_right`), and interactive jog parameters (`publish_rate_hz`, `point_dt_s`, `stale_timeout_s`, `lpf_alpha`, `max_joint_vel_rad_s`).
 
 ---
 
