@@ -14,7 +14,8 @@
 
 /**
  * @file arm_trajectory_executor.hpp
- * @brief Thread-safe arm trajectory actuation, joint telemetry, and TF-backed analytical IK resolver.
+ * @brief Thread-safe arm trajectory actuation, kinematics ownership, landmark poses,
+ *        and controller action execution for LeKiwi arm.
  * @author LeKiwi Labs
  * @copyright Apache-2.0
  */
@@ -43,10 +44,31 @@
 #include <tf2_ros/transform_listener.h>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
+#include "lekiwi_motion/arm/arm_motion_planner.hpp"
 #include "lekiwi_motion/kinematics/workspace_kinematics.hpp"
 
 namespace lekiwi_motion::arm
 {
+
+/**
+ * @brief Thread-safe ROS 2 parameter helper: returns existing parameter value or declares with default.
+ * @tparam T Parameter type.
+ * @param[in] node Pointer to ROS 2 node.
+ * @param[in] name Parameter key.
+ * @param[in] default_val Fallback value if node does not have parameter.
+ * @return Resolved parameter value.
+ */
+template <typename T>
+T declare_or_get_param(rclcpp::Node * node, const std::string & name, const T & default_val)
+{
+  if (!node) {
+    return default_val;
+  }
+  if (!node->has_parameter(name)) {
+    return node->declare_parameter<T>(name, default_val);
+  }
+  return node->get_parameter(name).get_value<T>();
+}
 
 /**
  * @struct ArmTrajectoryExecutorConfig
@@ -60,11 +82,21 @@ struct ArmTrajectoryExecutorConfig
   };
   std::string controller_action_name{"/arm_trajectory_controller/follow_joint_trajectory"};
   std::string joint_states_topic{"/joint_states"};
+  std::string robot_description_topic{"/robot_description"};
   std::string board_frame{"chessboard_frame"};
   std::string base_frame{"base_footprint"};
   std::string tip_frame{"gripperframe"};
   double default_pitch{-1.57079632679};
   double default_roll{0.0};
+  double default_velocity{1.5};
+  double sampling_rate_hz{50.0};
+  NamedPosesConfig named_poses{
+    {0.0414, -0.0199, 0.0598, -0.0552, -1.57, 0.0798},       // approach
+    {1.5616, -1.7411, 1.5570, 0.7747, -2.7888, 0.0813},       // stow
+    {-1.9804, -0.3375, 0.3927, 1.4972, -1.5631, 0.0828},     // clear_left
+    {2.0632, -0.2301, 0.3405, 1.5079, -1.5723, 0.0828}       // clear_right
+  };
+  GripperConfig gripper_cfg{1.50, 0.00};
   bool mock_execution{false};
 };
 
@@ -75,39 +107,23 @@ struct ArmTrajectoryExecutorConfig
 class TrajectoryExecutionGuard
 {
 public:
-  using TransitionCallback = std::function<void(bool /*is_busy*/)>;
-
-  explicit TrajectoryExecutionGuard(
-    std::atomic<bool> & busy_flag,
-    TransitionCallback on_transition = nullptr) noexcept
+  explicit TrajectoryExecutionGuard(std::atomic<bool> & busy_flag) noexcept
   : busy_flag_(&busy_flag),
-    on_transition_(std::move(on_transition)),
     acquired_(false)
   {
     bool expected = false;
     acquired_ = busy_flag_->compare_exchange_strong(expected, true, std::memory_order_acq_rel);
-    if (acquired_ && on_transition_) {
-      try {
-        on_transition_(true);
-      } catch (...) {}
-    }
   }
 
   ~TrajectoryExecutionGuard()
   {
     if (acquired_ && busy_flag_) {
       busy_flag_->store(false, std::memory_order_release);
-      if (on_transition_) {
-        try {
-          on_transition_(false);
-        } catch (...) {}
-      }
     }
   }
 
   TrajectoryExecutionGuard(TrajectoryExecutionGuard && other) noexcept
   : busy_flag_(other.busy_flag_),
-    on_transition_(std::move(other.on_transition_)),
     acquired_(other.acquired_)
   {
     other.acquired_ = false;
@@ -119,14 +135,8 @@ public:
     if (this != &other) {
       if (acquired_ && busy_flag_) {
         busy_flag_->store(false, std::memory_order_release);
-        if (on_transition_) {
-          try {
-            on_transition_(false);
-          } catch (...) {}
-        }
       }
       busy_flag_ = other.busy_flag_;
-      on_transition_ = std::move(other.on_transition_);
       acquired_ = other.acquired_;
       other.acquired_ = false;
       other.busy_flag_ = nullptr;
@@ -141,19 +151,22 @@ public:
 
 private:
   std::atomic<bool> * busy_flag_{nullptr};
-  TransitionCallback on_transition_{nullptr};
   bool acquired_{false};
 };
 
 /**
  * @class ArmTrajectoryExecutor
- * @brief Manages joint state telemetry, TF-transformed analytical IK, and trajectory execution.
+ * @brief Centralized execution engine managing kinematics solver, landmark poses,
+ *        joint telemetry, trajectory interpolation, and action client execution.
  */
 class ArmTrajectoryExecutor
 {
 public:
   using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
   using GoalHandleFJT = rclcpp_action::ClientGoalHandle<FollowJointTrajectory>;
+  using KinematicsCallback = std::function<void(
+    const std::shared_ptr<workspace::SO101AnalyticalSolver> &,
+    const workspace::KinematicsModel &)>;
 
   ArmTrajectoryExecutor(rclcpp::Node * node, ArmTrajectoryExecutorConfig config);
   ~ArmTrajectoryExecutor();
@@ -162,35 +175,100 @@ public:
   ArmTrajectoryExecutor & operator=(const ArmTrajectoryExecutor &) = delete;
 
   void stop() noexcept;
-  void accept_robot_description(const std::string & urdf_xml);
 
+  // URDF & Kinematics Lifecycle
+  bool accept_robot_description(const std::string & urdf_xml);
+  void set_kinematics_callback(KinematicsCallback cb);
+
+  [[nodiscard]] bool is_kinematics_initialized() const noexcept
+  {
+    return is_kinematics_initialized_.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] bool has_kinematics_failed() const noexcept
+  {
+    return has_kinematics_failed_.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] std::string kinematics_error_msg() const;
+  [[nodiscard]] std::shared_ptr<workspace::SO101AnalyticalSolver> analytical_solver() const;
+  [[nodiscard]] workspace::KinematicsModel kinematics_model() const;
+
+  // Joint Telemetry
   [[nodiscard]] const std::vector<std::string> & arm_joints() const noexcept
   {
     return config_.arm_joints;
   }
 
+  [[nodiscard]] bool has_joint_states() const noexcept
+  {
+    return has_joint_states_.load(std::memory_order_acquire);
+  }
+
   [[nodiscard]] std::vector<double> get_current_positions_or_default() const;
+  [[nodiscard]] std::optional<std::array<double, 5>> get_active_arm_positions() const;
 
   [[nodiscard]] bool is_trajectory_busy() const noexcept
   {
     return is_trajectory_busy_.load(std::memory_order_relaxed);
   }
 
-  [[nodiscard]] std::atomic<bool> & busy_flag() noexcept
-  {
-    return is_trajectory_busy_;
-  }
+  // Landmark & Gripper Configuration
+  [[nodiscard]] std::optional<std::vector<double>> get_named_pose(const std::string & name) const;
+  [[nodiscard]] GripperConfig gripper_config() const;
+  [[nodiscard]] double clamp_gripper(double target_rad) const;
+  [[nodiscard]] double gripper_open_rad() const;
+  [[nodiscard]] double gripper_closed_rad() const;
 
+  // JIT Inverse Kinematics
   [[nodiscard]] std::optional<std::vector<double>> resolve_point_ik(
     const geometry_msgs::msg::Point & point,
     const std::string & target_frame,
     double clamped_gripper_rad) const;
+
+  // Phase Plan Building & Trajectory Interpolation
+  [[nodiscard]] std::unordered_map<std::string, std::vector<double>> build_phase_targets(
+    const std::vector<double> & pick_approach,
+    const std::vector<double> & pick_descend,
+    const std::vector<double> & place_approach,
+    const std::vector<double> & place_descend) const;
+
+  [[nodiscard]] std::unordered_map<std::string, std::vector<double>> build_clear_targets(
+    const std::vector<double> & pick_approach,
+    const std::vector<double> & pick_descend,
+    arm::ClearBinSide side) const;
+
+  [[nodiscard]] std::unordered_map<std::string, std::vector<double>> build_pick_targets(
+    const std::vector<double> & pick_approach,
+    const std::vector<double> & pick_descend) const;
+
+  [[nodiscard]] std::unordered_map<std::string, std::vector<double>> build_place_targets(
+    const std::vector<double> & place_approach,
+    const std::vector<double> & place_descend) const;
+
+  [[nodiscard]] trajectory_msgs::msg::JointTrajectory plan_trajectory_at_velocity(
+    const std::vector<double> & start_joints,
+    const std::vector<double> & target_joints,
+    double target_velocity_rad_s = -1.0) const;
+
+  // Synchronous High-Level Execution
+  [[nodiscard]] std::pair<bool, std::string> execute_joint_target(
+    const std::vector<double> & target_positions,
+    const std::string & label = "",
+    double velocity = -1.0,
+    std::function<bool()> is_canceling = nullptr);
+
+  [[nodiscard]] std::pair<bool, std::string> execute_named_pose(
+    const std::string & name,
+    double velocity = -1.0,
+    std::function<bool()> is_canceling = nullptr);
 
   [[nodiscard]] std::pair<bool, std::string> execute_trajectory(
     const trajectory_msgs::msg::JointTrajectory & traj,
     std::function<bool()> is_canceling = nullptr);
 
 private:
+  void init_parameters();
   void init_trajectory_client_and_subscribers();
   void init_kinematics_and_tf();
   void on_robot_description(const std_msgs::msg::String::ConstSharedPtr msg);
@@ -215,20 +293,34 @@ private:
   rclcpp::Node * node_;
   ArmTrajectoryExecutorConfig config_;
 
+  // Motion Planning & Landmark Poses
+  mutable std::mutex planner_mutex_;
+  arm::ArmMotionPlanner motion_planner_;
+
+  // Controller Client & Subscriptions
   rclcpp::CallbackGroup::SharedPtr cb_group_controller_client_;
   rclcpp::CallbackGroup::SharedPtr cb_group_joint_state_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr controller_client_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_desc_sub_;
 
+  // Telemetry Cache
   mutable std::mutex state_mutex_;
   std::unordered_map<std::string, double> current_joints_;
+  std::atomic<bool> has_joint_states_{false};
 
+  // Kinematics & TF
   mutable std::mutex kinematics_mutex_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-  std::unique_ptr<workspace::SO101AnalyticalSolver> analytical_solver_;
+  std::shared_ptr<workspace::SO101AnalyticalSolver> analytical_solver_;
+  workspace::KinematicsModel kinematics_model_{};
+  std::atomic<bool> is_kinematics_initialized_{false};
+  std::atomic<bool> has_kinematics_failed_{false};
+  std::string kinematics_error_msg_{};
+  KinematicsCallback kinematics_callback_{nullptr};
 
+  // State
   std::atomic<bool> is_trajectory_busy_{false};
   std::atomic<bool> is_shutting_down_{false};
 };

@@ -112,16 +112,6 @@ struct NamedPosesConfig
     if (key == "clear_right") return clear_right;
     return std::nullopt;
   }
-
-  [[nodiscard]] std::unordered_map<std::string, std::vector<double>> to_map() const
-  {
-    return {
-      {"approach", approach},
-      {"stow", stow},
-      {"clear_left", clear_left},
-      {"clear_right", clear_right}
-    };
-  }
 };
 
 /**
@@ -152,19 +142,9 @@ public:
     double default_rate_hz = 50.0);
 
   [[nodiscard]] double default_rate_hz() const noexcept { return default_rate_hz_; }
-  void set_default_rate_hz(double rate_hz)
-  {
-    if (rate_hz <= 0.0) {
-      throw std::invalid_argument("rate_hz must be positive.");
-    }
-    default_rate_hz_ = rate_hz;
-  }
-
   [[nodiscard]] const std::vector<std::string> & arm_joints() const noexcept { return arm_joints_; }
-  void set_arm_joints(std::vector<std::string> joints) noexcept { arm_joints_ = std::move(joints); }
 
   [[nodiscard]] const GripperConfig & gripper_config() const noexcept { return gripper_cfg_; }
-  void set_gripper_config(GripperConfig cfg) noexcept { gripper_cfg_ = cfg; }
   [[nodiscard]] double gripper_open_rad() const noexcept { return gripper_cfg_.open_rad; }
   [[nodiscard]] double gripper_closed_rad() const noexcept { return gripper_cfg_.closed_rad; }
 
@@ -210,7 +190,7 @@ public:
     const std::vector<double> & place_descend) const;
 
   /**
-   * @brief Builds 8-phase dynamic joint targets for pick-and-place sequence.
+   * @brief Builds 9-phase dynamic joint targets for pick-and-place sequence.
    * Directly transits between pick LIFT and place APPROACH_PLACE without mid-transit stow.
    * @param[in] pick_approach Approach joint angles for pick position (elevated in Cartesian Z).
    * @param[in] pick_descend Descend joint angles for pick position (at piece grasp height).

@@ -107,8 +107,31 @@ target_link_libraries(arm_motion_planner PUBLIC
   ${sensor_msgs_TARGETS}
 )
 
-add_library(manipulation_action_component SHARED
+add_library(arm_trajectory_executor STATIC
   src/arm/arm_trajectory_executor.cpp
+)
+set_target_properties(arm_trajectory_executor PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(arm_trajectory_executor PUBLIC cxx_std_17)
+target_include_directories(arm_trajectory_executor PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
+target_link_libraries(arm_trajectory_executor PUBLIC
+  workspace_model
+  rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+  tf2_ros::tf2_ros
+  tf2_geometry_msgs::tf2_geometry_msgs
+  urdf::urdf
+  Eigen3::Eigen
+  ${geometry_msgs_TARGETS}
+  ${control_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${trajectory_msgs_TARGETS}
+  ${std_msgs_TARGETS}
+)
+
+add_library(manipulation_action_component SHARED
   src/arm/manipulation_action_server.cpp
 )
 target_compile_features(manipulation_action_component PUBLIC cxx_std_17)
@@ -118,6 +141,7 @@ target_include_directories(manipulation_action_component PUBLIC
 )
 target_link_libraries(manipulation_action_component
   arm_motion_planner
+  arm_trajectory_executor
   workspace_model
   rclcpp::rclcpp
   rclcpp_action::rclcpp_action
@@ -151,8 +175,10 @@ target_include_directories(cartesian_jog_server_component PUBLIC
 )
 target_link_libraries(cartesian_jog_server_component
   arm_motion_planner
+  arm_trajectory_executor
   workspace_model
   rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
   rclcpp_components::component
   urdf::urdf
   Eigen3::Eigen
@@ -161,10 +187,13 @@ target_link_libraries(cartesian_jog_server_component
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${trajectory_msgs_TARGETS}
+  ${control_msgs_TARGETS}
+  ${lekiwi_interfaces_TARGETS}
 )
 rclcpp_components_register_node(cartesian_jog_server_component
   PLUGIN "lekiwi_motion::arm::CartesianJogServerNode"
   EXECUTABLE cartesian_jog_server_node
+  EXECUTOR MultiThreadedExecutor
 )
 
 # ==============================================================================
@@ -255,6 +284,7 @@ rclcpp_components_register_node(nav2_startup_gate_component
 install(TARGETS
   workspace_model
   arm_motion_planner
+  arm_trajectory_executor
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -403,6 +433,7 @@ if(BUILD_TESTING)
   target_link_libraries(test_cartesian_jog_server_node
     cartesian_jog_server_component
     arm_motion_planner
+    arm_trajectory_executor
     workspace_model
     rclcpp::rclcpp
     ${geometry_msgs_TARGETS}
@@ -410,9 +441,31 @@ if(BUILD_TESTING)
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
     ${trajectory_msgs_TARGETS}
+    ${lekiwi_interfaces_TARGETS}
   )
   add_dependencies(test_cartesian_jog_server_node workspace_urdf_fixture)
   target_compile_definitions(test_cartesian_jog_server_node PRIVATE
+    WORKSPACE_URDF_PATH="${WORKSPACE_URDF}")
+
+  ament_add_gtest(test_arm_trajectory_executor
+    test/arm/test_arm_trajectory_executor.cpp
+  )
+  target_compile_features(test_arm_trajectory_executor PUBLIC cxx_std_17)
+  target_include_directories(test_arm_trajectory_executor PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  target_link_libraries(test_arm_trajectory_executor
+    arm_trajectory_executor
+    arm_motion_planner
+    workspace_model
+    rclcpp::rclcpp
+    ${geometry_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${trajectory_msgs_TARGETS}
+  )
+  add_dependencies(test_arm_trajectory_executor workspace_urdf_fixture)
+  target_compile_definitions(test_arm_trajectory_executor PRIVATE
     WORKSPACE_URDF_PATH="${WORKSPACE_URDF}")
 
   # ── Supervision tests ───────────────────────────────────────────────────────

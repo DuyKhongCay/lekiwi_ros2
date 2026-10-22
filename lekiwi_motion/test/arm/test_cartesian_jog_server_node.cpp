@@ -23,9 +23,11 @@
 #include <vector>
 
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <lekiwi_interfaces/srv/go_to_named_pose.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
-#include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
 #include "lekiwi_motion/arm/cartesian_jog_server_node.hpp"
@@ -68,14 +70,15 @@ TEST_F(CartesianJogServerTest, NodeCreationAndParameterLoading)
 {
   rclcpp::NodeOptions opts;
   opts.append_parameter_override("publish_rate_hz", 60.0);
-  opts.append_parameter_override("controller_type", "forward_position");
   opts.append_parameter_override("base_frame", "base_footprint");
   opts.append_parameter_override("tip_frame", "gripperframe");
+  opts.append_parameter_override("mock_execution", true);
 
   auto node = std::make_shared<CartesianJogServerNode>(opts);
   ASSERT_NE(node, nullptr);
   EXPECT_FALSE(node->is_kinematics_initialized());
   EXPECT_FALSE(node->is_active());
+  EXPECT_FALSE(node->is_executing_trajectory());
 }
 
 TEST_F(CartesianJogServerTest, KinematicsInitializationAndBumplessJogging)
@@ -86,7 +89,7 @@ TEST_F(CartesianJogServerTest, KinematicsInitializationAndBumplessJogging)
   rclcpp::NodeOptions opts;
   opts.append_parameter_override("robot_description", urdf_xml);
   opts.append_parameter_override("publish_rate_hz", 50.0);
-  opts.append_parameter_override("controller_type", "joint_trajectory");
+  opts.append_parameter_override("mock_execution", true);
 
   auto jog_node = std::make_shared<CartesianJogServerNode>(opts);
   EXPECT_TRUE(jog_node->is_kinematics_initialized());
@@ -207,7 +210,7 @@ TEST_F(CartesianJogServerTest, InvalidUrdfFromTopicEntersFailSafeState)
   EXPECT_FALSE(jog_node->kinematics_error_msg().empty());
 }
 
-TEST_F(CartesianJogServerTest, ArmBusyTopicSuppressesJoggingAndResumesWithBumplessSync)
+TEST_F(CartesianJogServerTest, NamedPoseAndToggleGripperServicesExecuteSuccessfully)
 {
   const std::string urdf_xml = load_test_urdf();
   ASSERT_FALSE(urdf_xml.empty()) << "Failed to load fixture URDF from WORKSPACE_URDF_PATH";
@@ -215,138 +218,63 @@ TEST_F(CartesianJogServerTest, ArmBusyTopicSuppressesJoggingAndResumesWithBumple
   rclcpp::NodeOptions opts;
   opts.append_parameter_override("robot_description", urdf_xml);
   opts.append_parameter_override("publish_rate_hz", 50.0);
-  opts.append_parameter_override("controller_type", "joint_trajectory");
-  opts.append_parameter_override("arm_busy_topic", "/test_arm/is_busy");
+  opts.append_parameter_override("mock_execution", true);
+  opts.append_parameter_override(
+    "named_poses.stow",
+    std::vector<double>{0.0, -1.57, 1.57, 0.75, 0.0, 0.08});
 
   auto jog_node = std::make_shared<CartesianJogServerNode>(opts);
   EXPECT_TRUE(jog_node->is_kinematics_initialized());
-  EXPECT_FALSE(jog_node->is_arm_busy());
 
-  auto test_node = std::make_shared<rclcpp::Node>("test_arm_busy_client");
+  auto client_node = std::make_shared<rclcpp::Node>("test_service_client_node");
+  auto pose_cli = client_node->create_client<lekiwi_interfaces::srv::GoToNamedPose>(
+    "/cartesian_jog_server_node/go_to_named_pose");
+  auto gripper_cli = client_node->create_client<std_srvs::srv::Trigger>(
+    "/cartesian_jog_server_node/toggle_gripper");
 
-  auto js_pub = test_node->create_publisher<sensor_msgs::msg::JointState>(
-    "/joint_states", rclcpp::SensorDataQoS());
-
-  auto twist_pub = test_node->create_publisher<geometry_msgs::msg::TwistStamped>(
-    "/cartesian_jog_server_node/cmd_vel", 10);
-
-  rclcpp::QoS busy_qos(1);
-  busy_qos.transient_local();
-  busy_qos.reliable();
-  auto busy_pub = test_node->create_publisher<std_msgs::msg::Bool>(
-    "/test_arm/is_busy", busy_qos);
-
-  bool received_trajectory = false;
-  trajectory_msgs::msg::JointTrajectory last_traj;
-
-  auto traj_sub = test_node->create_subscription<trajectory_msgs::msg::JointTrajectory>(
-    "/arm_trajectory_controller/joint_trajectory", 10,
-    [&](const trajectory_msgs::msg::JointTrajectory::SharedPtr msg) {
-      received_trajectory = true;
-      last_traj = *msg;
-    });
-
-  rclcpp::executors::SingleThreadedExecutor exec;
+  rclcpp::executors::MultiThreadedExecutor exec;
   exec.add_node(jog_node);
-  exec.add_node(test_node);
+  exec.add_node(client_node);
 
-  // 1. Initial joint telemetry (Posture 1: zeros)
-  sensor_msgs::msg::JointState js;
-  js.header.stamp = test_node->now();
-  js.name = {
-    "arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex",
-    "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"
-  };
-  js.position = {0.0, 0.0, 0.0, 0.0, 0.0, 0.5};
+  ASSERT_TRUE(pose_cli->wait_for_service(std::chrono::seconds(2)));
+  ASSERT_TRUE(gripper_cli->wait_for_service(std::chrono::seconds(2)));
 
-  for (int i = 0; i < 5; ++i) {
-    js_pub->publish(js);
-    exec.spin_some();
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-
-  // 2. Stream Cartesian Jog -> should produce trajectories
-  geometry_msgs::msg::TwistStamped twist;
-  twist.header.stamp = test_node->now();
-  twist.header.frame_id = "base_footprint";
-  twist.twist.linear.x = 0.02;
-
-  const auto start = std::chrono::steady_clock::now();
-  while (!received_trajectory &&
-    (std::chrono::steady_clock::now() - start) < std::chrono::seconds(2))
+  // 1. Test invalid named pose rejection
   {
-    twist.header.stamp = test_node->now();
-    twist_pub->publish(twist);
-    exec.spin_some();
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    auto req = std::make_shared<lekiwi_interfaces::srv::GoToNamedPose::Request>();
+    req->pose_name = "unknown_pose_xyz";
+    auto future = pose_cli->async_send_request(req);
+    while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
+      exec.spin_some();
+    }
+    auto res = future.get();
+    EXPECT_FALSE(res->success);
+    EXPECT_NE(res->message.find("Unknown named pose"), std::string::npos);
   }
 
-  EXPECT_TRUE(received_trajectory);
-  EXPECT_TRUE(jog_node->is_active());
-  EXPECT_FALSE(jog_node->is_arm_busy());
-
-  // 3. Signal /arm/is_busy = true -> jogging must be suppressed
-  std_msgs::msg::Bool busy_msg;
-  busy_msg.data = true;
-  busy_pub->publish(busy_msg);
-
-  for (int i = 0; i < 5; ++i) {
-    exec.spin_some();
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-
-  EXPECT_TRUE(jog_node->is_arm_busy());
-  EXPECT_FALSE(jog_node->is_active());
-
-  // Reset trajectory received flag and try sending more twists while busy
-  received_trajectory = false;
-  // Also simulate arm moved to a new posture by a named pose service (Posture 2)
-  js.header.stamp = test_node->now();
-  js.position = {0.15, -0.25, 0.35, 0.10, -0.05, 0.5};
-
-  for (int i = 0; i < 5; ++i) {
-    twist.header.stamp = test_node->now();
-    twist_pub->publish(twist);
-    js_pub->publish(js);
-    exec.spin_some();
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-  }
-
-  // Trajectory should NOT have been dispatched while arm is busy
-  EXPECT_FALSE(received_trajectory);
-  EXPECT_FALSE(jog_node->is_active());
-
-  // 4. Signal /arm/is_busy = false -> jogging must resume smoothly from Posture 2
-  busy_msg.data = false;
-  busy_pub->publish(busy_msg);
-
-  for (int i = 0; i < 5; ++i) {
-    exec.spin_some();
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-
-  EXPECT_FALSE(jog_node->is_arm_busy());
-
-  // Send fresh twist -> should now publish trajectory starting from Posture 2
-  const auto resume_start = std::chrono::steady_clock::now();
-  while (!received_trajectory &&
-    (std::chrono::steady_clock::now() - resume_start) < std::chrono::seconds(2))
+  // 2. Test valid named pose execution
   {
-    twist.header.stamp = test_node->now();
-    twist_pub->publish(twist);
-    exec.spin_some();
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    auto req = std::make_shared<lekiwi_interfaces::srv::GoToNamedPose::Request>();
+    req->pose_name = "stow";
+    auto future = pose_cli->async_send_request(req);
+    while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
+      exec.spin_some();
+    }
+    auto res = future.get();
+    EXPECT_TRUE(res->success);
+    EXPECT_NE(res->message.find("Successfully moved"), std::string::npos);
   }
 
-  EXPECT_TRUE(received_trajectory);
-  EXPECT_TRUE(jog_node->is_active());
-  ASSERT_FALSE(last_traj.points.empty());
-  ASSERT_GE(last_traj.points[0].positions.size(), 5u);
-
-  // Verify bumpless sync: initial commanded joint is near the new posture (0.15, -0.25, ...)
-  EXPECT_NEAR(last_traj.points[0].positions[0], 0.15, 0.05);
-  EXPECT_NEAR(last_traj.points[0].positions[1], -0.25, 0.05);
+  // 3. Test toggle gripper execution
+  {
+    auto req = std::make_shared<std_srvs::srv::Trigger::Request>();
+    auto future = gripper_cli->async_send_request(req);
+    while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
+      exec.spin_some();
+    }
+    auto res = future.get();
+    EXPECT_TRUE(res->success);
+  }
 }
 
 }  // namespace lekiwi_motion::arm::test
-

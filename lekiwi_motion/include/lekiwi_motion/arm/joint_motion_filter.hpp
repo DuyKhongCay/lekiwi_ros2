@@ -34,7 +34,7 @@ namespace lekiwi_motion::arm
  * @struct FilteredJointState
  * @brief Filtered joint positions and estimated joint velocities.
  */
-template <size_t N = 6>
+template <size_t N = 5>
 struct FilteredJointState
 {
   std::array<double, N> positions{};
@@ -44,9 +44,9 @@ struct FilteredJointState
 /**
  * @class JointMotionFilter
  * @brief Exponential Moving Average (EMA) low-pass filter and backward-difference velocity differentiator.
- * @tparam N Number of active joint axes (default 6: 5 arm joints + 1 gripper).
+ * @tparam N Number of active joint axes (default 5: 5 arm joints).
  */
-template <size_t N = 6>
+template <size_t N = 5>
 class JointMotionFilter
 {
 public:

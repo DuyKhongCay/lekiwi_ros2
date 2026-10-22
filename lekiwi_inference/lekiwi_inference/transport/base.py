@@ -17,7 +17,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from lekiwi_inference.protocol import RemotePolicyConfig, TimedAction, TimedObservation
+from lekiwi_inference.helpers import RemotePolicyConfig, TimedAction, TimedObservation
 
 
 class PolicyTransport(ABC):

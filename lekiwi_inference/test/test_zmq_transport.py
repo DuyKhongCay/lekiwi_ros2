@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for ZeroMQ transport client against an in-process mock REP server."""
+"""Unit tests for ZeroMQ transport client and binary wire serialization."""
 
 import threading
 import time
@@ -22,31 +22,99 @@ import numpy as np
 import pytest
 import zmq
 
-from lekiwi_inference.protocol import (
-    RemotePolicyConfig,
-    TimedAction,
-    TimedObservation,
+from lekiwi_inference.helpers import RemotePolicyConfig, TimedAction, TimedObservation
+from lekiwi_inference.transport.zmq_transport import (
+    ZmqPolicyTransport,
+    deserialize_actions,
+    deserialize_observation,
+    deserialize_policy_config,
     serialize_actions,
+    serialize_observation,
+    serialize_policy_config,
 )
-from lekiwi_inference.transport.zmq_transport import ZmqPolicyTransport
+
+
+def test_observation_roundtrip():
+    """Validates lossless serialization and deserialization of timed observations."""
+    state = np.array([0.1, -0.2, 0.5, 1.2, -0.8, 0.0], dtype=np.float32)
+    img_wrist = b"\xff\xd8\xff\xe0\x00\x10JFIF"
+    img_side = b"\xff\xd8\xff\xe0\x00\x10JFIF_SIDE"
+
+    obs = TimedObservation(
+        timestamp=12345.678,
+        timestep=42,
+        observation={
+            "observation.state": state,
+            "observation.images.wrist": img_wrist,
+            "observation.images.side": img_side,
+        },
+        must_go=True,
+    )
+
+    encoded = serialize_observation(obs)
+    assert isinstance(encoded, bytes)
+
+    decoded = deserialize_observation(encoded)
+    assert decoded.get_timestamp() == pytest.approx(12345.678)
+    assert decoded.get_timestep() == 42
+    assert decoded.must_go is True
+
+    raw_decoded = decoded.get_observation()
+    assert np.allclose(raw_decoded["observation.state"], state)
+    assert raw_decoded["observation.images.wrist"] == img_wrist
+    assert raw_decoded["observation.images.side"] == img_side
+
+
+def test_actions_roundtrip():
+    """Validates lossless serialization and deserialization of predicted action horizons."""
+    actions = [
+        TimedAction(timestamp=100.0, timestep=0, action=np.array([0.1, 0.2, 0.3], dtype=np.float32)),
+        TimedAction(timestamp=100.02, timestep=1, action=np.array([0.4, 0.5, 0.6], dtype=np.float32)),
+    ]
+
+    encoded = serialize_actions(actions)
+    decoded = deserialize_actions(encoded)
+
+    assert len(decoded) == 2
+    assert decoded[0].get_timestep() == 0
+    assert decoded[1].get_timestep() == 1
+    assert np.allclose(decoded[0].get_action(), [0.1, 0.2, 0.3])
+    assert np.allclose(decoded[1].get_action(), [0.4, 0.5, 0.6])
+
+
+def test_policy_config_roundtrip():
+    """Validates serialization of remote model configuration parameters."""
+    cfg = RemotePolicyConfig(
+        policy_type="act",
+        pretrained_name_or_path="legalaspro/act_so101_pnp",
+        lerobot_features={"state": {"shape": (6,), "dtype": "float32"}},
+        actions_per_chunk=100,
+        device="cuda",
+    )
+
+    encoded = serialize_policy_config(cfg)
+    decoded = deserialize_policy_config(encoded)
+
+    assert decoded.pretrained_name_or_path == "legalaspro/act_so101_pnp"
+    assert decoded.policy_type == "act"
+    assert decoded.actions_per_chunk == 100
+    assert decoded.device == "cuda"
 
 
 class MockZmqServer:
     """Simulates basic LeRobot policy server responses for transport verification."""
 
     def __init__(self, port: int = 5566) -> None:
-        """Initializes mock server context and bind endpoint."""
         self.port = port
         self.endpoint = f"tcp://127.0.0.1:{port}"
         self.ctx = zmq.Context()
         self.socket = self.ctx.socket(zmq.REP)
-        self.socket.setsockopt(zmq.RCVTIMEO, 1000)
+        self.socket.setsockopt(zmq.RCVTIMEO, 100)
         self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.bind(self.endpoint)
         self.running = True
 
     def run(self) -> None:
-        """Processes request envelopes matching the production policy server protocol."""
         while self.running:
             try:
                 raw_req = self.socket.recv()
@@ -68,7 +136,6 @@ class MockZmqServer:
                 break
 
     def stop(self) -> None:
-        """Stops the server loop and closes sockets."""
         self.running = False
         try:
             self.socket.close(linger=0)
@@ -89,10 +156,9 @@ def test_zmq_transport_lifecycle():
     try:
         assert transport.connect()
         assert transport.is_connected()
-
         assert transport.send_handshake()
 
-        cfg = RemotePolicyConfig(repo_id="test_repo", policy_type="act", fps=50.0)
+        cfg = RemotePolicyConfig(pretrained_name_or_path="test_repo", policy_type="act")
         assert transport.send_policy_config(cfg)
 
         obs = TimedObservation(
@@ -110,4 +176,3 @@ def test_zmq_transport_lifecycle():
     finally:
         server.stop()
         server_thread.join(timeout=1.0)
-

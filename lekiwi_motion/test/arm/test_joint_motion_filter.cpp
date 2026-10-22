@@ -28,14 +28,14 @@ namespace arm = lekiwi_motion::arm;
 
 TEST(JointMotionFilterTest, InitialPassThroughWithoutSpike)
 {
-  arm::JointMotionFilter<6> filter(0.85);
+  arm::JointMotionFilter<5> filter(0.85);
   EXPECT_FALSE(filter.is_initialized());
 
-  const std::array<double, 6> initial_targets{0.1, -0.2, 0.3, -0.4, 0.5, 1.0};
+  const std::array<double, 5> initial_targets{0.1, -0.2, 0.3, -0.4, 0.5};
   const auto state = filter.update(initial_targets, 0.02);
 
   EXPECT_TRUE(filter.is_initialized());
-  for (size_t i = 0; i < 6; ++i) {
+  for (size_t i = 0; i < 5; ++i) {
     EXPECT_DOUBLE_EQ(state.positions[i], initial_targets[i]);
     EXPECT_DOUBLE_EQ(state.velocities[i], 0.0);
   }
@@ -43,16 +43,16 @@ TEST(JointMotionFilterTest, InitialPassThroughWithoutSpike)
 
 TEST(JointMotionFilterTest, ExponentialSmoothingCalculation)
 {
-  arm::JointMotionFilter<6> filter(0.5);  // alpha = 0.5
+  arm::JointMotionFilter<5> filter(0.5);  // alpha = 0.5
 
-  const std::array<double, 6> t0{1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  const std::array<double, 5> t0{1.0, 1.0, 1.0, 1.0, 1.0};
   filter.update(t0, 0.02);
 
-  const std::array<double, 6> t1{2.0, 2.0, 2.0, 2.0, 2.0, 2.0};
+  const std::array<double, 5> t1{2.0, 2.0, 2.0, 2.0, 2.0};
   const auto state1 = filter.update(t1, 0.02);
 
   // Expected position: 0.5 * 2.0 + 0.5 * 1.0 = 1.5
-  for (size_t i = 0; i < 6; ++i) {
+  for (size_t i = 0; i < 5; ++i) {
     EXPECT_DOUBLE_EQ(state1.positions[i], 1.5);
     // Velocity: (1.5 - 1.0) / 0.02 = 25.0
     EXPECT_NEAR(state1.velocities[i], 25.0, 1e-6);
@@ -61,20 +61,20 @@ TEST(JointMotionFilterTest, ExponentialSmoothingCalculation)
 
 TEST(JointMotionFilterTest, ResetClearsHistory)
 {
-  arm::JointMotionFilter<6> filter(0.85);
+  arm::JointMotionFilter<5> filter(0.85);
 
-  const std::array<double, 6> t0{1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  const std::array<double, 5> t0{1.0, 1.0, 1.0, 1.0, 1.0};
   filter.update(t0, 0.02);
   EXPECT_TRUE(filter.is_initialized());
 
   filter.reset();
   EXPECT_FALSE(filter.is_initialized());
 
-  const std::array<double, 6> t1{5.0, 5.0, 5.0, 5.0, 5.0, 5.0};
+  const std::array<double, 5> t1{5.0, 5.0, 5.0, 5.0, 5.0};
   const auto state1 = filter.update(t1, 0.02);
 
   // After reset, first sample initializes cleanly without blending from t0
-  for (size_t i = 0; i < 6; ++i) {
+  for (size_t i = 0; i < 5; ++i) {
     EXPECT_DOUBLE_EQ(state1.positions[i], 5.0);
     EXPECT_DOUBLE_EQ(state1.velocities[i], 0.0);
   }
@@ -82,18 +82,18 @@ TEST(JointMotionFilterTest, ResetClearsHistory)
 
 TEST(JointMotionFilterTest, SyncStateBumpless)
 {
-  arm::JointMotionFilter<6> filter(0.85);
-  const std::array<double, 6> physical{0.1, 0.2, -0.3, 0.4, -0.5, 0.6};
+  arm::JointMotionFilter<5> filter(0.85);
+  const std::array<double, 5> physical{0.1, 0.2, -0.3, 0.4, -0.5};
 
   filter.sync(physical);
   EXPECT_TRUE(filter.is_initialized());
 
-  for (size_t i = 0; i < 6; ++i) {
+  for (size_t i = 0; i < 5; ++i) {
     EXPECT_DOUBLE_EQ(filter.current_positions()[i], physical[i]);
   }
 
   // Next update with close position should not spike
-  const std::array<double, 6> next_target{0.101, 0.2, -0.3, 0.4, -0.5, 0.6};
+  const std::array<double, 5> next_target{0.101, 0.2, -0.3, 0.4, -0.5};
   const auto state = filter.update(next_target, 0.02);
 
   // Position moves smoothly from physical[0], not 0.0
@@ -105,17 +105,17 @@ TEST(JointMotionFilterTest, SyncStateBumpless)
 TEST(JointMotionFilterTest, VelocityRateLimiting)
 {
   // Filter with alpha=1.0 (pure passthrough) but max_velocity = 2.0 rad/s
-  arm::JointMotionFilter<6> filter(1.0, 2.0);
+  arm::JointMotionFilter<5> filter(1.0, 2.0);
 
-  const std::array<double, 6> t0{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  const std::array<double, 5> t0{0.0, 0.0, 0.0, 0.0, 0.0};
   filter.update(t0, 0.02);
 
   // Attempt massive jump: target = 1.0 rad in 0.02s (would be 50 rad/s)
-  const std::array<double, 6> t1{1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  const std::array<double, 5> t1{1.0, 1.0, 1.0, 1.0, 1.0};
   const auto state1 = filter.update(t1, 0.02);
 
   // Max allowed step = 2.0 * 0.02 = 0.04 rad
-  for (size_t i = 0; i < 6; ++i) {
+  for (size_t i = 0; i < 5; ++i) {
     EXPECT_DOUBLE_EQ(state1.positions[i], 0.04);
     EXPECT_NEAR(state1.velocities[i], 2.0, 1e-6);
   }

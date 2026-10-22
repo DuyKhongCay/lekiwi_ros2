@@ -12,38 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/**
+ * @file manipulation_action_server.cpp
+ * @brief Implementation of autonomous manipulation action server and recorder coordination.
+ * @author LeKiwi Labs
+ * @copyright Apache-2.0
+ */
+
 #include "lekiwi_motion/arm/manipulation_action_server.hpp"
 
 #include <chrono>
 #include <cmath>
 #include <future>
-#include <thread>
+#include <stdexcept>
 #include <utility>
-
-#include <rclcpp_components/register_node_macro.hpp>
 
 namespace lekiwi_motion
 {
-
-namespace
-{
-
-template <typename T>
-T get_or_declare_param(rclcpp::Node * node, const std::string & name, const T & default_val)
-{
-  if (!node->has_parameter(name)) {
-    return node->declare_parameter<T>(name, default_val);
-  }
-  return node->get_parameter(name).get_value<T>();
-}
-
-[[nodiscard]] float compute_elapsed_sec(std::chrono::steady_clock::time_point start_time) noexcept
-{
-  return static_cast<float>(
-    std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count());
-}
-
-}  // namespace
 
 ManipulationActionServer::ManipulationActionServer(const rclcpp::NodeOptions & options)
 : Node("manipulation_action_server", options),
@@ -51,53 +36,29 @@ ManipulationActionServer::ManipulationActionServer(const rclcpp::NodeOptions & o
 {
   declare_and_init_parameters();
 
-  cb_group_action_server_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  cb_group_recorder_coordination_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-
-  diagnostic_updater_.setHardwareID("lekiwi_motion_manipulation");
-  diagnostic_updater_.add(
-    "manipulation_status", this, &ManipulationActionServer::produce_diagnostics);
+  cb_group_action_server_ = create_callback_group(
+    rclcpp::CallbackGroupType::MutuallyExclusive);
+  cb_group_recorder_coordination_ = create_callback_group(
+    rclcpp::CallbackGroupType::Reentrant);
 
   action_server_ = rclcpp_action::create_server<ExecuteChessMove>(
     this,
     action_name_,
-    std::bind(
-      &ManipulationActionServer::handle_goal, this,
-      std::placeholders::_1, std::placeholders::_2),
+    std::bind(&ManipulationActionServer::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
     std::bind(&ManipulationActionServer::handle_cancel, this, std::placeholders::_1),
     std::bind(&ManipulationActionServer::handle_accepted, this, std::placeholders::_1),
     rcl_action_server_get_default_options(),
     cb_group_action_server_);
 
-  named_pose_srv_ = create_service<GoToNamedPose>(
-    "/arm/go_to_named_pose",
-    std::bind(
-      &ManipulationActionServer::handle_named_pose_request, this,
-      std::placeholders::_1, std::placeholders::_2),
-    rclcpp::ServicesQoS(),
-    cb_group_action_server_);
-
-  toggle_gripper_srv_ = create_service<Trigger>(
-    "/arm/toggle_gripper",
-    std::bind(
-      &ManipulationActionServer::handle_toggle_gripper, this,
-      std::placeholders::_1, std::placeholders::_2),
-    rclcpp::ServicesQoS(),
-    cb_group_action_server_);
-
   save_episode_srv_ = create_service<Trigger>(
     "/arm/save_episode",
-    std::bind(
-      &ManipulationActionServer::handle_save_episode, this,
-      std::placeholders::_1, std::placeholders::_2),
+    std::bind(&ManipulationActionServer::handle_save_episode, this, std::placeholders::_1, std::placeholders::_2),
     rclcpp::ServicesQoS(),
     cb_group_recorder_coordination_);
 
   abort_episode_srv_ = create_service<Trigger>(
     "/arm/abort_episode",
-    std::bind(
-      &ManipulationActionServer::handle_abort_episode, this,
-      std::placeholders::_1, std::placeholders::_2),
+    std::bind(&ManipulationActionServer::handle_abort_episode, this, std::placeholders::_1, std::placeholders::_2),
     rclcpp::ServicesQoS(),
     cb_group_recorder_coordination_);
 
@@ -111,11 +72,13 @@ ManipulationActionServer::ManipulationActionServer(const rclcpp::NodeOptions & o
     rclcpp::ServicesQoS(),
     cb_group_recorder_coordination_);
 
-  rclcpp::QoS busy_qos(1);
-  busy_qos.transient_local();
-  busy_qos.reliable();
-  pub_arm_busy_ = create_publisher<std_msgs::msg::Bool>(arm_busy_topic_, busy_qos);
-  publish_arm_busy(false);
+  diagnostic_updater_.setHardwareID("lekiwi_arm_manipulator");
+  diagnostic_updater_.add("Manipulation Status", this, &ManipulationActionServer::produce_diagnostics);
+
+  RCLCPP_INFO(
+    get_logger(),
+    "ManipulationActionServer initialized. Action: '%s'. Record mode: %s",
+    action_name_.c_str(), record_ ? "ENABLED" : "DISABLED");
 }
 
 ManipulationActionServer::~ManipulationActionServer()
@@ -123,6 +86,10 @@ ManipulationActionServer::~ManipulationActionServer()
   is_shutting_down_.store(true, std::memory_order_release);
   if (executor_) {
     executor_->stop();
+  }
+  {
+    std::lock_guard<std::mutex> lock(record_mutex_);
+    record_signal_ = RecordCoordinationSignal::ABORT;
   }
   record_cv_.notify_all();
   if (execution_thread_.joinable()) {
@@ -132,85 +99,18 @@ ManipulationActionServer::~ManipulationActionServer()
 
 void ManipulationActionServer::declare_and_init_parameters()
 {
-  action_name_ = get_or_declare_param<std::string>(
+  action_name_ = arm::declare_or_get_param<std::string>(
     this, "action_name", "/manipulation/execute_chess_move");
-  approach_z_offset_ = get_or_declare_param<double>(this, "approach_z_offset", 0.05);
-  controller_action_name_ = get_or_declare_param<std::string>(
-    this, "controller_action_name", "/arm_trajectory_controller/follow_joint_trajectory");
-  arm_busy_topic_ = get_or_declare_param<std::string>(
-    this, "arm_busy_topic", "/arm/is_busy");
-  const auto joint_states_topic = get_or_declare_param<std::string>(
-    this, "joint_states_topic", "/joint_states");
-
-  default_velocity_ = get_or_declare_param<double>(this, "default_velocity", 1.5);
-  if (default_velocity_ <= 0.0) {
-    RCLCPP_WARN(
-      get_logger(),
-      "Parameter 'default_velocity' must be positive, got %.2f. Defaulting to 1.5 rad/s",
-      default_velocity_);
-    default_velocity_ = 1.5;
-  }
-  sampling_rate_hz_ = get_or_declare_param<double>(this, "sampling_rate_hz", 50.0);
-  mock_execution_ = get_or_declare_param<bool>(this, "mock_execution", false);
-  record_ = get_or_declare_param<bool>(this, "record", false);
+  approach_z_offset_ = arm::declare_or_get_param<double>(this, "approach_z_offset", 0.05);
+  record_ = arm::declare_or_get_param<bool>(this, "record", false);
   if (record_) {
     RCLCPP_INFO(
       get_logger(),
-      "ManipulationActionServer operating in RECORD mode (stopping at APPROACH phase)");
+      "ManipulationActionServer operating in RECORD mode (stopping at pre-grasp approach)");
   }
 
-  arm_joints_ = get_or_declare_param<std::vector<std::string>>(
-    this, "arm_joints", arm_joints_);
-
-  const double gripper_closed = get_or_declare_param<double>(this, "gripper.closed", 0.00);
-  const double gripper_open = get_or_declare_param<double>(this, "gripper.open", 1.50);
-
-  arm::NamedPosesConfig named_poses;
-  named_poses.approach = get_or_declare_param<std::vector<double>>(
-    this, "named_poses.approach", {0.0, 0.0, 0.0, 0.0, 0.0, gripper_closed});
-  named_poses.stow = get_or_declare_param<std::vector<double>>(
-    this, "named_poses.stow", {0.0, -1.57, 1.57, 0.75, 0.0, gripper_closed});
-  named_poses.clear_left = get_or_declare_param<std::vector<double>>(
-    this, "named_poses.clear_left", {1.20, -0.60, 0.80, 0.0, 0.0, gripper_closed});
-  named_poses.clear_right = get_or_declare_param<std::vector<double>>(
-    this, "named_poses.clear_right", {-1.20, -0.60, 0.80, 0.0, 0.0, gripper_closed});
-  default_approach_pose_ = named_poses.approach;
-
-  arm_motion_planner_ = arm::ArmMotionPlanner(
-    arm_joints_,
-    arm::GripperConfig{gripper_open, gripper_closed},
-    std::move(named_poses),
-    sampling_rate_hz_);
-
   arm::ArmTrajectoryExecutorConfig exec_cfg;
-  exec_cfg.arm_joints = arm_joints_;
-  exec_cfg.controller_action_name = controller_action_name_;
-  exec_cfg.joint_states_topic = joint_states_topic;
-  exec_cfg.board_frame = get_or_declare_param<std::string>(this, "board_frame", "chessboard_frame");
-  exec_cfg.base_frame = get_or_declare_param<std::string>(this, "base_frame", "base_footprint");
-  exec_cfg.tip_frame = get_or_declare_param<std::string>(this, "tip_frame", "gripperframe");
-  exec_cfg.default_pitch = get_or_declare_param<double>(this, "planning.default_pitch", -M_PI_2);
-  exec_cfg.default_roll = get_or_declare_param<double>(this, "planning.default_roll", 0.0);
-  exec_cfg.mock_execution = mock_execution_;
-
   executor_ = std::make_unique<arm::ArmTrajectoryExecutor>(this, std::move(exec_cfg));
-}
-
-void ManipulationActionServer::accept_robot_description(const std::string & urdf_xml)
-{
-  executor_->accept_robot_description(urdf_xml);
-}
-
-std::optional<std::vector<double>> ManipulationActionServer::get_named_pose(
-  const std::string & pose_name) const
-{
-  std::lock_guard<std::mutex> lock(planner_mutex_);
-  return arm_motion_planner_.get_named_pose(pose_name);
-}
-
-std::vector<double> ManipulationActionServer::get_current_positions_or_default() const
-{
-  return executor_->get_current_positions_or_default();
 }
 
 std::optional<std::vector<double>> ManipulationActionServer::resolve_point_ik(
@@ -218,167 +118,20 @@ std::optional<std::vector<double>> ManipulationActionServer::resolve_point_ik(
   const std::string & target_frame,
   double gripper_state) const
 {
-  double clamped_gripper = 0.0;
-  {
-    std::lock_guard<std::mutex> lock(planner_mutex_);
-    clamped_gripper = arm_motion_planner_.clamp_gripper(gripper_state);
+  if (!executor_) {
+    return std::nullopt;
   }
+  const double clamped_gripper = executor_->clamp_gripper(gripper_state);
   return executor_->resolve_point_ik(point, target_frame, clamped_gripper);
 }
 
-void ManipulationActionServer::set_runtime_approach_pose(const std::vector<double> & joints)
+void ManipulationActionServer::notify_record_signal(RecordCoordinationSignal signal) noexcept
 {
-  std::lock_guard<std::mutex> lock(planner_mutex_);
-  auto poses = arm_motion_planner_.named_poses();
-  poses.approach = joints;
-  arm_motion_planner_.set_named_poses(std::move(poses));
-}
-
-void ManipulationActionServer::publish_arm_busy(bool is_busy)
-{
-  if (pub_arm_busy_) {
-    std_msgs::msg::Bool msg;
-    msg.data = is_busy;
-    pub_arm_busy_->publish(msg);
-  }
-}
-
-arm::TrajectoryExecutionGuard ManipulationActionServer::acquire_trajectory_guard()
-{
-  return arm::TrajectoryExecutionGuard(
-    executor_->busy_flag(),
-    [this](bool busy) { publish_arm_busy(busy); });
-}
-
-std::optional<std::vector<double>> ManipulationActionServer::validate_named_pose_request(
-  const std::shared_ptr<GoToNamedPose::Request> & request,
-  const std::shared_ptr<GoToNamedPose::Response> & response) const
-{
-  if (!request || request->pose_name.empty()) {
-    response->success = false;
-    response->message = "Invalid empty pose name";
-    return std::nullopt;
-  }
-
-  const auto target_opt = get_named_pose(request->pose_name);
-  if (!target_opt.has_value()) {
-    response->success = false;
-    response->message = "Unknown named pose: '" + request->pose_name + "'";
-    RCLCPP_WARN(
-      get_logger(), "Rejected named pose request: Unknown pose '%s'",
-      request->pose_name.c_str());
-    return std::nullopt;
-  }
-
-  const bool in_record_wait = is_waiting_record_.load(std::memory_order_acquire);
-  if (is_goal_active_.load(std::memory_order_acquire) && !in_record_wait) {
-    response->success = false;
-    response->message = "Arm is currently busy executing an automated chess move";
-    RCLCPP_WARN(
-      get_logger(), "Rejected named pose request '%s': Goal is active",
-      request->pose_name.c_str());
-    return std::nullopt;
-  }
-
-  return target_opt;
-}
-
-bool ManipulationActionServer::execute_manual_joint_target(
-  const std::vector<double> & start_positions,
-  const std::vector<double> & target_positions,
-  const std::string & label,
-  std::string & out_message)
-{
-  trajectory_msgs::msg::JointTrajectory traj;
-  try {
-    std::lock_guard<std::mutex> lock(planner_mutex_);
-    traj = arm_motion_planner_.plan_trajectory_at_velocity(
-      start_positions, target_positions, default_velocity_, sampling_rate_hz_);
-  } catch (const std::exception & exc) {
-    out_message = "Trajectory planning failed for '" + label + "': " + exc.what();
-    RCLCPP_ERROR(get_logger(), "%s", out_message.c_str());
-    return false;
-  }
-
-  const auto [ok, err_msg] = executor_->execute_trajectory(traj);
-  out_message = ok ?
-    ("Successfully moved to '" + label + "'") :
-    ("Execution failed for '" + label + "': " + err_msg);
-  return ok;
-}
-
-void ManipulationActionServer::handle_named_pose_request(
-  const std::shared_ptr<GoToNamedPose::Request> request,
-  std::shared_ptr<GoToNamedPose::Response> response)
-{
-  const auto target_opt = validate_named_pose_request(request, response);
-  if (!target_opt.has_value()) {
-    return;
-  }
-
-  auto traj_guard = acquire_trajectory_guard();
-  if (!traj_guard.acquired()) {
-    response->success = false;
-    response->message = "Arm is currently busy moving a trajectory";
-    RCLCPP_WARN(
-      get_logger(), "Rejected named pose request '%s': Physical trajectory in progress",
-      request->pose_name.c_str());
-    return;
-  }
-
-  const std::string & pose_name = request->pose_name;
-  RCLCPP_INFO(get_logger(), "Executing named pose request: '%s'", pose_name.c_str());
-
-  const auto start_positions = executor_->get_current_positions_or_default();
-  response->success = execute_manual_joint_target(
-    start_positions, *target_opt, pose_name, response->message);
-}
-
-void ManipulationActionServer::handle_toggle_gripper(
-  const std::shared_ptr<Trigger::Request> /*request*/,
-  std::shared_ptr<Trigger::Response> response)
-{
-  const bool in_record_wait = is_waiting_record_.load(std::memory_order_acquire);
-  if (is_goal_active_.load(std::memory_order_acquire) && !in_record_wait) {
-    response->success = false;
-    response->message = "Arm is currently busy executing an automated chess move";
-    RCLCPP_WARN(get_logger(), "Rejected toggle_gripper request: Goal is active");
-    return;
-  }
-
-  auto traj_guard = acquire_trajectory_guard();
-  if (!traj_guard.acquired()) {
-    response->success = false;
-    response->message = "Arm is currently busy moving a trajectory";
-    RCLCPP_WARN(get_logger(), "Rejected toggle_gripper request: Physical trajectory in progress");
-    return;
-  }
-
-  const auto start_positions = executor_->get_current_positions_or_default();
-  const double current_gripper_rad = start_positions.back();
-
-  bool was_open = false;
-  double target_gripper_rad = 0.0;
   {
-    std::lock_guard<std::mutex> lock(planner_mutex_);
-    const auto & gripper_cfg = arm_motion_planner_.gripper_config();
-    was_open = gripper_cfg.is_open(current_gripper_rad);
-    target_gripper_rad = gripper_cfg.toggled_target(current_gripper_rad);
+    std::lock_guard<std::mutex> lock(record_mutex_);
+    record_signal_ = signal;
   }
-
-  auto target_positions = start_positions;
-  target_positions.back() = target_gripper_rad;
-
-  const std::string action_label = was_open ? "Gripper closed" : "Gripper opened";
-  RCLCPP_INFO(
-    get_logger(), "Toggling gripper from %.3f rad (%s) -> %.3f rad (%s)",
-    current_gripper_rad, was_open ? "OPEN" : "CLOSED",
-    target_gripper_rad, action_label.c_str());
-
-  std::string exec_msg;
-  response->success = execute_manual_joint_target(
-    start_positions, target_positions, action_label, exec_msg);
-  response->message = response->success ? action_label : exec_msg;
+  record_cv_.notify_all();
 }
 
 bool ManipulationActionServer::forward_trigger_request(
@@ -386,47 +139,36 @@ bool ManipulationActionServer::forward_trigger_request(
   const std::string & service_label,
   const std::shared_ptr<Trigger::Response> & response)
 {
-  if (!client->service_is_ready() && !client->wait_for_service(std::chrono::seconds(2))) {
+  if (!client) {
     response->success = false;
-    response->message = "Service " + service_label + " is not available";
-    RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+    response->message = service_label + " client is uninitialized";
+    return false;
+  }
+  if (!client->wait_for_service(std::chrono::milliseconds(500))) {
+    response->success = false;
+    response->message = service_label + " service unavailable";
     return false;
   }
 
-  auto future = client->async_send_request(std::make_shared<Trigger::Request>());
-  if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+  auto req = std::make_shared<Trigger::Request>();
+  auto future = client->async_send_request(req);
+  if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
     response->success = false;
-    response->message = "Timed out waiting for " + service_label;
-    RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+    response->message = service_label + " call timed out";
     return false;
   }
 
-  const auto resp = future.get();
-  response->success = resp->success;
-  response->message = resp->message;
-  return resp->success;
-}
-
-void ManipulationActionServer::notify_record_signal(RecordCoordinationSignal signal) noexcept
-{
-  std::lock_guard<std::mutex> lock(record_mutex_);
-  record_signal_ = signal;
-  record_cv_.notify_all();
+  auto res = future.get();
+  response->success = res->success;
+  response->message = res->message;
+  return res->success;
 }
 
 void ManipulationActionServer::discard_active_recording_async() noexcept
 {
-  if (!discard_client_) {
-    return;
-  }
-  try {
-    if (discard_client_->service_is_ready()) {
-      discard_client_->async_send_request(std::make_shared<Trigger::Request>());
-    } else {
-      RCLCPP_WARN(get_logger(), "Discard episode service not ready when cancelling record wait.");
-    }
-  } catch (const std::exception & e) {
-    RCLCPP_WARN(get_logger(), "Failed to async call discard_episode: %s", e.what());
+  if (discard_client_ && discard_client_->service_is_ready()) {
+    auto req = std::make_shared<Trigger::Request>();
+    discard_client_->async_send_request(req);
   }
 }
 
@@ -440,8 +182,7 @@ void ManipulationActionServer::handle_save_episode(
     RCLCPP_WARN(get_logger(), "Rejecting /arm/save_episode: %s", response->message.c_str());
     return;
   }
-  RCLCPP_INFO(
-    get_logger(), "Received /arm/save_episode request. Forwarding to episode_recorder_node...");
+  RCLCPP_INFO(get_logger(), "Received service request: /arm/save_episode");
   if (forward_trigger_request(save_client_, "/episode_recorder_node/save_episode", response)) {
     notify_record_signal(RecordCoordinationSignal::SAVE);
   }
@@ -457,11 +198,450 @@ void ManipulationActionServer::handle_abort_episode(
     RCLCPP_WARN(get_logger(), "Rejecting /arm/abort_episode: %s", response->message.c_str());
     return;
   }
+  RCLCPP_WARN(get_logger(), "Received service request: /arm/abort_episode");
+  if (forward_trigger_request(discard_client_, "/episode_recorder_node/discard_episode", response)) {
+    notify_record_signal(RecordCoordinationSignal::ABORT);
+  }
+}
+
+rclcpp_action::GoalResponse ManipulationActionServer::handle_goal(
+  const rclcpp_action::GoalUUID & /*uuid*/,
+  std::shared_ptr<const ExecuteChessMove::Goal> goal)
+{
+  if (goal->operation > ExecuteChessMove::Goal::OP_PLACE) {
+    RCLCPP_WARN(
+      get_logger(), "Rejecting goal: Unknown operation enum %d", goal->operation);
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
+  if (is_goal_active_.load(std::memory_order_relaxed) ||
+      (executor_ && executor_->is_trajectory_busy()))
+  {
+    RCLCPP_WARN(
+      get_logger(), "Rejecting goal: Arm is currently busy executing a trajectory");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse ManipulationActionServer::handle_cancel(
+  const std::shared_ptr<GoalHandleChessMove> /*goal_handle*/)
+{
+  RCLCPP_INFO(get_logger(), "Cancel requested for active manipulation goal");
+  notify_record_signal(RecordCoordinationSignal::CANCEL);
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void ManipulationActionServer::handle_accepted(
+  const std::shared_ptr<GoalHandleChessMove> goal_handle)
+{
+  if (execution_thread_.joinable()) {
+    execution_thread_.join();
+  }
+  execution_thread_ = std::thread(&ManipulationActionServer::execute_move, this, goal_handle);
+}
+
+std::string ManipulationActionServer::resolve_instruction_label(
+  const ExecuteChessMove::Goal & goal) const
+{
+  if (!goal.instruction.empty()) {
+    return goal.instruction;
+  }
+  switch (goal.operation) {
+    case ExecuteChessMove::Goal::OP_MOVE:
+      return "OP_MOVE";
+    case ExecuteChessMove::Goal::OP_CLEAR_LEFT:
+      return "OP_CLEAR_LEFT";
+    case ExecuteChessMove::Goal::OP_CLEAR_RIGHT:
+      return "OP_CLEAR_RIGHT";
+    case ExecuteChessMove::Goal::OP_PICK:
+      return "OP_PICK";
+    case ExecuteChessMove::Goal::OP_PLACE:
+      return "OP_PLACE";
+    default:
+      return "OP_UNKNOWN";
+  }
+}
+
+void ManipulationActionServer::execute_move(
+  const std::shared_ptr<GoalHandleChessMove> goal_handle)
+{
+  is_goal_active_.store(true, std::memory_order_release);
+  struct GoalActiveScopeGuard
+  {
+    std::atomic<bool> & flag;
+    ~GoalActiveScopeGuard() { flag.store(false, std::memory_order_release); }
+  } scope_guard{is_goal_active_};
+
+  MoveExecutionContext ctx{
+    goal_handle,
+    goal_handle->get_goal(),
+    std::make_shared<ExecuteChessMove::Feedback>(),
+    std::make_shared<ExecuteChessMove::Result>(),
+    std::chrono::steady_clock::now()
+  };
+
+  const std::string instruction_label = resolve_instruction_label(*ctx.goal);
+
+  if (record_) {
+    execute_record_mode(ctx, instruction_label);
+    return;
+  }
+
+  const auto waypoints_opt = resolve_move_waypoints(ctx);
+  if (!waypoints_opt.has_value()) {
+    return;
+  }
+
+  std::pair<std::vector<std::string>, std::unordered_map<std::string, std::vector<double>>> plan;
+  try {
+    plan = build_active_phase_plan(ctx.goal, waypoints_opt->pick, waypoints_opt->place);
+  } catch (const std::exception & exc) {
+    abort_move(ctx, std::string("Phase plan generation failed: ") + exc.what(), 0.0);
+    return;
+  }
+
+  if (execute_phase_pipeline(ctx, plan.first, plan.second, instruction_label)) {
+    succeed_move(ctx, "Chess move completed successfully: " + instruction_label);
+  }
+}
+
+bool ManipulationActionServer::execute_phase_pipeline(
+  const MoveExecutionContext & ctx,
+  const std::vector<std::string> & phase_names,
+  const std::unordered_map<std::string, std::vector<double>> & phase_targets,
+  const std::string & instruction_label)
+{
+  const double total_phases = static_cast<double>(phase_names.size());
+  for (size_t i = 0; i < phase_names.size(); ++i) {
+    const auto & phase_name = phase_names[i];
+    auto it = phase_targets.find(phase_name);
+    if (it == phase_targets.end()) {
+      abort_move(ctx, "Missing target for phase: " + phase_name, 0.0);
+      return false;
+    }
+    if (!execute_phase_step(i, phase_name, it->second, total_phases, ctx, instruction_label)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<std::vector<double>> ManipulationActionServer::compute_approach_joints(
+  const MoveExecutionContext & ctx,
+  bool is_pure_place)
+{
+  const auto & target_pt = is_pure_place ? ctx.goal->place_point : ctx.goal->pick_point;
+  const double gripper_rad = is_pure_place ?
+    executor_->gripper_closed_rad() : executor_->gripper_open_rad();
+
+  geometry_msgs::msg::Point approach_pt = target_pt;
+  approach_pt.z += approach_z_offset_;
+
+  return resolve_point_ik(approach_pt, ctx.goal->target_frame, gripper_rad);
+}
+
+void ManipulationActionServer::execute_record_mode(
+  const MoveExecutionContext & ctx,
+  const std::string & instruction_label)
+{
+  const bool is_pure_place = (ctx.goal->operation == ExecuteChessMove::Goal::OP_PLACE);
+  const std::string approach_phase = is_pure_place ? "APPROACH_PLACE" : "APPROACH_PICK";
+
+  const auto approach_joints = compute_approach_joints(ctx, is_pure_place);
+  if (!approach_joints.has_value()) {
+    abort_move(ctx, "IK resolution failed for " + approach_phase + " in RECORD mode", 0.0);
+    return;
+  }
+
+  publish_phase_feedback(ctx, approach_phase, 10.0, instruction_label);
+
+  auto [ok, msg] = executor_->execute_joint_target(*approach_joints, approach_phase);
+  if (!ok) {
+    abort_move(ctx, "Failed moving to " + approach_phase + ": " + msg, 10.0);
+    return;
+  }
+
+  publish_phase_feedback(ctx, "WAITING_RECORD_TRIGGER", 25.0, instruction_label);
   RCLCPP_INFO(
     get_logger(),
-    "Received /arm/abort_episode request. Forwarding to episode_recorder_node/discard_episode...");
-  forward_trigger_request(discard_client_, "/episode_recorder_node/discard_episode", response);
-  notify_record_signal(RecordCoordinationSignal::ABORT);
+    "RECORD mode: In position (%s). Waiting for /arm/save_episode or /arm/abort_episode...",
+    approach_phase.c_str());
+
+  is_waiting_record_.store(true, std::memory_order_release);
+  const auto signal = wait_for_record_signal(ctx.goal_handle);
+  is_waiting_record_.store(false, std::memory_order_release);
+
+  process_record_signal(ctx, signal);
+}
+
+void ManipulationActionServer::process_record_signal(
+  const MoveExecutionContext & ctx,
+  RecordCoordinationSignal sig)
+{
+  switch (sig) {
+    case RecordCoordinationSignal::SAVE:
+      succeed_move(ctx, "Episode saved: " + resolve_instruction_label(*ctx.goal));
+      break;
+    case RecordCoordinationSignal::ABORT:
+      abort_move(ctx, "Episode aborted: " + resolve_instruction_label(*ctx.goal), 25.0);
+      break;
+    case RecordCoordinationSignal::CANCEL:
+      cancel_move(ctx, "Record move canceled by client request", 25.0);
+      break;
+    case RecordCoordinationSignal::NONE:
+    default:
+      abort_move(ctx, "Record mode timed out waiting for signal", 25.0);
+      break;
+  }
+}
+
+ManipulationActionServer::RecordCoordinationSignal ManipulationActionServer::wait_for_record_signal(
+  const std::shared_ptr<GoalHandleChessMove> & goal_handle)
+{
+  std::unique_lock<std::mutex> lock(record_mutex_);
+  record_signal_ = RecordCoordinationSignal::NONE;
+
+  while (!is_shutting_down_.load(std::memory_order_acquire)) {
+    if (goal_handle->is_canceling()) {
+      discard_active_recording_async();
+      return RecordCoordinationSignal::CANCEL;
+    }
+    if (record_signal_ != RecordCoordinationSignal::NONE) {
+      return record_signal_;
+    }
+    record_cv_.wait_for(lock, std::chrono::milliseconds(50));
+  }
+  return RecordCoordinationSignal::ABORT;
+}
+
+std::optional<ManipulationActionServer::MoveWaypoints>
+ManipulationActionServer::resolve_move_waypoints(const MoveExecutionContext & ctx)
+{
+  MoveWaypoints waypoints;
+  const uint8_t op = ctx.goal->operation;
+
+  if (op == ExecuteChessMove::Goal::OP_MOVE ||
+      op == ExecuteChessMove::Goal::OP_CLEAR_LEFT ||
+      op == ExecuteChessMove::Goal::OP_CLEAR_RIGHT ||
+      op == ExecuteChessMove::Goal::OP_PICK)
+  {
+    waypoints.pick = resolve_approach_and_descend(
+      ctx, ctx.goal->pick_point, executor_->gripper_open_rad(), "PICK");
+    if (!waypoints.pick.has_value()) {
+      return std::nullopt;
+    }
+  }
+
+  if (op == ExecuteChessMove::Goal::OP_MOVE ||
+      op == ExecuteChessMove::Goal::OP_PLACE)
+  {
+    waypoints.place = resolve_approach_and_descend(
+      ctx, ctx.goal->place_point, executor_->gripper_closed_rad(), "PLACE");
+    if (!waypoints.place.has_value()) {
+      return std::nullopt;
+    }
+  }
+
+  return waypoints;
+}
+
+std::optional<ManipulationActionServer::ApproachDescendPair>
+ManipulationActionServer::resolve_approach_and_descend(
+  const MoveExecutionContext & ctx,
+  const geometry_msgs::msg::Point & target_pt,
+  double gripper_rad,
+  const std::string & stage_name)
+{
+  geometry_msgs::msg::Point approach_pt = target_pt;
+  approach_pt.z += approach_z_offset_;
+
+  const auto approach_opt = resolve_point_ik(approach_pt, ctx.goal->target_frame, gripper_rad);
+  if (!approach_opt.has_value()) {
+    abort_move(ctx, "IK resolution failed for APPROACH_" + stage_name, 0.0);
+    return std::nullopt;
+  }
+
+  const auto descend_opt = resolve_point_ik(target_pt, ctx.goal->target_frame, gripper_rad);
+  if (!descend_opt.has_value()) {
+    abort_move(ctx, "IK resolution failed for DESCEND_" + stage_name, 0.0);
+    return std::nullopt;
+  }
+
+  return ApproachDescendPair{*approach_opt, *descend_opt};
+}
+
+std::pair<std::vector<std::string>, std::unordered_map<std::string, std::vector<double>>>
+ManipulationActionServer::build_active_phase_plan(
+  const std::shared_ptr<const ExecuteChessMove::Goal> & goal,
+  const std::optional<ApproachDescendPair> & pick_pair,
+  const std::optional<ApproachDescendPair> & place_pair)
+{
+  switch (goal->operation) {
+    case ExecuteChessMove::Goal::OP_MOVE:
+      if (!pick_pair.has_value() || !place_pair.has_value()) {
+        throw std::invalid_argument("OP_MOVE requires both pick and place waypoints.");
+      }
+      return {
+        arm::ArmMotionPlanner::kPickAndPlacePhases,
+        executor_->build_phase_targets(
+          pick_pair->approach, pick_pair->descend, place_pair->approach, place_pair->descend)
+      };
+
+    case ExecuteChessMove::Goal::OP_CLEAR_LEFT:
+      if (!pick_pair.has_value()) {
+        throw std::invalid_argument("OP_CLEAR_LEFT requires pick waypoint.");
+      }
+      return {
+        arm::ArmMotionPlanner::kClearPhases,
+        executor_->build_clear_targets(
+          pick_pair->approach, pick_pair->descend, arm::ClearBinSide::LEFT)
+      };
+
+    case ExecuteChessMove::Goal::OP_CLEAR_RIGHT:
+      if (!pick_pair.has_value()) {
+        throw std::invalid_argument("OP_CLEAR_RIGHT requires pick waypoint.");
+      }
+      return {
+        arm::ArmMotionPlanner::kClearPhases,
+        executor_->build_clear_targets(
+          pick_pair->approach, pick_pair->descend, arm::ClearBinSide::RIGHT)
+      };
+
+    case ExecuteChessMove::Goal::OP_PICK:
+      if (!pick_pair.has_value()) {
+        throw std::invalid_argument("OP_PICK requires pick waypoint.");
+      }
+      return {
+        arm::ArmMotionPlanner::kPickPhases,
+        executor_->build_pick_targets(pick_pair->approach, pick_pair->descend)
+      };
+
+    case ExecuteChessMove::Goal::OP_PLACE:
+      if (!place_pair.has_value()) {
+        throw std::invalid_argument("OP_PLACE requires place waypoint.");
+      }
+      return {
+        arm::ArmMotionPlanner::kPlacePhases,
+        executor_->build_place_targets(place_pair->approach, place_pair->descend)
+      };
+
+    default:
+      throw std::invalid_argument(
+        "Unknown manipulation operation enum: " + std::to_string(goal->operation));
+  }
+}
+
+bool ManipulationActionServer::execute_phase_step(
+  size_t phase_idx,
+  const std::string & phase_name,
+  const std::vector<double> & target_pos,
+  double total_phases,
+  const MoveExecutionContext & ctx,
+  const std::string & instruction_label)
+{
+  const double base_progress = (static_cast<double>(phase_idx) / total_phases) * 100.0;
+  publish_phase_feedback(ctx, phase_name, base_progress, instruction_label);
+
+  if (check_and_handle_preemption(ctx, phase_name, base_progress)) {
+    return false;
+  }
+
+  RCLCPP_INFO(
+    get_logger(),
+    "Executing phase [%zu/%.0f]: '%s'",
+    phase_idx + 1, total_phases, phase_name.c_str());
+
+  auto [ok, msg] = executor_->execute_joint_target(
+    target_pos, phase_name, -1.0,
+    [&ctx]() { return ctx.goal_handle->is_canceling(); });
+
+  if (!ok) {
+    if (ctx.goal_handle->is_canceling()) {
+      cancel_move(ctx, "Preempted and canceled at phase: " + phase_name, base_progress);
+    } else {
+      abort_move(ctx, "Execution failed for phase " + phase_name + ": " + msg, base_progress);
+    }
+    return false;
+  }
+  return true;
+}
+
+bool ManipulationActionServer::check_and_handle_preemption(
+  const MoveExecutionContext & ctx,
+  const std::string & phase_name,
+  double progress)
+{
+  if (ctx.goal_handle->is_canceling()) {
+    cancel_move(ctx, "Goal canceled before executing phase: " + phase_name, progress);
+    return true;
+  }
+  if (is_shutting_down_.load(std::memory_order_acquire)) {
+    abort_move(ctx, "Server shutting down", progress);
+    return true;
+  }
+  return false;
+}
+
+void ManipulationActionServer::publish_phase_feedback(
+  const MoveExecutionContext & ctx,
+  const std::string & phase_name,
+  double progress,
+  const std::string & instruction_label)
+{
+  set_snapshot(phase_name, progress, instruction_label);
+  ctx.feedback->current_phase = phase_name;
+  ctx.feedback->progress_percent = static_cast<float>(progress);
+  ctx.feedback->instruction = instruction_label;
+  ctx.goal_handle->publish_feedback(ctx.feedback);
+}
+
+void ManipulationActionServer::succeed_move(
+  const MoveExecutionContext & ctx,
+  const std::string & message)
+{
+  const double duration = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - ctx.start_time).count();
+  set_snapshot("COMPLETED", 100.0, resolve_instruction_label(*ctx.goal));
+
+  ctx.result->success = true;
+  ctx.result->message = message;
+  ctx.result->execution_time_sec = static_cast<float>(duration);
+  ctx.goal_handle->succeed(ctx.result);
+  RCLCPP_INFO(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
+}
+
+void ManipulationActionServer::cancel_move(
+  const MoveExecutionContext & ctx,
+  const std::string & message,
+  double progress)
+{
+  const double duration = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - ctx.start_time).count();
+  set_snapshot("CANCELED", progress, resolve_instruction_label(*ctx.goal));
+
+  ctx.result->success = false;
+  ctx.result->message = message;
+  ctx.result->execution_time_sec = static_cast<float>(duration);
+  ctx.goal_handle->canceled(ctx.result);
+  RCLCPP_WARN(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
+}
+
+void ManipulationActionServer::abort_move(
+  const MoveExecutionContext & ctx,
+  const std::string & message,
+  double progress)
+{
+  const double duration = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - ctx.start_time).count();
+  set_snapshot("ABORTED", progress, resolve_instruction_label(*ctx.goal));
+
+  ctx.result->success = false;
+  ctx.result->message = message;
+  ctx.result->execution_time_sec = static_cast<float>(duration);
+  ctx.goal_handle->abort(ctx.result);
+  RCLCPP_ERROR(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
 }
 
 void ManipulationActionServer::set_snapshot(
@@ -477,409 +657,25 @@ void ManipulationActionServer::set_snapshot(
   }
 }
 
-rclcpp_action::GoalResponse ManipulationActionServer::handle_goal(
-  const rclcpp_action::GoalUUID & /*uuid*/,
-  std::shared_ptr<const ExecuteChessMove::Goal> goal)
-{
-  bool expected = false;
-  if (!is_goal_active_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-    RCLCPP_WARN(get_logger(), "Rejecting goal: manipulation server is busy with an active goal.");
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-  RCLCPP_INFO(
-    get_logger(), "Received manipulation goal: '%s' (%s -> %s)",
-    goal->instruction.c_str(), goal->from_square.c_str(), goal->to_square.c_str());
-  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-}
-
-rclcpp_action::CancelResponse ManipulationActionServer::handle_cancel(
-  const std::shared_ptr<GoalHandleChessMove> /*goal_handle*/)
-{
-  RCLCPP_WARN(get_logger(), "Manipulation cancel request received.");
-  if (is_waiting_record_.load(std::memory_order_acquire)) {
-    discard_active_recording_async();
-    notify_record_signal(RecordCoordinationSignal::CANCEL);
-  }
-  return rclcpp_action::CancelResponse::ACCEPT;
-}
-
-void ManipulationActionServer::handle_accepted(
-  const std::shared_ptr<GoalHandleChessMove> goal_handle)
-{
-  if (execution_thread_.joinable()) {
-    execution_thread_.join();
-  }
-  execution_thread_ = std::thread(&ManipulationActionServer::execute_move, this, goal_handle);
-}
-
-void ManipulationActionServer::execute_move(const std::shared_ptr<GoalHandleChessMove> goal_handle)
-{
-  struct GoalLifecycleGuard
-  {
-    std::atomic<bool> & goal_flag;
-    std::atomic<bool> & wait_flag;
-    ~GoalLifecycleGuard()
-    {
-      wait_flag.store(false, std::memory_order_release);
-      goal_flag.store(false, std::memory_order_release);
-    }
-  } goal_guard{is_goal_active_, is_waiting_record_};
-
-  MoveExecutionContext ctx{
-    goal_handle,
-    goal_handle->get_goal(),
-    std::make_shared<ExecuteChessMove::Feedback>(),
-    std::make_shared<ExecuteChessMove::Result>(),
-    std::chrono::steady_clock::now()
-  };
-  ctx.feedback->instruction = ctx.goal->instruction;
-
-  set_snapshot("STARTING", 0.0, ctx.goal->instruction);
-  RCLCPP_INFO(get_logger(), "Executing chess move: '%s'", ctx.goal->instruction.c_str());
-
-  const bool is_pure_pick = ctx.goal->to_square.empty();
-  const bool is_pure_place = ctx.goal->from_square.empty();
-
-  if (record_) {
-    execute_record_mode(ctx, is_pure_place);
-    return;
-  }
-
-  const auto waypoints = resolve_move_waypoints(ctx, is_pure_pick, is_pure_place);
-  if (!waypoints.has_value()) {
-    return;
-  }
-
-  if (ctx.goal->is_capture) {
-    const std::string & instruction = ctx.goal->instruction;
-    const bool has_left = instruction.find("left") != std::string::npos;
-    const bool has_right = instruction.find("right") != std::string::npos;
-    if (!has_left && !has_right) {
-      abort_move(
-        ctx,
-        "Capture instruction must explicitly specify 'left' or 'right' onboard bin: " + instruction,
-        0.0);
-      return;
-    }
-  }
-
-  const auto [phase_names, phase_targets] = build_active_phase_plan(
-    ctx.goal, is_pure_pick, is_pure_place, waypoints->pick, waypoints->place);
-
-  const double total_phases = static_cast<double>(phase_names.size());
-  for (size_t i = 0; i < phase_names.size(); ++i) {
-    const auto & name = phase_names[i];
-    if (!execute_phase_step(i, name, phase_targets.at(name), total_phases, ctx)) {
-      return;
-    }
-  }
-
-  succeed_move(ctx, "Move completed successfully.");
-}
-
-ManipulationActionServer::RecordCoordinationSignal
-ManipulationActionServer::wait_for_record_signal(
-  const std::shared_ptr<GoalHandleChessMove> & goal_handle)
-{
-  std::unique_lock<std::mutex> lock(record_mutex_);
-  is_waiting_record_.store(true, std::memory_order_release);
-  record_signal_ = RecordCoordinationSignal::NONE;
-
-  record_cv_.wait(lock, [this, &goal_handle]() {
-    return record_signal_ != RecordCoordinationSignal::NONE ||
-           goal_handle->is_canceling() ||
-           is_shutting_down_.load(std::memory_order_acquire);
-  });
-
-  is_waiting_record_.store(false, std::memory_order_release);
-  const auto sig = record_signal_;
-  record_signal_ = RecordCoordinationSignal::NONE;
-  return sig;
-}
-
-void ManipulationActionServer::execute_record_mode(
-  const MoveExecutionContext & ctx,
-  bool is_pure_place)
-{
-  const std::string approach_phase = is_pure_place ? "APPROACH_PLACE" : "APPROACH_PICK";
-  const auto & target_pt = is_pure_place ? ctx.goal->place_point : ctx.goal->pick_point;
-  const double gripper_rad = is_pure_place ?
-    arm_motion_planner_.gripper_closed_rad() : arm_motion_planner_.gripper_open_rad();
-
-  geometry_msgs::msg::Point approach_pt = target_pt;
-  approach_pt.z += approach_z_offset_;
-
-  const auto approach_joints = resolve_point_ik(approach_pt, ctx.goal->target_frame, gripper_rad);
-  if (!approach_joints.has_value()) {
-    abort_move(ctx, "IK failed for record " + approach_phase, 0.0);
-    return;
-  }
-
-  set_runtime_approach_pose(*approach_joints);
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
-  publish_phase_feedback(ctx, approach_phase, 50.0);
-  set_snapshot("RECORDING_WAIT", 50.0, ctx.goal->instruction);
-  diagnostic_updater_.force_update();
-
-  const auto received_sig = wait_for_record_signal(ctx.goal_handle);
-  set_runtime_approach_pose(default_approach_pose_);
-
-  if (is_shutting_down_.load(std::memory_order_acquire)) {
-    abort_move(ctx, "Node shutting down", 50.0);
-    return;
-  }
-  if (received_sig == RecordCoordinationSignal::CANCEL || ctx.goal_handle->is_canceling()) {
-    for (int i = 0; i < 100 && !ctx.goal_handle->is_canceling(); ++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    if (ctx.goal_handle->is_canceling()) {
-      cancel_move(ctx, "Execution canceled by user during record wait", 0.0);
-    } else {
-      abort_move(ctx, "Cancel signal received but goal handle failed to transition to CANCELING", 50.0);
-    }
-    return;
-  }
-  if (received_sig == RecordCoordinationSignal::SAVE) {
-    succeed_move(ctx, "Episode saved: record move completed successfully.");
-    return;
-  }
-  abort_move(ctx, "Episode aborted by user.", 50.0);
-}
-
-std::optional<ManipulationActionServer::MoveWaypoints>
-ManipulationActionServer::resolve_move_waypoints(
-  const MoveExecutionContext & ctx,
-  bool is_pure_pick,
-  bool is_pure_place)
-{
-  MoveWaypoints waypoints;
-  if (!is_pure_place) {
-    waypoints.pick = resolve_approach_and_descend(
-      ctx, ctx.goal->pick_point, arm_motion_planner_.gripper_open_rad(), "PICK");
-    if (!waypoints.pick.has_value()) {
-      return std::nullopt;
-    }
-  }
-
-  if (!is_pure_pick && !ctx.goal->is_capture) {
-    waypoints.place = resolve_approach_and_descend(
-      ctx, ctx.goal->place_point, arm_motion_planner_.gripper_closed_rad(), "PLACE");
-    if (!waypoints.place.has_value()) {
-      return std::nullopt;
-    }
-  }
-  return waypoints;
-}
-
-std::optional<ManipulationActionServer::ApproachDescendPair>
-ManipulationActionServer::resolve_approach_and_descend(
-  const MoveExecutionContext & ctx,
-  const geometry_msgs::msg::Point & target_pt,
-  double gripper_rad,
-  const std::string & stage_name)
-{
-  geometry_msgs::msg::Point approach_pt = target_pt;
-  approach_pt.z += approach_z_offset_;
-
-  const auto approach_joints = resolve_point_ik(approach_pt, ctx.goal->target_frame, gripper_rad);
-  if (!approach_joints.has_value()) {
-    abort_move(ctx, "IK failed for " + stage_name + " approach", 0.0);
-    return std::nullopt;
-  }
-
-  const auto descend_joints = resolve_point_ik(target_pt, ctx.goal->target_frame, gripper_rad);
-  if (!descend_joints.has_value()) {
-    abort_move(ctx, "IK failed for " + stage_name + " descend", 0.0);
-    return std::nullopt;
-  }
-
-  return ApproachDescendPair{*approach_joints, *descend_joints};
-}
-
-std::pair<std::vector<std::string>, std::unordered_map<std::string, std::vector<double>>>
-ManipulationActionServer::build_active_phase_plan(
-  const std::shared_ptr<const ExecuteChessMove::Goal> & goal,
-  bool is_pure_pick,
-  bool is_pure_place,
-  const std::optional<ApproachDescendPair> & pick_pair,
-  const std::optional<ApproachDescendPair> & place_pair)
-{
-  std::lock_guard<std::mutex> lock(planner_mutex_);
-  if (goal->is_capture) {
-    arm::ClearBinSide bin_side = arm::ClearBinSide::LEFT;
-    if (goal->instruction.find("right") != std::string::npos) {
-      bin_side = arm::ClearBinSide::RIGHT;
-    } else if (goal->instruction.find("left") != std::string::npos) {
-      bin_side = arm::ClearBinSide::LEFT;
-    } else {
-      throw std::invalid_argument(
-        "Capture move instruction must explicitly specify 'left' or 'right' bin: " + goal->instruction);
-    }
-    return {
-      arm::ArmMotionPlanner::kClearPhases,
-      arm_motion_planner_.build_clear_targets(pick_pair->approach, pick_pair->descend, bin_side)
-    };
-  }
-  if (is_pure_pick) {
-    return {
-      arm::ArmMotionPlanner::kPickPhases,
-      arm_motion_planner_.build_pick_targets(pick_pair->approach, pick_pair->descend)
-    };
-  }
-  if (is_pure_place) {
-    return {
-      arm::ArmMotionPlanner::kPlacePhases,
-      arm_motion_planner_.build_place_targets(place_pair->approach, place_pair->descend)
-    };
-  }
-  return {
-    arm::ArmMotionPlanner::kPickAndPlacePhases,
-    arm_motion_planner_.build_phase_targets(
-      pick_pair->approach, pick_pair->descend, place_pair->approach, place_pair->descend)
-  };
-}
-
-bool ManipulationActionServer::check_and_handle_preemption(
-  const MoveExecutionContext & ctx,
-  const std::string & phase_name,
-  double progress)
-{
-  if (ctx.goal_handle->is_canceling()) {
-    cancel_move(ctx, "Canceled during phase " + phase_name, progress);
-    return true;
-  }
-  if (is_shutting_down_.load(std::memory_order_acquire)) {
-    abort_move(ctx, "Aborted (server shutting down) during phase " + phase_name, progress);
-    return true;
-  }
-  return false;
-}
-
-void ManipulationActionServer::publish_phase_feedback(
-  const MoveExecutionContext & ctx,
-  const std::string & phase_name,
-  double progress)
-{
-  set_snapshot(phase_name, progress);
-  ctx.feedback->current_phase = phase_name;
-  ctx.feedback->progress_percent = static_cast<float>(progress);
-  ctx.feedback->instruction = ctx.goal->instruction;
-  ctx.goal_handle->publish_feedback(ctx.feedback);
-  diagnostic_updater_.force_update();
-}
-
-bool ManipulationActionServer::execute_phase_step(
-  size_t phase_idx,
-  const std::string & phase_name,
-  const std::vector<double> & target_pos,
-  double total_phases,
-  const MoveExecutionContext & ctx)
-{
-  const double progress = (static_cast<double>(phase_idx) / total_phases) * 100.0;
-  if (check_and_handle_preemption(ctx, phase_name, progress)) {
-    return false;
-  }
-
-  publish_phase_feedback(ctx, phase_name, progress);
-
-  trajectory_msgs::msg::JointTrajectory traj;
-  try {
-    const auto current_pos = executor_->get_current_positions_or_default();
-    std::lock_guard<std::mutex> lock(planner_mutex_);
-    traj = arm_motion_planner_.plan_trajectory_at_velocity(
-      current_pos, target_pos, default_velocity_, sampling_rate_hz_);
-  } catch (const std::exception & exc) {
-    abort_move(ctx, "Planning failed in " + phase_name + ": " + exc.what(), progress);
-    return false;
-  }
-
-  auto traj_guard = acquire_trajectory_guard();
-  if (!traj_guard.acquired()) {
-    abort_move(ctx, "Physical trajectory lock already held in phase " + phase_name, progress);
-    return false;
-  }
-
-  const auto [ok, err_msg] = executor_->execute_trajectory(
-    traj,
-    [handle = ctx.goal_handle]() { return handle && handle->is_canceling(); });
-
-  if (!ok) {
-    if (ctx.goal_handle && ctx.goal_handle->is_canceling()) {
-      cancel_move(ctx, "Canceled during phase " + phase_name, progress);
-      return false;
-    }
-    abort_move(ctx, "Execution failed in " + phase_name + ": " + err_msg, progress);
-    return false;
-  }
-
-  return true;
-}
-
-void ManipulationActionServer::succeed_move(
-  const MoveExecutionContext & ctx,
-  const std::string & message)
-{
-  set_snapshot("IDLE", 100.0);
-  ctx.result->success = true;
-  ctx.result->message = message;
-  ctx.result->execution_time_sec = compute_elapsed_sec(ctx.start_time);
-  ctx.goal_handle->succeed(ctx.result);
-  RCLCPP_INFO(
-    get_logger(), "%s (duration: %.2fs)", message.c_str(), ctx.result->execution_time_sec);
-  diagnostic_updater_.force_update();
-}
-
-void ManipulationActionServer::cancel_move(
-  const MoveExecutionContext & ctx,
-  const std::string & message,
-  double progress)
-{
-  set_snapshot("CANCELED", progress);
-  ctx.result->success = false;
-  ctx.result->message = message;
-  ctx.result->execution_time_sec = compute_elapsed_sec(ctx.start_time);
-  ctx.goal_handle->canceled(ctx.result);
-  RCLCPP_INFO(get_logger(), "Move canceled: %s", message.c_str());
-  diagnostic_updater_.force_update();
-}
-
-void ManipulationActionServer::abort_move(
-  const MoveExecutionContext & ctx,
-  const std::string & message,
-  double progress)
-{
-  set_snapshot("ABORTED", progress);
-  ctx.result->success = false;
-  ctx.result->message = message;
-  ctx.result->execution_time_sec = compute_elapsed_sec(ctx.start_time);
-  ctx.goal_handle->abort(ctx.result);
-  RCLCPP_WARN(get_logger(), "Move aborted: %s", message.c_str());
-  diagnostic_updater_.force_update();
-}
-
 void ManipulationActionServer::produce_diagnostics(
   diagnostic_updater::DiagnosticStatusWrapper & stat)
 {
-  ExecutionSnapshot snap;
-  {
-    std::lock_guard<std::mutex> lock(snapshot_mutex_);
-    snap = snapshot_;
-  }
-  const bool active = is_goal_active_.load(std::memory_order_relaxed) ||
-                      executor_->is_trajectory_busy();
-  stat.summary(
-    diagnostic_msgs::msg::DiagnosticStatus::OK,
-    active ? "Executing manipulation" : "Idle");
-  stat.add("active", active);
-  stat.add("current_phase", snap.phase);
-  stat.add("progress_percent", snap.progress_percent);
-  stat.add("instruction", snap.instruction);
-  stat.add("controller_action", controller_action_name_);
-  stat.add("mock_execution", mock_execution_ ? "true" : "false");
-  stat.add("record_mode", record_ ? "true" : "false");
-  stat.add("arm_busy", executor_->is_trajectory_busy());
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Arm manipulation nominal");
+  stat.add("Active Phase", snapshot_.phase);
+  stat.add("Progress (%)", snapshot_.progress_percent);
+  stat.add("Instruction", snapshot_.instruction);
+  stat.add("Goal Active", is_goal_active_.load(std::memory_order_relaxed));
+  stat.add("Record Mode Waiting", is_waiting_record_.load(std::memory_order_relaxed));
+  stat.add(
+    "Trajectory Busy",
+    executor_ ? executor_->is_trajectory_busy() : false);
+  stat.add(
+    "Kinematics Ready",
+    executor_ ? executor_->is_kinematics_initialized() : false);
 }
 
 }  // namespace lekiwi_motion
 
+#include "rclcpp_components/register_node_macro.hpp"
 RCLCPP_COMPONENTS_REGISTER_NODE(lekiwi_motion::ManipulationActionServer)

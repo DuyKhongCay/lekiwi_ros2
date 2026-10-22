@@ -1,22 +1,33 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-# Goal
-string instruction             # Task description (e.g., "Pick e2, place e4", "Clear b4 to left onboard bin", "Clear b4 to right onboard bin")
-string piece_type              # Piece type (e.g., "pawn", "knight")
-string from_square             # Source square (e.g., "e2")
-string to_square               # Target square (e.g., "e4")
-geometry_msgs/Point pick_point # Grasp point in target_frame [m]
-geometry_msgs/Point place_point# Placement point in target_frame [m]
-bool is_capture                # True if move captures opponent piece
-string target_frame            # TF frame for points (default: "chessboard_frame")
+# ==============================================================================
+# Goal: Minimalist, type-safe manipulation execution interface
+# ==============================================================================
+uint8 OP_MOVE        = 0  # Pick at pick_point and place at place_point
+uint8 OP_CLEAR_LEFT  = 1  # Pick at pick_point and discard to left onboard bin
+uint8 OP_CLEAR_RIGHT = 2  # Pick at pick_point and discard to right onboard bin
+uint8 OP_PICK        = 3  # Pick at pick_point and return to stow pose
+uint8 OP_PLACE       = 4  # Retrieve from stow pose and place at place_point
+
+uint8 operation                # Target atomic manipulation primitive (OP_*)
+string instruction             # Active move instruction for recorder / telemetry (e.g. "e2e4")
+geometry_msgs/Point pick_point # Grasp target in target_frame [m] (used in MOVE, CLEAR_*, PICK)
+geometry_msgs/Point place_point# Placement target in target_frame [m] (used in MOVE, PLACE)
+string target_frame            # TF frame for coordinates (default: "chessboard_frame")
+float32[10] environment_state  # 10D state in base_footprint: [src(3), tgt(3), one_hot(4)]
 ---
+# ==============================================================================
 # Result
-bool success                   # True if physical execution succeeded
-string message                 # Result message or failure reason
-float32 execution_time_sec     # Trajectory duration [s]
+# ==============================================================================
+bool success                   # True if physical execution converged / succeeded
+string message                 # Diagnostic detail or failure reason
+float32 execution_time_sec     # Execution duration [s]
 ---
+# ==============================================================================
 # Feedback
-string current_phase           # Phase: "APPROACH_PICK", "GRASP", "LIFT", "APPROACH_PLACE", "RELEASE", "RETRACT"
+# ==============================================================================
+string current_phase           # Phase: "APPROACH", "GRASP", "LIFT", "POLICY_ROLLOUT", etc.
 float32 progress_percent       # Execution progress [0.0..100.0%]
-string instruction             # Active move instruction (e.g., "e2e4")
+string instruction             # Active move instruction for recorder / telemetry
+

@@ -5,23 +5,34 @@ cartesian_jog_server_node:
     stale_timeout_s: 0.25
     lpf_alpha: 0.85
     max_joint_vel_rad_s: 2.0
-    controller_type: "joint_trajectory"
 
     arm_trajectory_topic: "/arm_trajectory_controller/joint_trajectory"
-    arm_forward_topic: "/arm_forward_controller/commands"
+    controller_action_name: "/arm_trajectory_controller/follow_joint_trajectory"
     joint_states_topic: "/joint_states"
     robot_description_topic: "/robot_description"
 
     # Base frame and tool tip for Cartesian IK
     base_frame: "base_footprint"
     tip_frame: "gripperframe"
-    safety_margin_rad: 0.0
+    board_frame: "chessboard_frame"
+    default_velocity: 1.5
+    mock_execution: false
 
-    # Joint names in 5-DoF kinematic chain order
-    arm_joint_names:
+    # Arm joints (6 DoF kinematic chain)
+    arm_joints:
       - "arm_shoulder_pan"
       - "arm_shoulder_lift"
       - "arm_elbow_flex"
       - "arm_wrist_flex"
       - "arm_wrist_roll"
+      - "arm_gripper"
 
+    gripper:
+      open: 1.50
+      closed: 0.00
+
+    named_poses:
+      approach: [0.0414, -0.0199, 0.0598, -0.0552, -1.57, 0.0798]
+      stow: [1.5616, -1.7411, 1.5570, 0.7747, -2.7888, 0.0813]
+      clear_left: [-1.9804, -0.3375, 0.3927, 1.4972, -1.5631, 0.0828]
+      clear_right: [2.0632, -0.2301, 0.3405, 1.5079, -1.5723, 0.0828]
