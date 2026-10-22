@@ -111,7 +111,7 @@ def test_build_capture_stages_matrix(capture_goal, plan_type, expected_names):
     assert [s.name for s in stages] == expected_names
     assert stages[0].motion_state == MotionExecutionState.CLEARING_PIECE
     assert stages[0].is_capture is True
-    assert stages[0].instruction == f"Clear {capture_goal.captured_square} to left onboard bin"
+    assert stages[0].instruction == f"Clear {capture_goal.captured_square} to right onboard bin"
 
 
 def test_capture_triple_base_observation_pose_anchored_to_place_base(ros_context):

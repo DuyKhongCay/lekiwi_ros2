@@ -53,18 +53,17 @@ class MoveStep:
     requires_pre_grasp_gate: bool = True
 
 
-def _extract_clear_bin_side(message: str) -> str:
-    """Extract explicit onboard discard bin side from feasibility response message.
+# Policy: Default onboard discard bin side for piece capture
+DEFAULT_CLEAR_BIN_SIDE: str = "right"
 
-    Enforces zero backward-compatibility: captures must specify clear_left or clear_right.
+
+def _extract_clear_bin_side(message: str) -> str:
+    """Extract onboard discard bin side from feasibility response message.
+
+    NOTE: Temporarily bypassed to always route captured pieces to the right onboard bin.
     """
-    if "bin=clear_right" in message or "clear_right" in message:
-        return "right"
-    if "bin=clear_left" in message or "clear_left" in message:
-        return "left"
-    raise ValueError(
-        f"Capture feasibility message missing explicit clear bin side: {message!r}"
-    )
+    del message  # Unused during temporary right-bin bypass
+    return DEFAULT_CLEAR_BIN_SIDE
 
 
 def _clear_step(

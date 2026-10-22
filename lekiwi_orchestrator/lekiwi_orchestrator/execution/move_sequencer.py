@@ -485,10 +485,8 @@ class MoveSequencer:
         if stage.name == StepKind.MOVE:
             goal.operation = ExecuteChessMove.Goal.OP_MOVE
         elif stage.name == StepKind.CLEAR:
-            if "right" in stage.instruction.lower():
-                goal.operation = ExecuteChessMove.Goal.OP_CLEAR_RIGHT
-            else:
-                goal.operation = ExecuteChessMove.Goal.OP_CLEAR_LEFT
+            # Temporary bypass: always default clear operations to right onboard bin
+            goal.operation = ExecuteChessMove.Goal.OP_CLEAR_RIGHT
         elif stage.name == StepKind.PICK:
             goal.operation = ExecuteChessMove.Goal.OP_PICK
         elif stage.name == StepKind.PLACE:
