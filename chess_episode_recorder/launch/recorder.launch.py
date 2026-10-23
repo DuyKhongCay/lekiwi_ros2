@@ -18,6 +18,9 @@ def generate_launch_description():
     default_config_path = PathJoinSubstitution(
         [recorder_share, "config", "episode_recorder_params.yaml"]
     )
+    default_collection_config = PathJoinSubstitution(
+        [recorder_share, "config", "collection_config.yaml"]
+    )
 
     # 1. Declare Recorder & Bringup Launch Arguments
     params_file_arg = DeclareLaunchArgument(
@@ -25,16 +28,16 @@ def generate_launch_description():
         default_value=default_config_path,
         description="Path to episode recorder YAML configuration file",
     )
-    record_arg = DeclareLaunchArgument(
-        "record",
-        default_value="true",
-        description="Trigger record mode of manipulation action server.",
+    collection_config_arg = DeclareLaunchArgument(
+        "collection_config_file",
+        default_value=default_collection_config,
+        description="Path to SmolVLA collection targets YAML configuration file",
     )
     use_sim_time = DeclareLaunchArgument(
-        "use_sim_time", 
-        default_value="false", 
-        description="Use simulation clock"
-        )
+        "use_sim_time",
+        default_value="false",
+        description="Use simulation clock",
+    )
     log_level_arg = DeclareLaunchArgument(
         "log_level",
         default_value="INFO",
@@ -64,7 +67,10 @@ def generate_launch_description():
         name="episode_recorder_node",
         parameters=[
             LaunchConfiguration("recorder_params_file"),
-            {"use_sim_time": LaunchConfiguration("use_sim_time")},
+            {
+                "use_sim_time": LaunchConfiguration("use_sim_time"),
+                "collection_config_path": LaunchConfiguration("collection_config_file"),
+            },
         ],
         output="screen",
     )
@@ -72,7 +78,7 @@ def generate_launch_description():
     return LaunchDescription(
         [
             params_file_arg,
-            record_arg,
+            collection_config_arg,
             use_sim_time,
             log_level_arg,
             robot_bringup,

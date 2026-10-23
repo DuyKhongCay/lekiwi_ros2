@@ -12,6 +12,7 @@
   <!-- ROS 2 core & messages -->
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
+  <depend>diagnostic_updater</depend>
   <depend>sensor_msgs</depend>
   <depend>std_srvs</depend>
   <depend>lekiwi_interfaces</depend>
