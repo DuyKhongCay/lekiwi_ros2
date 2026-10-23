@@ -24,6 +24,10 @@ arm_pose_calibrator:
     # Destination YAML file path for exported calibrated poses
     output_yaml: "/root/docker_ws/lekiwi_ros2/lekiwi_calibration/calib_results/arm_named_poses.yaml"
 
+    # TF Frames for Cartesian landmark calculation in base_footprint
+    base_frame: "base_footprint"
+    tool_frame: "gripperframe"
+
     # ROS Topics
     joint_states_topic: "/joint_states"
     joy_topic: "/joy"

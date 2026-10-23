@@ -187,3 +187,79 @@ def test_node_fsm_capture_undo_cycle(tmp_path) -> None:
         node.destroy_node()
         rclpy.shutdown()
 
+
+def test_format_arm_poses_yaml_with_landmarks() -> None:
+    """Verify output YAML contains both joint space and Cartesian landmarks blocks."""
+    calibrated_poses = {
+        "stow": [1.6582, -1.6214, 1.5815, 0.5768, 0.0169, 0.0905],
+        "clear_left": [-1.4021, 0.0660, -0.0061, 1.1536, 0.1120, 0.0905],
+        "clear_right": [1.5079, 0.0660, -0.0061, 1.1628, 0.1120, 0.0905],
+    }
+    landmarks = {
+        "stow": [0.0704, -0.1882, 0.1757],
+        "clear_left": [-0.0029, 0.1435, 0.1702],
+        "clear_right": [-0.0027, -0.1451, 0.1633],
+    }
+
+    yaml_str = format_arm_poses_yaml(
+        existing_data={},
+        calibrated_poses=calibrated_poses,
+        arm_joints=DEFAULT_ARM_JOINTS,
+        calibrated_landmarks=landmarks,
+        precision=4,
+    )
+
+    parsed = yaml.safe_load(yaml_str)
+    assert "manipulation_action_server" in parsed
+    assert "chessboard" in parsed
+    assert "landmarks" in parsed["chessboard"]
+
+    lm = parsed["chessboard"]["landmarks"]
+    assert lm["stow"] == [0.0704, -0.1882, 0.1757]
+    assert lm["clear_left"] == [-0.0029, 0.1435, 0.1702]
+    assert lm["clear_right"] == [-0.0027, -0.1451, 0.1633]
+
+    assert "chessboard:" in yaml_str
+    assert "landmarks:" in yaml_str
+    assert "stow: [0.0704, -0.1882, 0.1757]" in yaml_str
+
+
+def test_node_cartesian_tf_capture(tmp_path) -> None:
+    """Verify node captures Cartesian coordinates via TF and exports landmarks."""
+    import rclpy
+    from unittest.mock import MagicMock
+    from geometry_msgs.msg import TransformStamped
+    from lekiwi_calibration.arm.arm_pose_calibrator_node import ArmPoseCalibratorNode
+
+    if not rclpy.ok():
+        rclpy.init()
+
+    out_file = str(tmp_path / "test_landmarks_poses.yaml")
+    node = ArmPoseCalibratorNode()
+    node.output_yaml = out_file
+
+    try:
+        # Mock TF Buffer lookup_transform
+        mock_tf = TransformStamped()
+        mock_tf.transform.translation.x = 0.0704
+        mock_tf.transform.translation.y = -0.1882
+        mock_tf.transform.translation.z = 0.1757
+        node.tf_buffer.lookup_transform = MagicMock(return_value=mock_tf)
+
+        js = JointState()
+        js.name = list(DEFAULT_ARM_JOINTS)
+        js.position = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        node.on_joint_state(js)
+
+        # Capture approach
+        node.capture_active_pose()
+        assert "approach" in node.calibrated_landmarks
+        assert node.calibrated_landmarks["approach"] == [0.0704, -0.1882, 0.1757]
+
+        # Undo
+        node.undo_last_pose()
+        assert "approach" not in node.calibrated_landmarks
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
