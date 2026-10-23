@@ -1,8 +1,0 @@
-# Copyright 2026 LeKiwi Labs
-# Licensed under the Apache License, Version 2.0.
-
-CameraMode requested_mode      # Desired camera operating mode
----
-bool success                   # True if mode transition succeeded
-CameraMode applied_mode        # Active camera mode after transition
-string message                 # Diagnostic status or failure cause
