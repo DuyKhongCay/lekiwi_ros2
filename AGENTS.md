@@ -18,7 +18,7 @@ Keep generated `build/`, `install/`, and `log/` directories located directly wit
 
 | Package | Language / Framework | Role & Scope |
 | :--- | :---: | :--- |
-| `lekiwi_interfaces/` | ROS 2 IDL | Custom msgs (`CameraMode`, `DriveStatus`, `ServoTelemetry`) and srvs (`SetCamMode`, `ResetMotorBus`). |
+| `lekiwi_interfaces/` | ROS 2 IDL | Custom msgs (`ChessMoveDetails`, `ChessGameStatus`, `PerceptionContext`), srvs (`CheckMoveFeasibility`, `ExecuteCollectionTask`), and actions (`ExecuteChessMove`, `ComputeBestMove`). |
 | `lekiwi_description/` | URDF / Xacro | Robot kinematics, 3D meshes (STL), transmissions, and `ros2_control` tags. |
 | `lekiwi_bringup/` | Launch & Configs | System compose launch files (`robot.launch.py`), YAML parameter files, and udev rules. |
 | `lekiwi_perception/` | C++17 / GStreamer / HailoRT | Zero-copy lifecycle camera streamer, Hailo-8 NPU inference, chess vision components, GTests. |
