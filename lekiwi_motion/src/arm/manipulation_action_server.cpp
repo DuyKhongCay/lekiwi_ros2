@@ -62,6 +62,12 @@ ManipulationActionServer::ManipulationActionServer(const rclcpp::NodeOptions & o
     rclcpp::ServicesQoS(),
     cb_group_recorder_coordination_);
 
+  named_pose_srv_ = create_service<GoToNamedPose>(
+    "~/go_to_named_pose",
+    std::bind(&ManipulationActionServer::handle_named_pose_request, this, std::placeholders::_1, std::placeholders::_2),
+    rclcpp::ServicesQoS(),
+    cb_group_recorder_coordination_);
+
   save_client_ = create_client<Trigger>(
     "/episode_recorder_node/save_episode",
     rclcpp::ServicesQoS(),
@@ -201,6 +207,55 @@ void ManipulationActionServer::handle_abort_episode(
   RCLCPP_WARN(get_logger(), "Received service request: /arm/abort_episode");
   if (forward_trigger_request(discard_client_, "/episode_recorder_node/discard_episode", response)) {
     notify_record_signal(RecordCoordinationSignal::ABORT);
+  }
+}
+
+void ManipulationActionServer::handle_named_pose_request(
+  const std::shared_ptr<GoToNamedPose::Request> request,
+  std::shared_ptr<GoToNamedPose::Response> response)
+{
+  if (!request || request->pose_name.empty()) {
+    response->success = false;
+    response->message = "Invalid empty pose name";
+    return;
+  }
+
+  std::string key = request->pose_name;
+  std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+  if (key != "approach") {
+    response->success = false;
+    response->message =
+      "ManipulationActionServer only manages dynamic 'approach'. For other poses (stow, clear_left, clear_right), use /cartesian_jog_server_node/go_to_named_pose";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
+  std::vector<double> target_joints;
+  {
+    std::lock_guard<std::mutex> lock(approach_mutex_);
+    if (!cached_approach_joints_.has_value()) {
+      response->success = false;
+      response->message = "No dynamic approach pose has been calculated yet in record mode.";
+      RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+      return;
+    }
+    target_joints = *cached_approach_joints_;
+  }
+
+  if (!executor_) {
+    response->success = false;
+    response->message = "ArmTrajectoryExecutor not available";
+    return;
+  }
+
+  RCLCPP_INFO(get_logger(), "Executing dynamic approach pose transition...");
+  auto [ok, msg] = executor_->execute_joint_target(target_joints, "approach");
+  response->success = ok;
+  response->message = msg;
+  if (!ok) {
+    RCLCPP_WARN(get_logger(), "Failed moving arm to approach pose: %s", msg.c_str());
+  } else {
+    RCLCPP_INFO(get_logger(), "Successfully moved arm to dynamic approach pose.");
   }
 }
 
@@ -355,19 +410,17 @@ void ManipulationActionServer::execute_record_mode(
     return;
   }
 
-  publish_phase_feedback(ctx, approach_phase, 10.0, instruction_label);
-
-  auto [ok, msg] = executor_->execute_joint_target(*approach_joints, approach_phase);
-  if (!ok) {
-    abort_move(ctx, "Failed moving to " + approach_phase + ": " + msg, 10.0);
-    return;
+  {
+    std::lock_guard<std::mutex> lock(approach_mutex_);
+    cached_approach_joints_ = *approach_joints;
   }
+  executor_->set_named_pose("approach", *approach_joints);
 
   publish_phase_feedback(ctx, "WAITING_RECORD_TRIGGER", 25.0, instruction_label);
   RCLCPP_INFO(
     get_logger(),
-    "RECORD mode: In position (%s). Waiting for /arm/save_episode or /arm/abort_episode...",
-    approach_phase.c_str());
+    "RECORD mode: Dynamic approach pose calculated and registered to ~/go_to_named_pose ('approach'). "
+    "Arm stationary. Waiting for operator trigger (/arm/save_episode or /arm/abort_episode)...");
 
   is_waiting_record_.store(true, std::memory_order_release);
   const auto signal = wait_for_record_signal(ctx.goal_handle);

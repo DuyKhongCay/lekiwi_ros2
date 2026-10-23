@@ -366,6 +366,19 @@ TEST_F(CartesianJogServerTest, NamedPoseAndToggleGripperServicesExecuteSuccessfu
     auto res = future.get();
     EXPECT_TRUE(res->success);
   }
+
+  // 4. Test approach pose rejection (delegated to manipulation_action_server)
+  {
+    auto req = std::make_shared<lekiwi_interfaces::srv::GoToNamedPose::Request>();
+    req->pose_name = "approach";
+    auto future = pose_cli->async_send_request(req);
+    while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
+      exec.spin_some();
+    }
+    auto res = future.get();
+    EXPECT_FALSE(res->success);
+    EXPECT_NE(res->message.find("manipulation_action_server"), std::string::npos);
+  }
 }
 
 }  // namespace lekiwi_motion::arm::test

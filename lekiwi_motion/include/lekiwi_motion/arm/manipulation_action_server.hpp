@@ -38,6 +38,7 @@
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <lekiwi_interfaces/action/execute_chess_move.hpp>
+#include <lekiwi_interfaces/srv/go_to_named_pose.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -59,6 +60,7 @@ public:
   using ExecuteChessMove = lekiwi_interfaces::action::ExecuteChessMove;
   using GoalHandleChessMove = rclcpp_action::ServerGoalHandle<ExecuteChessMove>;
   using Trigger = std_srvs::srv::Trigger;
+  using GoToNamedPose = lekiwi_interfaces::srv::GoToNamedPose;
 
   explicit ManipulationActionServer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
   ~ManipulationActionServer() override;
@@ -112,6 +114,10 @@ private:
   void handle_abort_episode(
     const std::shared_ptr<Trigger::Request> request,
     std::shared_ptr<Trigger::Response> response);
+
+  void handle_named_pose_request(
+    const std::shared_ptr<GoToNamedPose::Request> request,
+    std::shared_ptr<GoToNamedPose::Response> response);
 
   bool forward_trigger_request(
     const rclcpp::Client<Trigger>::SharedPtr & client,
@@ -223,8 +229,12 @@ private:
   rclcpp_action::Server<ExecuteChessMove>::SharedPtr action_server_;
   rclcpp::Service<Trigger>::SharedPtr save_episode_srv_;
   rclcpp::Service<Trigger>::SharedPtr abort_episode_srv_;
+  rclcpp::Service<GoToNamedPose>::SharedPtr named_pose_srv_;
   rclcpp::Client<Trigger>::SharedPtr save_client_;
   rclcpp::Client<Trigger>::SharedPtr discard_client_;
+
+  mutable std::mutex approach_mutex_;
+  std::optional<std::vector<double>> cached_approach_joints_{std::nullopt};
 
   // Diagnostics & Execution State
   diagnostic_updater::Updater diagnostic_updater_;

@@ -601,4 +601,106 @@ TEST_F(ManipulationActionServerTest, GoalInstructionForwardedToFeedbackAndResult
   spin_thread.join();
 }
 
+TEST_F(ManipulationActionServerTest, RecordModeNamedPoseApproachExecution)
+{
+  auto server_node = std::make_shared<ManipulationActionServer>(
+    make_base_options("/test_manip/record_named_pose", true));
+
+  auto client_node = std::make_shared<rclcpp::Node>("test_record_named_pose_client");
+  auto action_cli = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
+    client_node, "/test_manip/record_named_pose");
+
+  auto named_pose_cli = client_node->create_client<lekiwi_interfaces::srv::GoToNamedPose>(
+    "/manipulation_action_server/go_to_named_pose");
+
+  auto mock_save_srv = client_node->create_service<std_srvs::srv::Trigger>(
+    "/episode_recorder_node/save_episode",
+    [](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+       std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+      res->success = true;
+      res->message = "Mock episode saved";
+    });
+
+  auto save_cli = client_node->create_client<std_srvs::srv::Trigger>("/arm/save_episode");
+
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(client_node);
+
+  std::thread spin_thread([&executor]() { executor.spin(); });
+
+  ASSERT_TRUE(action_cli->wait_for_action_server(std::chrono::seconds(3)));
+  ASSERT_TRUE(named_pose_cli->wait_for_service(std::chrono::seconds(3)));
+
+  // 1. Calling non-approach pose is rejected
+  {
+    auto req = std::make_shared<lekiwi_interfaces::srv::GoToNamedPose::Request>();
+    req->pose_name = "stow";
+    auto future = named_pose_cli->async_send_request(req);
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto res = future.get();
+    EXPECT_FALSE(res->success);
+    EXPECT_NE(res->message.find("only manages dynamic 'approach'"), std::string::npos);
+  }
+
+  // 2. Calling approach pose before goal calculation is rejected
+  {
+    auto req = std::make_shared<lekiwi_interfaces::srv::GoToNamedPose::Request>();
+    req->pose_name = "approach";
+    auto future = named_pose_cli->async_send_request(req);
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto res = future.get();
+    EXPECT_FALSE(res->success);
+    EXPECT_NE(res->message.find("No dynamic approach pose has been calculated yet"), std::string::npos);
+  }
+
+  // 3. Send goal in record mode
+  ManipulationActionServer::ExecuteChessMove::Goal goal;
+  goal.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_PICK;
+  goal.instruction = "Pick knight";
+  goal.target_frame = "base_footprint";
+  goal.pick_point.x = 0.20;
+  goal.pick_point.y = 0.0;
+  goal.pick_point.z = 0.05;
+
+  auto send_goal_future = action_cli->async_send_goal(goal);
+  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+  auto goal_handle = send_goal_future.get();
+  ASSERT_NE(goal_handle, nullptr);
+
+  const auto wait_start = std::chrono::steady_clock::now();
+  while (!server_node->is_waiting_record() &&
+    (std::chrono::steady_clock::now() - wait_start) < std::chrono::seconds(2))
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_TRUE(server_node->is_waiting_record());
+
+  // 4. Calling approach pose now succeeds
+  {
+    auto req = std::make_shared<lekiwi_interfaces::srv::GoToNamedPose::Request>();
+    req->pose_name = "approach";
+    auto future = named_pose_cli->async_send_request(req);
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto res = future.get();
+    EXPECT_TRUE(res->success);
+    EXPECT_NE(res->message.find("Successfully executed target: approach"), std::string::npos);
+  }
+
+  // 5. Save episode to complete
+  auto save_req = std::make_shared<std_srvs::srv::Trigger::Request>();
+  auto save_future = save_cli->async_send_request(save_req);
+  ASSERT_EQ(save_future.wait_for(std::chrono::seconds(3)), std::future_status::ready);
+  EXPECT_TRUE(save_future.get()->success);
+
+  auto result_future = action_cli->async_get_result(goal_handle);
+  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+  auto wrapped_result = result_future.get();
+  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
+  EXPECT_TRUE(wrapped_result.result->success);
+
+  executor.cancel();
+  spin_thread.join();
+}
+
 }  // namespace lekiwi_motion

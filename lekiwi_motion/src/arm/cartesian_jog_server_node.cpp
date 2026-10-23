@@ -327,6 +327,16 @@ void CartesianJogServerNode::handle_named_pose_request(
     return;
   }
 
+  std::string key = request->pose_name;
+  std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+  if (key == "approach") {
+    response->success = false;
+    response->message =
+      "Pose 'approach' is dynamically managed by /manipulation_action_server/go_to_named_pose";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
   auto [ok, msg] = executor_->execute_named_pose(request->pose_name);
   response->success = ok;
   response->message = msg;
