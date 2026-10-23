@@ -4,13 +4,12 @@
 import logging
 from pathlib import Path
 import tempfile
-import numpy as np
 import pytest
 import yaml
 
 from chess_rosbag_to_lerobot.cli import build_parser
 from chess_rosbag_to_lerobot.config import Config, load_config
-from chess_rosbag_to_lerobot.converter import convert_one_bag
+from chess_rosbag_to_lerobot.converter import build_lerobot_features, convert_one_bag
 
 
 def test_load_config_lekiwi_chess():
@@ -43,22 +42,20 @@ def test_load_config_lekiwi_chess():
     assert "observation.images.overhead" in feature_keys
     assert "observation.state" in feature_keys
     assert "action" in feature_keys
-    assert "observation.environment_state" in feature_keys
+    assert "observation.environment_state" not in feature_keys
+    assert not hasattr(cfg, "phase_conditioning")
 
-    # Check 12D environment_state feature shape
-    env_spec = next(f for f in cfg.features if f.key == "observation.environment_state")
-    assert env_spec.shape == [12]
-
-    # Phase conditioning checks
-    pc = cfg.phase_conditioning
-    assert pc.trim_leading_idle_frames == 5
-    assert pc.target_trailing_stow_frames == 25
-    assert pytest.approx(pc.motion_onset_delta_rad) == 0.03
-    assert pytest.approx(pc.stow_settle_delta_rad) == 0.02
-    assert pytest.approx(pc.arm_extended_lift_min_rad) == -1.0
-    assert pytest.approx(pc.gripper_open_min_rad) == 0.22
-    assert pytest.approx(pc.gripper_closed_max_rad) == 0.12
-    assert pytest.approx(pc.min_transport_duration_s) == 0.5
+    # Verify 12D observation.state schema in build_lerobot_features
+    lerobot_schema = build_lerobot_features(cfg)
+    assert "observation.state" in lerobot_schema
+    assert lerobot_schema["observation.state"]["shape"] == (12,)
+    names = lerobot_schema["observation.state"]["names"]
+    assert len(names) == 12
+    assert names[0] == "arm_shoulder_pan.pos"
+    assert names[5] == "arm_gripper.pos"
+    assert names[6:9] == ["source_x", "source_y", "source_z"]
+    assert names[9:12] == ["target_x", "target_y", "target_z"]
+    assert "observation.environment_state" not in lerobot_schema
 
 
 def test_cli_parser_and_task_types():
@@ -108,3 +105,4 @@ def test_convert_one_bag_skips_ambiguous_clear_via_value_error(caplog):
         assert frames == 0
         assert dropped == 0
         assert any("Skipping episode" in rec.message and "Ambiguous CLEAR" in rec.message for rec in caplog.records)
+

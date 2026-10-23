@@ -30,9 +30,8 @@ from chess_rosbag_to_lerobot.bag_reader import (
 from chess_rosbag_to_lerobot.buffers import LastBuffer
 from chess_rosbag_to_lerobot.chess_spatial_bridge import (
     EpisodeSpatialPlan,
-    assemble_environment_state,
-    condition_episode_frames,
     resolve_episode_spatial_plan,
+    sort_episodes,
 )
 from chess_rosbag_to_lerobot.config import Config, FeatureSpec
 from chess_rosbag_to_lerobot.decoders import decode, get_lerobot_dtype
@@ -41,15 +40,6 @@ from chess_rosbag_to_lerobot.tf_replayer import TfReplayer
 logger = logging.getLogger(__name__)
 
 POS_KEYS = {"observation.state", "action"}
-
-ENV_STATE_12D_NAMES = [
-    "source_x", "source_y", "source_z",
-    "target_x", "target_y", "target_z",
-    "is_move", "is_clear", "is_pick", "is_place",
-    "has_grasped", "has_released",
-]
-# Retain 10D alias for backwards compatibility
-ENV_STATE_10D_NAMES = ENV_STATE_12D_NAMES[:10]
 
 
 def _is_visual(spec: FeatureSpec) -> bool:
@@ -91,12 +81,18 @@ def build_lerobot_features(cfg: Config, use_videos: bool = True) -> Dict[str, An
                 "shape": tuple(int(x) for x in spec.shape),
                 "names": ["height", "width", "channels"],
             }
-        elif spec.msg_type.startswith("spatial/"):
-            # Chess spatial environment state (12D: [source(3), target(3), one_hot(4), has_grasped, has_released])
+        elif spec.key == "observation.state":
+            # SmolVLA 12D proprioception: 6 arm joints + 3D source + 3D target
+            names = list(spec.names) if spec.names is not None else []
+            names = _add_pos_suffix(names)
+            names = names + [
+                "source_x", "source_y", "source_z",
+                "target_x", "target_y", "target_z",
+            ]
             features[spec.key] = {
                 "dtype": "float32",
                 "shape": (12,),
-                "names": ENV_STATE_12D_NAMES,
+                "names": names,
             }
         else:
             names = list(spec.names) if spec.names is not None else None
@@ -114,7 +110,7 @@ def build_lerobot_features(cfg: Config, use_videos: bool = True) -> Dict[str, An
 
 
 # -----------------------------------------------------------------------------
-# Decomposed Episode Processing Helpers (Cognitive Complexity <= 6 each)
+# Decomposed Episode Processing Helpers
 # -----------------------------------------------------------------------------
 
 def _extract_episode_task(bag_dir: Path, default_task: str) -> str:
@@ -211,15 +207,22 @@ def _build_reference_frame(
         "task": spatial_plan.canonical_task,
     }
 
-    # Store transform callback for deferred conditioning across the episode
-    def transform_endpoint(pt: np.ndarray) -> Optional[np.ndarray]:
-        if cfg.chessboard.base_frame == cfg.chessboard.board_frame:
-            return pt
-        return tf_replayer.transform_point(
-            pt, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
+    # Transform spatial endpoints to base_footprint frame at current reference timestamp
+    if spatial_plan.source.is_board_frame:
+        transformed_src = tf_replayer.transform_point(
+            spatial_plan.source.xyz, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
         )
+        src_xyz = transformed_src if transformed_src is not None else spatial_plan.source.xyz
+    else:
+        src_xyz = spatial_plan.source.xyz
 
-    frame["_transform_fn"] = transform_endpoint
+    if spatial_plan.target.is_board_frame:
+        transformed_tgt = tf_replayer.transform_point(
+            spatial_plan.target.xyz, cfg.chessboard.board_frame, cfg.chessboard.base_frame, ts_ns
+        )
+        tgt_xyz = transformed_tgt if transformed_tgt is not None else spatial_plan.target.xyz
+    else:
+        tgt_xyz = spatial_plan.target.xyz
 
     # Sample remaining buffered features
     for other_spec in cfg.features:
@@ -229,7 +232,13 @@ def _build_reference_frame(
         val = buffers[other_spec.topic].asof(ts_ns)
         if val is None:
             return None  # Stale or missing sample: drop frame
-        frame[other_spec.key] = val
+
+        if other_spec.key == "observation.state":
+            # Augment 6-DOF joint states with 3D source and 3D target -> 12D observation.state
+            state_12d = np.concatenate([val, src_xyz, tgt_xyz]).astype(np.float32)
+            frame[other_spec.key] = state_12d
+        else:
+            frame[other_spec.key] = val
 
     return frame
 
@@ -305,8 +314,6 @@ def convert_one_bag(
         )
 
     # Pre-scan and load all TF transforms into buffer before chronological playback
-    # This prevents transient startup latency where the first reference image message
-    # arrives slightly before the first TF message in the sequential reader.
     if tf_msg_cls is not None:
         tf_scan_reader = open_reader(bag_dir)
         while tf_scan_reader.has_next():
@@ -318,7 +325,6 @@ def convert_one_bag(
 
     frame_count = 0
     dropped_count = 0
-    raw_frames: List[Dict[str, Any]] = []
 
     while reader.has_next():
         topic, data, bag_ts_ns = reader.read_next()
@@ -342,27 +348,11 @@ def convert_one_bag(
             if frame is None:
                 dropped_count += 1
             else:
-                raw_frames.append(frame)
+                if dataset is not None:
+                    dataset.add_frame(frame)
+                frame_count += 1
         else:
             buffers[topic].push(ts_ns, decode(msg, spec))
-
-    if not raw_frames:
-        return _log_and_save_episode(bag_dir, 0, dropped_count, buffers, dataset)
-
-    try:
-        conditioned_frames = condition_episode_frames(raw_frames, spatial_plan, cfg)
-    except ValueError as exc:
-        logger.warning(
-            "Skipping episode %s: kinematic conditioning failed: %s",
-            bag_dir.name,
-            exc,
-        )
-        return _log_and_save_episode(bag_dir, 0, dropped_count + len(raw_frames), buffers, dataset)
-
-    for frame in conditioned_frames:
-        if dataset is not None:
-            dataset.add_frame(frame)
-        frame_count += 1
 
     return _log_and_save_episode(bag_dir, frame_count, dropped_count, buffers, dataset)
 
@@ -384,7 +374,13 @@ def convert_all_bags(
     if not episodes:
         raise RuntimeError(f"No valid rosbag episode directories found in {input_dir}")
 
-    logger.info("Found %d episode(s) to convert in %s", len(episodes), input_dir)
+    # Sort episodes deterministically: Task (MOVE, CLEAR, PICK, PLACE) -> Piece -> Color -> ID
+    episodes = sort_episodes(
+        episodes,
+        task_extractor=lambda ep: _extract_episode_task(ep, cfg.task),
+    )
+
+    logger.info("Found %d episode(s) to convert in %s (sorted by task & piece)", len(episodes), input_dir)
 
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -455,3 +451,4 @@ def convert_all_bags(
         total_dropped,
         (100.0 * total_dropped / max(1, total_frames + total_dropped)),
     )
+

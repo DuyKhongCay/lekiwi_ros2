@@ -45,19 +45,6 @@ class FeatureSpec:
     max_age_s: Optional[float] = None
 
 
-@dataclass(frozen=True)
-class PhaseConditioningConfig:
-    """Kinematic threshold and episode boundary normalization settings."""
-    trim_leading_idle_frames: int = 5
-    target_trailing_stow_frames: int = 25
-    motion_onset_delta_rad: float = 0.03
-    stow_settle_delta_rad: float = 0.02
-    arm_extended_lift_min_rad: float = -1.0
-    gripper_open_min_rad: float = 0.22
-    gripper_closed_max_rad: float = 0.12
-    min_transport_duration_s: float = 0.5
-
-
 @dataclass
 class Config:
     """Global conversion configuration."""
@@ -70,9 +57,6 @@ class Config:
     features: List[FeatureSpec] = field(default_factory=list)
     include_task_types: List[str] = field(
         default_factory=lambda: ["move", "clear", "pick", "place"]
-    )
-    phase_conditioning: PhaseConditioningConfig = field(
-        default_factory=PhaseConditioningConfig
     )
 
 
@@ -134,20 +118,6 @@ def load_config(path: Path | str) -> Config:
                 f"Allowed types: {VALID_TASK_TYPES}"
             )
 
-    # Phase conditioning section
-    pc_data = data.get("phase_conditioning", {})
-    default_pc = PhaseConditioningConfig()
-    phase_conditioning = PhaseConditioningConfig(
-        trim_leading_idle_frames=int(pc_data.get("trim_leading_idle_frames", default_pc.trim_leading_idle_frames)),
-        target_trailing_stow_frames=int(pc_data.get("target_trailing_stow_frames", default_pc.target_trailing_stow_frames)),
-        motion_onset_delta_rad=float(pc_data.get("motion_onset_delta_rad", default_pc.motion_onset_delta_rad)),
-        stow_settle_delta_rad=float(pc_data.get("stow_settle_delta_rad", default_pc.stow_settle_delta_rad)),
-        arm_extended_lift_min_rad=float(pc_data.get("arm_extended_lift_min_rad", default_pc.arm_extended_lift_min_rad)),
-        gripper_open_min_rad=float(pc_data.get("gripper_open_min_rad", default_pc.gripper_open_min_rad)),
-        gripper_closed_max_rad=float(pc_data.get("gripper_closed_max_rad", default_pc.gripper_closed_max_rad)),
-        min_transport_duration_s=float(pc_data.get("min_transport_duration_s", default_pc.min_transport_duration_s)),
-    )
-
     return Config(
         robot_type=str(data.get("robot_type", "lekiwi")),
         fps=int(data.get("fps", 25)),
@@ -157,5 +127,4 @@ def load_config(path: Path | str) -> Config:
         chessboard=cb_cfg,
         features=features,
         include_task_types=include_task_types,
-        phase_conditioning=phase_conditioning,
     )
