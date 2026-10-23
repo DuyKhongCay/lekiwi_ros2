@@ -54,6 +54,8 @@ class TurnHost(Protocol):
 
     def set_last_interaction_pose(self, pose: PoseStamped | None) -> None: ...
 
+    def set_candidate_move(self, move_details: ChessMoveDetails | None) -> None: ...
+
     def start_post_move_watchdog(self) -> None: ...
 
 
@@ -141,15 +143,12 @@ class GameStatusHandler:
         if self.handle_game_over_if_ended(msg):
             return True
 
-        with self._state_lock:
-            current_color = self._robot_color
-
-        if msg.active_color == current_color:
-            self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE)
-            return False
-
-        self._transition_to_fn(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
-        return True
+        # Default transition after AWAITING_BOARD_SYNC is EVALUATING_BEST_MOVE (COMPUTE_BEST_MOVE)
+        self._node.get_logger().info(
+            ">>> [BOARD SYNC] Board layout stable. Defaulting transition to EVALUATING_BEST_MOVE."
+        )
+        self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE)
+        return False
 
     def handle_game_over_if_ended(self, msg: ChessGameStatus) -> bool:
         """Check and transition to GAME_OVER if referee reports checkmate or draw."""
@@ -265,8 +264,7 @@ class GameStatusHandler:
         details = msg.best_move_details
         self._node.get_logger().info(
             f">>> [ORCHESTRATOR] New Best Move Received: '{details.uci}' "
-            f"(SAN: {details.san}, Piece: {details.piece_type}, "
-            f"Capture: {details.is_capture}, Eval: {msg.eval_centipawns} cp, Color: {msg.active_color})"
+            f"(Piece: {details.piece_type}, Capture: {details.is_capture}, Color: {msg.active_color})"
         )
         self._reset_obs_viewpoints_fn()
         self._dispatch_workflow_fn(details.uci, details)
@@ -354,6 +352,10 @@ class MoveWorkflow:
         if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
             return
 
+        if details.is_castling:
+            self._query_castling_feasibility(details)
+            return
+
         self._node.get_logger().info(
             f"Querying reachability feasibility for {details.from_square} -> {details.to_square}..."
         )
@@ -366,6 +368,149 @@ class MoveWorkflow:
         )
         if not dispatched:
             self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
+
+    def dispatch_collection_task(self, details: ChessMoveGoal) -> tuple[bool, str]:
+        """Dispatch an externally driven recording task with feasibility checks."""
+        if not self._host.is_nav_ready:
+            msg = "Cannot execute collection task: Navigation system not ready."
+            self._node.get_logger().warn(msg)
+            self._host.transition_to(MacroMissionState.WAITING_FOR_TF_READY)
+            self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
+            return (False, msg)
+
+        cur_state = self._host.mission_state
+        if cur_state in (
+            MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+            MacroMissionState.TURN_COMPLETED,
+            MacroMissionState.WAITING_FOR_TF_READY,
+            MacroMissionState.EVALUATING_BEST_MOVE,
+        ) and not self._host.transition_to(MacroMissionState.EVALUATING_BEST_MOVE):
+            return (False, f"Cannot transition to EVALUATING_BEST_MOVE from {cur_state.name}")
+
+        if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
+            return (False, f"Cannot transition to CHECKING_REACHABILITY from {self._host.mission_state.name}")
+
+        self._host.set_current_move(details)
+        self._node.get_logger().info(
+            f"Querying reachability feasibility for collection task {details.from_square} -> {details.to_square}..."
+        )
+
+        if details.is_castling:
+            self._query_castling_feasibility(details)
+        else:
+            dispatcher = self._dispatcher_provider()
+            dispatched = dispatcher.check_feasibility(
+                goal=details,
+                timeout_sec=self._config.feasibility_timeout_sec,
+                on_success=lambda resp: self.on_feasibility_response(resp, details),
+                on_error=self.on_feasibility_error,
+            )
+            if not dispatched:
+                self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
+                return (False, "Failed to dispatch feasibility service call")
+
+        return (True, f"Collection task dispatched successfully for {details.uci}")
+
+    def _query_castling_feasibility(self, details: ChessMoveGoal) -> None:
+        """Execute two sequential feasibility checks for King and Rook in castling."""
+        self._node.get_logger().info(
+            f"[CASTLING] Step 1/2: Querying King feasibility for {details.from_square} -> {details.to_square}..."
+        )
+        king_goal = ChessMoveGoal(
+            uci=f"{details.from_square}{details.to_square}",
+            piece_type="king",
+            color=details.color,
+            force_pick_place=details.force_pick_place,
+            clear_bin_side=details.clear_bin_side,
+            bypass_steps=details.bypass_steps,
+        )
+        dispatcher = self._dispatcher_provider()
+        dispatched = dispatcher.check_feasibility(
+            goal=king_goal,
+            timeout_sec=self._config.feasibility_timeout_sec,
+            on_success=lambda resp_king: self._on_castling_king_feasibility_response(resp_king, details),
+            on_error=self.on_feasibility_error,
+        )
+        if not dispatched:
+            self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
+
+    def _on_castling_king_feasibility_response(
+        self, resp_king: CheckMoveFeasibility.Response, details: ChessMoveGoal
+    ) -> None:
+        if not resp_king.feasible:
+            self._node.get_logger().error(
+                f"[CASTLING] King move {details.from_square}->{details.to_square} NOT FEASIBLE: {resp_king.message}"
+            )
+            self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
+            return
+
+        self._node.get_logger().info(
+            f"[CASTLING] King feasibility confirmed ({resp_king.message}). "
+            f"Step 2/2: Querying Rook feasibility for {details.castling_rook_from} -> {details.castling_rook_to}..."
+        )
+        rook_goal = ChessMoveGoal(
+            uci=f"{details.castling_rook_from}{details.castling_rook_to}",
+            piece_type="rook",
+            color=details.color,
+            force_pick_place=details.force_pick_place,
+            clear_bin_side=details.clear_bin_side,
+            bypass_steps=details.bypass_steps,
+        )
+        dispatcher = self._dispatcher_provider()
+        dispatched = dispatcher.check_feasibility(
+            goal=rook_goal,
+            timeout_sec=self._config.feasibility_timeout_sec,
+            on_success=lambda resp_rook: self._on_castling_rook_feasibility_response(
+                resp_king, resp_rook, details, rook_goal
+            ),
+            on_error=self.on_feasibility_error,
+        )
+        if not dispatched:
+            self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
+
+    def _on_castling_rook_feasibility_response(
+        self,
+        resp_king: CheckMoveFeasibility.Response,
+        resp_rook: CheckMoveFeasibility.Response,
+        details: ChessMoveGoal,
+        rook_goal: ChessMoveGoal,
+    ) -> None:
+        if not resp_rook.feasible:
+            self._node.get_logger().error(
+                f"[CASTLING] Rook move {details.castling_rook_from}->{details.castling_rook_to} NOT FEASIBLE: {resp_rook.message}"
+            )
+            self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
+            return
+
+        self._node.get_logger().info(
+            "[CASTLING] Both King and Rook feasibilities confirmed! Assembling combined pipeline."
+        )
+
+        last_base_pose = self.extract_valid_base_pose(resp_rook) or self.extract_valid_base_pose(resp_king)
+        self._host.set_last_interaction_pose(last_base_pose)
+
+        obs_pose = (
+            self._obs_nav.compute_observation_pose_for_base(last_base_pose)
+            if self._config.navigation
+            else None
+        )
+
+        king_goal = ChessMoveGoal(
+            uci=f"{details.from_square}{details.to_square}",
+            piece_type="king",
+            color=details.color,
+            force_pick_place=details.force_pick_place,
+            clear_bin_side=details.clear_bin_side,
+            bypass_steps=details.bypass_steps,
+        )
+        king_steps = MovePlanBuilder.build_steps(resp_king, king_goal, observation_pose=None)
+        rook_steps = MovePlanBuilder.build_steps(resp_rook, rook_goal, observation_pose=obs_pose)
+
+        all_stages = king_steps + rook_steps
+        if not self._host.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE):
+            return
+
+        self._pipeline_executor.start_pipeline(all_stages)
 
     def on_feasibility_error(self, error_msg: str) -> None:
         self._node.get_logger().error(

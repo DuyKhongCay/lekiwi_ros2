@@ -215,16 +215,13 @@ class RosMotionClient(MotionClient):
     def _build_feasibility_request(goal: ChessMoveGoal) -> CheckMoveFeasibility.Request:
         req = CheckMoveFeasibility.Request()
         req.move.uci = goal.uci
-        req.move.from_square = goal.from_square
-        req.move.to_square = goal.to_square
+        req.move.piece_color = "w" if goal.color.lower() in ("w", "white") else "b"
+        req.move.piece_type = goal.piece_type
         req.move.is_capture = goal.is_capture
-        req.move.captured_square = goal.captured_square
+        req.move.is_en_passant = goal.is_en_passant
+        req.move.is_castling = goal.is_castling
         if goal.promotion:
             req.move.promotion_piece = goal.promotion
-        if goal.castling_rook_from:
-            req.move.castling_rook_from = goal.castling_rook_from
-            req.move.castling_rook_to = goal.castling_rook_to
-            req.move.is_castling = True
         return req
 
     @staticmethod

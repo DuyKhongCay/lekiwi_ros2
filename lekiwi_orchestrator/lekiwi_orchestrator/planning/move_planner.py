@@ -51,22 +51,21 @@ class MoveStep:
     motion_state: MotionExecutionState = MotionExecutionState.IDLE
     nav_motion_state: MotionExecutionState | None = None
     requires_pre_grasp_gate: bool = True
+    clear_bin_side: str = "right"
+    bypass_record: bool = False
 
 
-# Policy: Default onboard discard bin side for piece capture
-DEFAULT_CLEAR_BIN_SIDE: str = "right"
-
-
-def _extract_clear_bin_side(message: str) -> str:
-    """Extract onboard discard bin side from feasibility response message.
-
-    NOTE: Temporarily bypassed to always route captured pieces to the right onboard bin.
-    """
-    del message  # Unused during temporary right-bin bypass
-    return DEFAULT_CLEAR_BIN_SIDE
+def _resolve_clear_bin_side(details: ChessMoveGoal, message: str = "") -> str:
+    """Extract discard bin side prioritizing explicit goal directive over feasibility message."""
+    if details.clear_bin_side:
+        return details.clear_bin_side.lower()
+    if "clear_left" in message.lower():
+        return "left"
+    return "right"
 
 
 def _clear_step(
+    details: ChessMoveGoal,
     from_square: str,
     pick_point: Point,
     bin_side: str,
@@ -74,10 +73,13 @@ def _clear_step(
     nav_state: MotionExecutionState | None = None,
     requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
+    cap_color = details.opposing_color
+    cap_piece = details.captured_piece or "piece"
+    instruction = f"Clear {cap_color} {cap_piece} to {bin_side} bin"
     return MoveStep(
         name=StepKind.CLEAR,
         target_pose=target_pose,
-        instruction=f"Clear {from_square} to {bin_side} onboard bin",
+        instruction=instruction,
         from_square=from_square,
         to_square="",
         is_capture=True,
@@ -86,20 +88,24 @@ def _clear_step(
         motion_state=MotionExecutionState.CLEARING_PIECE,
         nav_motion_state=nav_state,
         requires_pre_grasp_gate=requires_pre_grasp_gate,
+        clear_bin_side=bin_side,
+        bypass_record="CLEAR" in details.bypass_steps,
     )
 
 
 def _pick_step(
+    details: ChessMoveGoal,
     from_square: str,
     pick_point: Point,
     target_pose: PoseStamped | None = None,
     nav_state: MotionExecutionState | None = None,
     requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
+    instruction = f"Pick {details.color} {details.piece}"
     return MoveStep(
         name=StepKind.PICK,
         target_pose=target_pose,
-        instruction=f"Pick {from_square}",
+        instruction=instruction,
         from_square=from_square,
         to_square="",
         is_capture=False,
@@ -108,20 +114,23 @@ def _pick_step(
         motion_state=MotionExecutionState.PICKING_PIECE,
         nav_motion_state=nav_state,
         requires_pre_grasp_gate=requires_pre_grasp_gate,
+        bypass_record="PICK" in details.bypass_steps,
     )
 
 
 def _place_step(
+    details: ChessMoveGoal,
     to_square: str,
     place_point: Point,
     target_pose: PoseStamped | None = None,
     nav_state: MotionExecutionState | None = None,
     requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
+    instruction = f"Place {details.color} {details.piece}"
     return MoveStep(
         name=StepKind.PLACE,
         target_pose=target_pose,
-        instruction=f"Place {to_square}",
+        instruction=instruction,
         from_square="",
         to_square=to_square,
         is_capture=False,
@@ -130,10 +139,12 @@ def _place_step(
         motion_state=MotionExecutionState.PLACING_PIECE,
         nav_motion_state=nav_state,
         requires_pre_grasp_gate=requires_pre_grasp_gate,
+        bypass_record="PLACE" in details.bypass_steps,
     )
 
 
 def _move_step(
+    details: ChessMoveGoal,
     from_square: str,
     to_square: str,
     pick_point: Point,
@@ -143,10 +154,11 @@ def _move_step(
     nav_state: MotionExecutionState | None = None,
     requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
+    instruction = f"Move {details.color} {details.piece} to target"
     return MoveStep(
         name=StepKind.MOVE,
         target_pose=target_pose,
-        instruction=f"Pick {from_square}, place {to_square}",
+        instruction=instruction,
         from_square=from_square,
         to_square=to_square,
         is_capture=is_capture,
@@ -155,6 +167,7 @@ def _move_step(
         motion_state=MotionExecutionState.PICKING_PIECE,
         nav_motion_state=nav_state,
         requires_pre_grasp_gate=requires_pre_grasp_gate,
+        bypass_record="MOVE" in details.bypass_steps,
     )
 
 
@@ -171,6 +184,7 @@ def _observation_step(observation_pose: PoseStamped) -> MoveStep:
         motion_state=MotionExecutionState.IDLE,
         nav_motion_state=MotionExecutionState.NAV_TO_OBS,
         requires_pre_grasp_gate=False,
+        bypass_record=False,
     )
 
 
@@ -220,8 +234,23 @@ class MovePlanBuilder:
         resp: CheckMoveFeasibility.Response,
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
+        if details.force_pick_place:
+            return [
+                _pick_step(
+                    details=details,
+                    from_square=details.from_square,
+                    pick_point=resp.pick_point,
+                ),
+                _place_step(
+                    details=details,
+                    to_square=details.to_square,
+                    place_point=resp.place_point,
+                    requires_pre_grasp_gate=False,
+                ),
+            ]
         return [
             _move_step(
+                details=details,
                 from_square=details.from_square,
                 to_square=details.to_square,
                 pick_point=resp.pick_point,
@@ -234,8 +263,25 @@ class MovePlanBuilder:
         resp: CheckMoveFeasibility.Response,
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
+        if details.force_pick_place:
+            return [
+                _pick_step(
+                    details=details,
+                    from_square=details.from_square,
+                    pick_point=resp.pick_point,
+                    target_pose=resp.pick_base_pose,
+                    nav_state=MotionExecutionState.NAV_TO_PICK,
+                ),
+                _place_step(
+                    details=details,
+                    to_square=details.to_square,
+                    place_point=resp.place_point,
+                    requires_pre_grasp_gate=False,
+                ),
+            ]
         return [
             _move_step(
+                details=details,
                 from_square=details.from_square,
                 to_square=details.to_square,
                 pick_point=resp.pick_point,
@@ -252,12 +298,14 @@ class MovePlanBuilder:
     ) -> list[MoveStep]:
         return [
             _pick_step(
+                details=details,
                 from_square=details.from_square,
                 pick_point=resp.pick_point,
                 target_pose=resp.pick_base_pose,
                 nav_state=MotionExecutionState.NAV_TO_PICK,
             ),
             _place_step(
+                details=details,
                 to_square=details.to_square,
                 place_point=resp.place_point,
                 target_pose=resp.place_base_pose,
@@ -272,14 +320,33 @@ class MovePlanBuilder:
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
         cap_sq = details.captured_square or details.to_square
-        bin_side = _extract_clear_bin_side(resp.message)
+        bin_side = _resolve_clear_bin_side(details, resp.message)
+        clear_st = _clear_step(
+            details=details,
+            from_square=cap_sq,
+            pick_point=resp.clear_point,
+            bin_side=bin_side,
+        )
+        if details.force_pick_place:
+            return [
+                clear_st,
+                _pick_step(
+                    details=details,
+                    from_square=details.from_square,
+                    pick_point=resp.pick_point,
+                    requires_pre_grasp_gate=False,
+                ),
+                _place_step(
+                    details=details,
+                    to_square=details.to_square,
+                    place_point=resp.place_point,
+                    requires_pre_grasp_gate=False,
+                ),
+            ]
         return [
-            _clear_step(
-                from_square=cap_sq,
-                pick_point=resp.clear_point,
-                bin_side=bin_side,
-            ),
+            clear_st,
             _move_step(
+                details=details,
                 from_square=details.from_square,
                 to_square=details.to_square,
                 pick_point=resp.pick_point,
@@ -295,16 +362,35 @@ class MovePlanBuilder:
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
         cap_sq = details.captured_square or details.to_square
-        bin_side = _extract_clear_bin_side(resp.message)
+        bin_side = _resolve_clear_bin_side(details, resp.message)
+        clear_st = _clear_step(
+            details=details,
+            from_square=cap_sq,
+            pick_point=resp.clear_point,
+            bin_side=bin_side,
+            target_pose=resp.clear_base_pose,
+            nav_state=MotionExecutionState.NAV_TO_CLEAR,
+        )
+        if details.force_pick_place:
+            return [
+                clear_st,
+                _pick_step(
+                    details=details,
+                    from_square=details.from_square,
+                    pick_point=resp.pick_point,
+                    requires_pre_grasp_gate=False,
+                ),
+                _place_step(
+                    details=details,
+                    to_square=details.to_square,
+                    place_point=resp.place_point,
+                    requires_pre_grasp_gate=False,
+                ),
+            ]
         return [
-            _clear_step(
-                from_square=cap_sq,
-                pick_point=resp.clear_point,
-                bin_side=bin_side,
-                target_pose=resp.clear_base_pose,
-                nav_state=MotionExecutionState.NAV_TO_CLEAR,
-            ),
+            clear_st,
             _move_step(
+                details=details,
                 from_square=details.from_square,
                 to_square=details.to_square,
                 pick_point=resp.pick_point,
@@ -320,13 +406,14 @@ class MovePlanBuilder:
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
         cap_sq = details.captured_square or details.to_square
-        bin_side = _extract_clear_bin_side(resp.message)
+        bin_side = _resolve_clear_bin_side(details, resp.message)
         dx = resp.clear_base_pose.pose.position.x - resp.pick_base_pose.pose.position.x
         dy = resp.clear_base_pose.pose.position.y - resp.pick_base_pose.pose.position.y
         clear_same_as_pick = math.hypot(dx, dy) < 0.05
 
         return [
             _clear_step(
+                details=details,
                 from_square=cap_sq,
                 pick_point=resp.clear_point,
                 bin_side=bin_side,
@@ -334,6 +421,7 @@ class MovePlanBuilder:
                 nav_state=MotionExecutionState.NAV_TO_CLEAR,
             ),
             _pick_step(
+                details=details,
                 from_square=details.from_square,
                 pick_point=resp.pick_point,
                 target_pose=None if clear_same_as_pick else resp.pick_base_pose,
@@ -343,6 +431,7 @@ class MovePlanBuilder:
                 requires_pre_grasp_gate=not clear_same_as_pick,
             ),
             _place_step(
+                details=details,
                 to_square=details.to_square,
                 place_point=resp.place_point,
                 target_pose=resp.place_base_pose,
@@ -357,9 +446,10 @@ class MovePlanBuilder:
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
         cap_sq = details.captured_square or details.to_square
-        bin_side = _extract_clear_bin_side(resp.message)
+        bin_side = _resolve_clear_bin_side(details, resp.message)
         return [
             _clear_step(
+                details=details,
                 from_square=cap_sq,
                 pick_point=resp.clear_point,
                 bin_side=bin_side,
@@ -367,12 +457,14 @@ class MovePlanBuilder:
                 nav_state=MotionExecutionState.NAV_TO_CLEAR,
             ),
             _pick_step(
+                details=details,
                 from_square=details.from_square,
                 pick_point=resp.pick_point,
                 target_pose=resp.pick_base_pose,
                 nav_state=MotionExecutionState.NAV_TO_PICK,
             ),
             _place_step(
+                details=details,
                 to_square=details.to_square,
                 place_point=resp.place_point,
                 target_pose=resp.place_base_pose,
@@ -388,6 +480,7 @@ class MovePlanBuilder:
         target_pose = getattr(resp, "pick_base_pose", None)
         return [
             _move_step(
+                details=details,
                 from_square=details.from_square,
                 to_square=details.to_square,
                 pick_point=getattr(resp, "pick_point", Point()),

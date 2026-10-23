@@ -67,6 +67,7 @@ class MoveSequencer:
         observation_navigator: ObsNavigator | None = None,
         tf_buffer: tf2_ros.Buffer | None = None,
         landmarks: ArmLandmarks | None = None,
+        bypass_pause_sec: float = 3.0,
     ) -> None:
         self._node = node
         self._dispatcher = dispatcher
@@ -92,6 +93,7 @@ class MoveSequencer:
         # Self-healing & grasp readiness parameters
         self._navigation_enabled = navigation_enabled
         self._chassis_settle_timeout_sec = max(0.0, float(chassis_settle_timeout_sec))
+        self._bypass_pause_sec = max(0.0, float(bypass_pause_sec))
         self._grasp_readiness_provider = grasp_readiness_provider or (lambda: True)
         self._chassis_settle_provider = chassis_settle_provider or (lambda: True)
         self._pending_stage: MoveStep | None = None
@@ -197,6 +199,16 @@ class MoveSequencer:
         return False
 
     def _execute_stage(self, stage: MoveStep) -> None:
+        if stage.bypass_record:
+            self._node.get_logger().warn(
+                f"⏭ [BYPASS QUOTA FULL] Step '{stage.name}' ({stage.instruction}) is bypassed! "
+                f"Operator: please perform this move manually on the board. "
+                f"Waiting {self._bypass_pause_sec:.1f}s before advancing..."
+            )
+            if not self._cancel_event.wait(timeout=self._bypass_pause_sec):
+                self._advance_stage()
+            return
+
         if stage.target_pose is not None:
             self._execute_nav_stage(stage)
             return
@@ -497,8 +509,10 @@ class MoveSequencer:
         if stage.name == StepKind.MOVE:
             goal.operation = ExecuteChessMove.Goal.OP_MOVE
         elif stage.name == StepKind.CLEAR:
-            # Temporary bypass: always default clear operations to right onboard bin
-            goal.operation = ExecuteChessMove.Goal.OP_CLEAR_RIGHT
+            if stage.clear_bin_side.lower() == "left":
+                goal.operation = ExecuteChessMove.Goal.OP_CLEAR_LEFT
+            else:
+                goal.operation = ExecuteChessMove.Goal.OP_CLEAR_RIGHT
         elif stage.name == StepKind.PICK:
             goal.operation = ExecuteChessMove.Goal.OP_PICK
         elif stage.name == StepKind.PLACE:
@@ -506,22 +520,22 @@ class MoveSequencer:
         else:
             raise ValueError(f"Unsupported stage for manipulation: {stage.name}")
 
-        # Compute 10D environment state: [src(3), tgt(3), one_hot(4)]
+        # Compute 6D spatial conditioning: [src(3), tgt(3)] in base_footprint
         p_pick = self._transform_point_to_base(stage.pick_point, self._board_frame)
         p_place = self._transform_point_to_base(stage.place_point, self._board_frame)
 
         if goal.operation == ExecuteChessMove.Goal.OP_MOVE:
-            src, tgt, one_hot = p_pick, p_place, [1.0, 0.0, 0.0, 0.0]
+            src, tgt = p_pick, p_place
         elif goal.operation == ExecuteChessMove.Goal.OP_CLEAR_LEFT:
-            src, tgt, one_hot = p_pick, list(self._landmarks.clear_left), [0.0, 1.0, 0.0, 0.0]
+            src, tgt = p_pick, list(self._landmarks.clear_left)
         elif goal.operation == ExecuteChessMove.Goal.OP_CLEAR_RIGHT:
-            src, tgt, one_hot = p_pick, list(self._landmarks.clear_right), [0.0, 1.0, 0.0, 0.0]
+            src, tgt = p_pick, list(self._landmarks.clear_right)
         elif goal.operation == ExecuteChessMove.Goal.OP_PICK:
-            src, tgt, one_hot = p_pick, list(self._landmarks.stow), [0.0, 0.0, 1.0, 0.0]
+            src, tgt = p_pick, list(self._landmarks.stow)
         elif goal.operation == ExecuteChessMove.Goal.OP_PLACE:
-            src, tgt, one_hot = list(self._landmarks.stow), p_place, [0.0, 0.0, 0.0, 1.0]
+            src, tgt = list(self._landmarks.stow), p_place
         else:
-            src, tgt, one_hot = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]
+            src, tgt = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
 
         goal.environment_state = [
             float(src[0]),
@@ -530,10 +544,6 @@ class MoveSequencer:
             float(tgt[0]),
             float(tgt[1]),
             float(tgt[2]),
-            float(one_hot[0]),
-            float(one_hot[1]),
-            float(one_hot[2]),
-            float(one_hot[3]),
         ]
 
         return goal

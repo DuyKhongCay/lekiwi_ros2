@@ -28,7 +28,12 @@ from lekiwi_interfaces.msg import (
     ChessMoveDetails,
     PerceptionContext,
 )
-from lekiwi_interfaces.srv import CheckMoveFeasibility, SetFen
+from lekiwi_interfaces.srv import (
+    CheckMoveFeasibility,
+    ExecuteCollectionTask,
+    SetCandidateMove,
+    SetFen,
+)
 from rclpy.callback_groups import (
     MutuallyExclusiveCallbackGroup,
     ReentrantCallbackGroup,
@@ -157,7 +162,7 @@ class ChessMissionOrchestrator(Node):
             ChessGameStatus,
             self.parameters.game_status_topic,
             self._on_game_status,
-            10,
+            latched_qos,
             callback_group=self._cb_group_sub,
         )
         self._recover_service = self.create_service(
@@ -178,6 +183,12 @@ class ChessMissionOrchestrator(Node):
             self._handle_export_fen_service,
             callback_group=self._cb_group_client,
         )
+        self._execute_collection_task_service = self.create_service(
+            ExecuteCollectionTask,
+            self.parameters.execute_collection_task_srv,
+            self._handle_execute_collection_task_service,
+            callback_group=self._cb_group_client,
+        )
 
         # Service clients for system, EKF reset, and chess engine FEN configuration
         self._system_reset_client = self.create_client(
@@ -193,6 +204,11 @@ class ChessMissionOrchestrator(Node):
         self._chess_set_fen_client = self.create_client(
             SetFen,
             self.parameters.chess_set_fen_srv,
+            callback_group=self._cb_group_client,
+        )
+        self._chess_set_candidate_move_client = self.create_client(
+            SetCandidateMove,
+            self.parameters.chess_set_candidate_move_srv,
             callback_group=self._cb_group_client,
         )
 
@@ -403,6 +419,9 @@ class ChessMissionOrchestrator(Node):
         if self._chess_set_fen_client is not None:
             self.destroy_client(self._chess_set_fen_client)
             self._chess_set_fen_client = None
+        if self._chess_set_candidate_move_client is not None:
+            self.destroy_client(self._chess_set_candidate_move_client)
+            self._chess_set_candidate_move_client = None
         if self._motion_client is not None:
             self._motion_client.destroy()
         return super().destroy_node()
@@ -693,6 +712,51 @@ class ChessMissionOrchestrator(Node):
         response.message = json.dumps({"fen": fen, "robot_color": robot_color})
         return response
 
+    def set_candidate_move(self, move_details: ChessMoveDetails | None) -> None:
+        """Call /chess/set_candidate_move asynchronously. Clears candidate if move_details is None."""
+        if self._chess_set_candidate_move_client is None:
+            return
+        if not self._chess_set_candidate_move_client.service_is_ready():
+            self.get_logger().debug(
+                f"Candidate move service '{self.parameters.chess_set_candidate_move_srv}' not ready."
+            )
+            return
+        req = SetCandidateMove.Request()
+        if move_details is not None:
+            req.move = move_details
+        self._chess_set_candidate_move_client.call_async(req)
+
+    def _handle_execute_collection_task_service(
+        self,
+        request: ExecuteCollectionTask.Request,
+        response: ExecuteCollectionTask.Response,
+    ) -> ExecuteCollectionTask.Response:
+        """Handle collection task dispatch from episode recorder."""
+        mv = request.move
+        details = ChessMoveGoal.from_uci_or_details(
+            uci_move=mv.uci,
+            move_details=mv,
+            force_pick_place=request.force_pick_place,
+            clear_bin_side=request.clear_bin_side,
+            bypass_steps=request.bypass_steps,
+        )
+        if details is None:
+            response.success = False
+            response.message = f"Invalid move details: uci='{mv.uci}'"
+            self.get_logger().error(response.message)
+            return response
+
+        # Mark current FEN as processed to prevent re-dispatching from referee latched state
+        self._game_status_handler.last_processed_fen = self._game_status_handler.latest_full_fen
+
+        # Set candidate move on ChessGameStateTracker so 2D and 3D visualizers show arrows immediately
+        self.set_candidate_move(mv)
+
+        success, msg = self._move_workflow.dispatch_collection_task(details)
+        response.success = success
+        response.message = msg
+        return response
+
     def _handle_import_fen_service(
         self, request: SetFen.Request, response: SetFen.Response
     ) -> SetFen.Response:
@@ -712,12 +776,19 @@ class ChessMissionOrchestrator(Node):
             except Exception as ex:
                 self.get_logger().warn(f"Failed to parse FEN JSON payload: {ex}")
 
-        # Strict validation: reject without swallowing errors silently
-        if not target_color:
+        if not target_fen:
             response.success = False
-            response.message = "Missing required robot_color: must specify 'w'/'white' or 'b'/'black'"
+            response.message = "Missing required FEN string"
             self.get_logger().warn(f"Rejected import_fen: {response.message}")
             return response
+
+        # Auto-deduce robot_color from FEN active color if not specified
+        if not target_color:
+            parts = target_fen.split()
+            if len(parts) >= 2 and parts[1].lower() in ("w", "b"):
+                target_color = "black" if parts[1].lower() == "b" else "white"
+            else:
+                target_color = "white"
 
         with self._state_lock:
             current_state = self.mission_state
@@ -785,8 +856,14 @@ class ChessMissionOrchestrator(Node):
 
         self.clear_move_goals()
         self._game_status_handler.on_fen_imported(res.canonical_fen)
-        self.transition_to(MacroMissionState.AWAITING_BOARD_SYNC)
-        self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
+        if current_state != MacroMissionState.WAITING_FOR_TF_READY:
+            self.transition_to(MacroMissionState.AWAITING_BOARD_SYNC)
+            self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
+        else:
+            self.get_logger().info(
+                f"[IMPORT FEN] FEN '{res.canonical_fen}' imported during WAITING_FOR_TF_READY. "
+                "Will transition to WAITING_FOR_PLAYER_MOVE once Navigation is confirmed ready."
+            )
 
         response.success = True
         response.canonical_fen = res.canonical_fen
@@ -803,6 +880,7 @@ class ChessMissionOrchestrator(Node):
         """Reset verification state and transition FSM to await opponent move."""
         self._post_move_verifier.reset()
         self._last_interaction_pose = None
+        self.set_candidate_move(None)
         self.transition_to(MacroMissionState.TURN_COMPLETED)
         self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
         self.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
@@ -884,6 +962,7 @@ class ChessMissionOrchestrator(Node):
             self._pending_recovery_move = None
             self._current_goal_move = None
             self._current_move_details = None
+        self.set_candidate_move(None)
 
     def set_last_interaction_pose(self, pose: PoseStamped | None) -> None:
         """Record base pose where last board manipulation occurred."""

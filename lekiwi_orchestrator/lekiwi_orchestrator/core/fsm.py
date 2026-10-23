@@ -55,6 +55,7 @@ MISSION_STATE_NAMES: dict[MacroMissionState, str] = {
 
 IMPORT_FEN_ALLOWED_STATES: frozenset[MacroMissionState] = frozenset(
     {
+        MacroMissionState.WAITING_FOR_TF_READY,
         MacroMissionState.WAITING_FOR_PLAYER_MOVE,
         MacroMissionState.EVALUATING_BEST_MOVE,
         MacroMissionState.TURN_COMPLETED,

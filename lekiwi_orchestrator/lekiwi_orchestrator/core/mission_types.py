@@ -54,68 +54,140 @@ class ObservationIntent(str, Enum):
     RELOCALIZE = "RELOCALIZE"
 
 
+_CASTLING_ROOK_MAP: Final[dict[str, tuple[str, str]]] = {
+    "e1g1": ("h1", "f1"),
+    "e1c1": ("a1", "d1"),
+    "e8g8": ("h8", "f8"),
+    "e8c8": ("a8", "d8"),
+}
+
+
 @dataclass(frozen=True)
 class ChessMoveGoal:
-    """Lightweight mission-level move description.
-
-    Holds parsed UCI coordinates, capture targets, and castling rook waypoints.
-    """
+    """Mission-level move domain entity for trajectory planning and SmolVLA instruction generation."""
 
     uci: str
-    from_square: str
-    to_square: str
+    piece_type: str = "pawn"
+    color: str = "white"
     promotion: str | None = None
     is_capture: bool = False
-    captured_square: str = ""
-    castling_rook_from: str = ""
-    castling_rook_to: str = ""
+    is_en_passant: bool = False
+    is_castling: bool = False
+
+    # Collection directives
+    force_pick_place: bool = False
+    clear_bin_side: str = "right"
+    bypass_steps: tuple[str, ...] = ()
+
+    # --- Domain Computed Properties (Zero State Duplication) ---
+
+    @property
+    def from_square(self) -> str:
+        """Origin square derived directly from UCI notation (e.g., 'e2')."""
+        return self.uci[:2]
+
+    @property
+    def to_square(self) -> str:
+        """Destination square derived directly from UCI notation (e.g., 'e4')."""
+        return self.uci[2:4]
+
+    @property
+    def piece(self) -> str:
+        """Moving piece type (e.g., 'pawn', 'knight')."""
+        return (
+            self.piece_type.split(":", 1)[0]
+            if ":" in self.piece_type
+            else (self.piece_type or "pawn")
+        )
+
+    @property
+    def captured_piece(self) -> str:
+        """Target captured piece type if move is a capture, else empty string."""
+        return self.piece_type.split(":", 1)[1] if ":" in self.piece_type else ""
+
+    @property
+    def captured_square(self) -> str:
+        """Accurately resolved square of captured piece (handles en-passant offset)."""
+        if not self.is_capture:
+            return ""
+        if self.is_en_passant:
+            return f"{self.to_square[0]}{self.from_square[1]}"
+        return self.to_square
+
+    @property
+    def castling_rook_from(self) -> str:
+        """Initial square of participating castling rook, or empty string."""
+        return _CASTLING_ROOK_MAP.get(self.uci, ("", ""))[0] if self.is_castling else ""
+
+    @property
+    def castling_rook_to(self) -> str:
+        """Destination square of participating castling rook, or empty string."""
+        return _CASTLING_ROOK_MAP.get(self.uci, ("", ""))[1] if self.is_castling else ""
+
+    @property
+    def opposing_color(self) -> str:
+        """Returns the opposing color for captured piece."""
+        return "black" if self.color.lower() in ("w", "white") else "white"
 
     @classmethod
     def from_uci_or_details(
         cls,
         uci_move: str,
         move_details: ChessMoveDetails | None = None,
+        force_pick_place: bool = False,
+        clear_bin_side: str = "right",
+        bypass_steps: tuple[str, ...] | list[str] = (),
     ) -> ChessMoveGoal | None:
-        """Parse ChessMoveGoal from UCI string or rich ChessMoveDetails message.
+        """Parse clean ChessMoveGoal from UCI string or rich ChessMoveDetails message.
 
-        Extracts source, target, promotion, and castling parameters into a uniform goal.
+        Extracts source, target, piece semantics, castling waypoints, and collection directives.
 
         Args:
             uci_move: Standard UCI move string (e.g., 'e2e4', 'e7e8q').
             move_details: Optional ROS 2 message providing explicit capture/castling info.
+            force_pick_place: Whether to force 1-base move into atomic PICK and PLACE.
+            clear_bin_side: Target discard bin side ("left" or "right").
+            bypass_steps: Step kinds to bypass physical execution.
 
         Returns:
             Populated ChessMoveGoal instance, or None if UCI string length is invalid (< 4).
         """
-        cleaned_move = uci_move.strip().lower()
+        cleaned_move = (
+            move_details.uci
+            if (move_details is not None and getattr(move_details, "uci", ""))
+            else uci_move
+        ).strip().lower()
         if len(cleaned_move) < 4:
             return None
 
-        if move_details is not None and getattr(move_details, "from_square", ""):
-            is_cap = bool(getattr(move_details, "is_capture", False))
-            cap_sq = getattr(move_details, "captured_square", "") or (
-                move_details.to_square if is_cap else ""
-            )
-            promo = getattr(move_details, "promotion_piece", "") or None
+        norm_bypass = tuple(bypass_steps)
+        norm_bin = clear_bin_side.lower() if clear_bin_side else "right"
 
-            return cls(
-                uci=getattr(move_details, "uci", "") or cleaned_move,
-                from_square=move_details.from_square,
-                to_square=move_details.to_square,
-                promotion=promo,
-                is_capture=is_cap,
-                captured_square=cap_sq,
-                castling_rook_from=getattr(move_details, "castling_rook_from", ""),
-                castling_rook_to=getattr(move_details, "castling_rook_to", ""),
-            )
-
-        from_sq = cleaned_move[:2]
-        to_sq = cleaned_move[2:4]
+        p_type = "pawn"
+        norm_color = "white"
         promo = cleaned_move[4:] if len(cleaned_move) > 4 else None
+        is_cap = False
+        is_ep = False
+        is_castle = False
+
+        if move_details is not None:
+            raw_color = getattr(move_details, "piece_color", "")
+            norm_color = "black" if raw_color in ("b", "black") else "white"
+            p_type = getattr(move_details, "piece_type", "") or "pawn"
+            promo = getattr(move_details, "promotion_piece", "") or promo
+            is_cap = bool(getattr(move_details, "is_capture", False))
+            is_ep = bool(getattr(move_details, "is_en_passant", False))
+            is_castle = bool(getattr(move_details, "is_castling", False))
+
         return cls(
             uci=cleaned_move,
-            from_square=from_sq,
-            to_square=to_sq,
+            piece_type=p_type,
+            color=norm_color,
             promotion=promo,
-            is_capture=False,
+            is_capture=is_cap,
+            is_en_passant=is_ep,
+            is_castling=is_castle,
+            force_pick_place=force_pick_place,
+            clear_bin_side=norm_bin,
+            bypass_steps=norm_bypass,
         )

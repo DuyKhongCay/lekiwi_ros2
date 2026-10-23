@@ -36,13 +36,13 @@ def test_level1_macro_mission_canonical_workflow():
 def test_level1_macro_mission_awaiting_board_sync_transitions():
     from lekiwi_orchestrator.core.fsm import IMPORT_FEN_ALLOWED_STATES
 
-    # All allowed states can transition to AWAITING_BOARD_SYNC
-    for state in IMPORT_FEN_ALLOWED_STATES:
+    # Allowed states (except WAITING_FOR_TF_READY which stays in WAITING_FOR_TF_READY) can transition to AWAITING_BOARD_SYNC
+    for state in IMPORT_FEN_ALLOWED_STATES - {MacroMissionState.WAITING_FOR_TF_READY}:
         assert is_mission_transition_allowed(
             state, MacroMissionState.AWAITING_BOARD_SYNC
         ), f"State {state.name} should allow transition to AWAITING_BOARD_SYNC"
 
-    # Moving states cannot transition directly to AWAITING_BOARD_SYNC
+    # Moving or initializing states cannot transition directly to AWAITING_BOARD_SYNC
     disallowed_states = [
         MacroMissionState.BOOT_INITIALIZING,
         MacroMissionState.WAITING_FOR_TF_READY,

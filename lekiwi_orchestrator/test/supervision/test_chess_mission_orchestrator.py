@@ -227,8 +227,6 @@ def test_workflow_dispatch_sequences(ros_context, plan_type, is_capture):
 
         goal = ChessMoveGoal(
             uci="e7e5" if not is_capture else "e4d5",
-            from_square="e7" if not is_capture else "e4",
-            to_square="e5" if not is_capture else "d5",
             is_capture=is_capture,
         )
 
@@ -282,7 +280,7 @@ def test_recovery_discards_stale_move_if_fen_changes(ros_context):
         node.transition_to(MacroMissionState.CHECKING_REACHABILITY)
         node.transition_to(MacroMissionState.ERROR_FALLBACK)
 
-        goal = ChessMoveGoal(uci="e7e5", from_square="e7", to_square="e5", is_capture=False)
+        goal = ChessMoveGoal(uci="e7e5", is_capture=False)
         node._current_move_details = goal
         node.trigger_recovery(reason="test")
         assert node.pending_recovery_move.uci == "e7e5"
@@ -546,12 +544,12 @@ def test_import_fen_service_rejected_during_motion(ros_context):
         node.transition_to(MacroMissionState.CHECKING_REACHABILITY)
         assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
 
-        # Missing robot_color should be rejected immediately
-        req_no_color = SetFen.Request(fen="8/8/8/4k3/8/8/4K3/8 w - - 0 1", robot_color="")
-        resp_no_color = SetFen.Response()
-        res_no_color = node._handle_import_fen_service(req_no_color, resp_no_color)
-        assert not res_no_color.success
-        assert "Missing required robot_color" in res_no_color.message
+        # Empty FEN should be rejected immediately
+        req_empty_fen = SetFen.Request(fen="", robot_color="")
+        resp_empty_fen = SetFen.Response()
+        res_empty_fen = node._handle_import_fen_service(req_empty_fen, resp_empty_fen)
+        assert not res_empty_fen.success
+        assert "Missing required FEN" in res_empty_fen.message
 
         req = SetFen.Request(fen="8/8/8/4k3/8/8/4K3/8 w - - 0 1", robot_color="b")
         resp = SetFen.Response()
@@ -618,7 +616,103 @@ def test_import_fen_service_accepted_and_sync_workflow(ros_context):
         status.is_board_stable = True
         node._on_game_status(status)
 
-        # Robot is Black, active_color is White -> should transition to WAITING_FOR_PLAYER_MOVE
+        # Board synchronized and stable -> default transition is EVALUATING_BEST_MOVE
+        assert node.mission_state == MacroMissionState.EVALUATING_BEST_MOVE
+    finally:
+        node.destroy_node()
+
+
+def test_import_fen_service_accepted_during_waiting_for_tf_ready(ros_context):
+    """Verify /orchestrator/import_fen is accepted during WAITING_FOR_TF_READY without prematurely leaving boot readiness."""
+    from rclpy.task import Future
+
+    node = ChessMissionOrchestrator()
+    try:
+        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+
+        target_fen = "4k3/8/4n2p/1p2P1bR/7B/7B/q7/4K3 w - - 0 1"
+
+        node._chess_set_fen_client.service_is_ready = lambda: True
+
+        def mock_call_async(req):
+            fut = Future()
+            fut.set_result(
+                SetFen.Response(
+                    success=True,
+                    canonical_fen=target_fen,
+                    active_color="w",
+                    robot_color="b",
+                    message="OK",
+                )
+            )
+            return fut
+
+        node._chess_set_fen_client.call_async = mock_call_async
+
+        req = SetFen.Request(fen=target_fen, robot_color="")
+        resp = SetFen.Response()
+        res = node._handle_import_fen_service(req, resp)
+
+        assert res.success
+        assert res.canonical_fen == target_fen
+        # Must maintain WAITING_FOR_TF_READY until Navigation confirms ready
+        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+
+        # Now confirm nav ready -> should transition to WAITING_FOR_PLAYER_MOVE
+        node._on_nav_ready(Bool(data=True))
         assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
     finally:
         node.destroy_node()
+
+
+def test_execute_collection_task_service(ros_context):
+    """Verify /orchestrator/execute_collection_task service handler and state validation."""
+    from rclpy.task import Future
+    from lekiwi_interfaces.msg import ChessMoveDetails
+    from lekiwi_interfaces.srv import ExecuteCollectionTask, SetCandidateMove
+
+    dispatcher = FakeMotionClient()
+    node = ChessMissionOrchestrator(motion_client=dispatcher)
+    try:
+        node._on_nav_ready(Bool(data=True))
+        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+
+        # Mock candidate move client to verify calls
+        candidate_calls = []
+        node._chess_set_candidate_move_client.service_is_ready = lambda: True
+        def mock_candidate_call(req):
+            candidate_calls.append(req.move)
+            fut = Future()
+            fut.set_result(SetCandidateMove.Response(success=True, message="OK"))
+            return fut
+        node._chess_set_candidate_move_client.call_async = mock_candidate_call
+
+        req = ExecuteCollectionTask.Request()
+        req.move = ChessMoveDetails(
+            uci="e2e4",
+            piece_type="pawn",
+            piece_color="w",
+        )
+        req.force_pick_place = True
+        req.clear_bin_side = "left"
+        req.bypass_steps = ["MOVE"]
+
+        resp = ExecuteCollectionTask.Response()
+        res = node._handle_execute_collection_task_service(req, resp)
+
+        assert res.success
+        assert "Collection task dispatched" in res.message
+        assert node._current_goal_move == "e2e4"
+        assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
+
+        # Verify candidate move was set
+        assert len(candidate_calls) == 1
+        assert candidate_calls[0].uci == "e2e4"
+
+        # Verify turn finalization clears candidate move
+        node._finalize_turn_completed()
+        assert len(candidate_calls) == 2
+        assert candidate_calls[1].uci == ""
+    finally:
+        node.destroy_node()
+
