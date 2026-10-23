@@ -87,22 +87,4 @@ PerceptionContext applied_context    # Active perception context after transitio
 string message                       # Diagnostic status or failure cause
 ```
 
----
 
-## 4. `ResetMotorBus.srv`
-
-- **Interface Definition**: `lekiwi_interfaces/srv/ResetMotorBus.srv`
-- **Purpose**: Flushes serial communication buffers and re-synchronizes the 9 STS3215 servos after a communication collision.
-
-### Definition:
-
-```protobuf
-# Request (empty)
----
-# Response
-bool success                   # True if serial port reset & ping succeeded
-string message                 # Diagnostic status or error details
-```
-
-> [!NOTE]
-> `ResetMotorBus` is defined as a general recovery IDL. In runtime operation, serial recovery is primarily managed internally by the asynchronous I/O thread in `lekiwi_ftservo_hardware`.

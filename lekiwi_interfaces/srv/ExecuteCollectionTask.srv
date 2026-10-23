@@ -1,0 +1,13 @@
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
+
+# Request: Target chess move and recording execution directives
+lekiwi_interfaces/ChessMoveDetails move       # Move metadata (UCI, squares, piece, color, castling, en-passant)
+bool force_pick_place                        # Force decomposition of single-base moves into PICK and PLACE
+string clear_bin_side                        # Discard bin side: "left" or "right"
+string[] bypass_steps                        # Step kinds to bypass physical execution: ["MOVE", "CLEAR", "PICK", "PLACE"]
+---
+# Response
+bool success                                 # True if the task was successfully accepted and dispatched
+string message                               # Diagnostic details or error explanation
+

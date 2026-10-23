@@ -2,12 +2,23 @@ episode_recorder_node:
   ros__parameters:
     # Storage settings
     root_dir: "/root/docker_ws/lekiwi_ros2/ros_bag"
-    experiment_name: "chess_teleop_v5"
+    experiment_name: "chess_teleop_v6"
     task: "chess_pick_and_place"
     storage_id: "mcap"
 
     # Feedback topic for active move instruction
     feedback_topic: "/manipulation/execute_chess_move/_action/feedback"
+
+    # Automated campaign collection planner
+    enable_collection_planner: true
+    collection_config_path: ""
+
+    # Service & Topic interfaces
+    game_status_topic: "/chess/game_status"
+    import_fen_service: "/orchestrator/import_fen"
+    export_fen_service: "/orchestrator/export_fen"
+    check_feasibility_service: "/workspace/check_move_feasibility"
+    execute_collection_task_service: "/orchestrator/execute_collection_task"
 
     # Topics to record into each episode MCAP (LeRobot Dataset 3.0 compatible)
     topics:
@@ -23,6 +34,3 @@ episode_recorder_node:
       # 3. Spatial TF transforms (for offline Cartesian/board reference)
       - "/tf"
       - "/tf_static"
-
-      # # 4. Manipulation Action Feedback (Phase & progress tracking)
-      # - "/manipulation/execute_chess_move/_action/feedback"

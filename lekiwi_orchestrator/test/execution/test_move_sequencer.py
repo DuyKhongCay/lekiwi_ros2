@@ -23,6 +23,7 @@ from lekiwi_orchestrator.execution.move_sequencer import MoveSequencer
 from lekiwi_orchestrator.execution.turn_workflow import MoveWorkflow
 from lekiwi_orchestrator.planning.move_planner import (
     MovePlanBuilder,
+    MoveStep,
     StepKind,
 )
 from lekiwi_orchestrator.planning.obs_navigator import ObsNavigator
@@ -58,8 +59,6 @@ def create_mock_tf_buffer():
 def base_goal() -> ChessMoveGoal:
     return ChessMoveGoal(
         uci="e2e4",
-        from_square="e2",
-        to_square="e4",
         promotion=None,
         is_capture=False,
     )
@@ -69,11 +68,8 @@ def base_goal() -> ChessMoveGoal:
 def capture_goal() -> ChessMoveGoal:
     return ChessMoveGoal(
         uci="e4d5",
-        from_square="e4",
-        to_square="d5",
         promotion=None,
         is_capture=True,
-        captured_square="d5",
     )
 
 
@@ -126,7 +122,7 @@ def test_build_capture_stages_matrix(capture_goal, plan_type, expected_names):
     assert [s.name for s in stages] == expected_names
     assert stages[0].motion_state == MotionExecutionState.CLEARING_PIECE
     assert stages[0].is_capture is True
-    assert stages[0].instruction == f"Clear {capture_goal.captured_square} to right onboard bin"
+    assert stages[0].instruction == f"Clear {capture_goal.opposing_color} {capture_goal.captured_piece or 'piece'} to right bin"
 
 
 def test_capture_triple_base_observation_pose_anchored_to_place_base(ros_context):
@@ -170,10 +166,7 @@ def test_capture_triple_base_observation_pose_anchored_to_place_base(ros_context
 
         details = ChessMoveGoal(
             uci="d5e4",
-            from_square="d5",
-            to_square="e4",
             is_capture=True,
-            captured_square="e4",
         )
         steps = MovePlanBuilder.build_steps(resp, details, observation_pose=obs_pose)
         obs_step = steps[-1]
@@ -232,7 +225,7 @@ def test_move_pipeline_executor_lifecycle(ros_context):
         obs_pose = PoseStamped()
         obs_pose.pose.position.x = -0.65
 
-        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        goal = ChessMoveGoal(uci="e2e4")
         stages = MovePlanBuilder.build_steps(resp, goal, observation_pose=obs_pose)
 
         executor.start_pipeline(stages)
@@ -272,7 +265,7 @@ def test_move_pipeline_executor_cancellation(ros_context):
         resp = CheckMoveFeasibility.Response()
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
         resp.pick_base_pose.pose.position.x = 1.0
-        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        goal = ChessMoveGoal(uci="e2e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages)
@@ -325,7 +318,7 @@ def test_pipeline_cancellation_during_grasp_settle(ros_context):
         resp = CheckMoveFeasibility.Response()
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
-        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        goal = ChessMoveGoal(uci="e2e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages)
@@ -365,7 +358,7 @@ def test_move_pipeline_grasp_readiness_timeout_fails_safely(ros_context):
         resp = CheckMoveFeasibility.Response()
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
-        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        goal = ChessMoveGoal(uci="e2e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages)
@@ -413,7 +406,7 @@ def test_move_pipeline_grasp_readiness_settle_success(ros_context):
         resp = CheckMoveFeasibility.Response()
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
-        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        goal = ChessMoveGoal(uci="e2e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages)
@@ -474,7 +467,7 @@ def test_active_relocalization_on_grasp_unready_success(ros_context):
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
         resp.pick_base_pose.pose.position.x = 1.0
         resp.pick_base_pose.header.frame_id = "map"
-        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        goal = ChessMoveGoal(uci="e2e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages)
@@ -522,7 +515,7 @@ def test_active_relocalization_on_grasp_unready_exhaustion(ros_context):
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
         resp.pick_base_pose.pose.position.x = 1.0
         resp.pick_base_pose.header.frame_id = "map"
-        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        goal = ChessMoveGoal(uci="e2e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
 
         executor.start_pipeline(stages)
@@ -592,7 +585,7 @@ def test_stage_pipeline_dispatch_and_execution_failures(ros_context, fail_type, 
         resp.plan_type = plan
         resp.pick_base_pose.pose.position.x = 1.0
 
-        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        goal = ChessMoveGoal(uci="e2e4")
         stages = MovePlanBuilder.build_steps(resp, goal)
         executor.start_pipeline(stages)
 
@@ -636,7 +629,7 @@ def test_observation_step_waits_for_chassis_settle(ros_context):
         resp = CheckMoveFeasibility.Response()
         resp.feasible = True
         resp.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
-        goal = ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4")
+        goal = ChessMoveGoal(uci="e2e4")
         obs_pose = PoseStamped()
         obs_pose.header.frame_id = "map"
 
@@ -704,12 +697,10 @@ def test_move_sequencer_transforms_points_to_base_footprint(ros_context):
         expected_src = [0.2680, 0.2183, 0.0310]
         expected_tgt = [0.3359, 0.1519, 0.0310]
 
-        assert len(goal.environment_state) == 10
+        assert len(goal.environment_state) == 6
         for i in range(3):
             assert math.isclose(goal.environment_state[i], expected_src[i], abs_tol=1e-3)
             assert math.isclose(goal.environment_state[3 + i], expected_tgt[i], abs_tol=1e-3)
-
-        assert list(goal.environment_state[6:]) == [1.0, 0.0, 0.0, 0.0]
     finally:
         perception.destroy()
         dispatcher.destroy()
@@ -773,3 +764,242 @@ def test_move_sequencer_fails_fast_on_missing_or_failed_tf(ros_context):
     perception.destroy()
     dispatcher.destroy()
     node.destroy_node()
+
+
+def test_smolvla_instructions_all_primitives():
+    """Verify SmolVLA instruction formatting across MOVE, CLEAR, PICK, PLACE."""
+    goal_move = ChessMoveGoal(
+        uci="c7c5",
+        piece_type="pawn",
+        color="black",
+    )
+    resp = CheckMoveFeasibility.Response(plan_type=CheckMoveFeasibility.Response.PLAN_ZERO_NAV)
+    steps = MovePlanBuilder.build_steps(resp, goal_move)
+    assert steps[0].instruction == "Move black pawn to target"
+
+    goal_clear = ChessMoveGoal(
+        uci="e4d5",
+        piece_type="pawn:knight",
+        color="black",
+        is_capture=True,
+        is_en_passant=True,
+        clear_bin_side="left",
+    )
+    resp_cap = CheckMoveFeasibility.Response(plan_type=CheckMoveFeasibility.Response.PLAN_CAPTURE_ZERO_NAV)
+    steps_cap = MovePlanBuilder.build_steps(resp_cap, goal_clear)
+    assert steps_cap[0].instruction == "Clear white knight to left bin"
+    assert steps_cap[1].instruction == "Move black pawn to target"
+
+    goal_pick_place = ChessMoveGoal(
+        uci="f8e7",
+        piece_type="bishop",
+        color="black",
+        force_pick_place=True,
+    )
+    steps_pp = MovePlanBuilder.build_steps(resp, goal_pick_place)
+    assert steps_pp[0].instruction == "Pick black bishop"
+    assert steps_pp[1].instruction == "Place black bishop"
+
+
+def test_force_pick_place_zero_and_single_base():
+    """Verify force_pick_place flag converts 1-base moves to separate PICK and PLACE steps."""
+    goal = ChessMoveGoal(
+        uci="e2e4",
+        piece_type="pawn",
+        color="white",
+        force_pick_place=True,
+    )
+
+    # 1. Zero nav
+    resp_zero = CheckMoveFeasibility.Response(plan_type=CheckMoveFeasibility.Response.PLAN_ZERO_NAV)
+    steps_zero = MovePlanBuilder.build_steps(resp_zero, goal)
+    assert [s.name for s in steps_zero] == ["PICK", "PLACE"]
+    assert steps_zero[0].instruction == "Pick white pawn"
+    assert steps_zero[1].instruction == "Place white pawn"
+    assert steps_zero[1].requires_pre_grasp_gate is False
+
+    # 2. Single base
+    resp_single = CheckMoveFeasibility.Response(plan_type=CheckMoveFeasibility.Response.PLAN_SINGLE_BASE)
+    resp_single.pick_base_pose.pose.position.x = 1.0
+    steps_single = MovePlanBuilder.build_steps(resp_single, goal)
+    assert [s.name for s in steps_single] == ["PICK", "PLACE"]
+    assert steps_single[0].target_pose == resp_single.pick_base_pose
+    assert steps_single[1].target_pose is None
+
+
+def test_clear_bin_side_mapping_manipulation_goal(ros_context):
+    """Verify OP_CLEAR_LEFT and OP_CLEAR_RIGHT are correctly resolved in manipulation goal."""
+    from lekiwi_interfaces.action import ExecuteChessMove
+    node = Node("test_clear_bin_side_node")
+    dispatcher = FakeMotionClient()
+    perception = PerceptionContextManager(node)
+    mock_tf = create_mock_tf_buffer()
+    try:
+        sequencer = MoveSequencer(
+            node=node,
+            dispatcher=dispatcher,
+            perception=perception,
+            tf_buffer=mock_tf,
+        )
+
+        stage_left = MoveStep(
+            name=StepKind.CLEAR,
+            target_pose=None,
+            instruction="Clear white pawn to left bin [d4]",
+            from_square="d4",
+            to_square="",
+            is_capture=True,
+            pick_point=Point(),
+            place_point=Point(),
+            clear_bin_side="left",
+        )
+        goal_left = sequencer._build_manipulation_goal(stage_left)
+        assert goal_left.operation == ExecuteChessMove.Goal.OP_CLEAR_LEFT
+
+        stage_right = MoveStep(
+            name=StepKind.CLEAR,
+            target_pose=None,
+            instruction="Clear white pawn to right bin [d4]",
+            from_square="d4",
+            to_square="",
+            is_capture=True,
+            pick_point=Point(),
+            place_point=Point(),
+            clear_bin_side="right",
+        )
+        goal_right = sequencer._build_manipulation_goal(stage_right)
+        assert goal_right.operation == ExecuteChessMove.Goal.OP_CLEAR_RIGHT
+    finally:
+        perception.destroy()
+        dispatcher.destroy()
+        node.destroy_node()
+
+
+def test_move_sequencer_bypass_record_pauses_and_advances(ros_context):
+    """Verify that stage with bypass_record=True triggers pause and advances without physical action."""
+    node = Node("test_bypass_record_node")
+    dispatcher = FakeMotionClient()
+    perception = PerceptionContextManager(node)
+    mock_tf = create_mock_tf_buffer()
+
+    completed = []
+    try:
+        sequencer = MoveSequencer(
+            node=node,
+            dispatcher=dispatcher,
+            perception=perception,
+            tf_buffer=mock_tf,
+            bypass_pause_sec=0.05,  # Short pause for fast test execution
+            on_pipeline_completed=lambda: completed.append(True),
+        )
+
+        bypassed_step = MoveStep(
+            name=StepKind.MOVE,
+            target_pose=None,
+            instruction="Move white pawn to target [e2 to e4]",
+            from_square="e2",
+            to_square="e4",
+            is_capture=False,
+            pick_point=Point(),
+            place_point=Point(),
+            bypass_record=True,
+        )
+
+        sequencer.start_pipeline([bypassed_step])
+        # Pipeline should advance and complete after short pause without dispatching any hardware actions
+        assert len(completed) == 1
+        assert len(dispatcher.manip_goals) == 0
+        assert len(dispatcher.nav_goals) == 0
+    finally:
+        perception.destroy()
+        dispatcher.destroy()
+        node.destroy_node()
+
+
+def test_castling_workflow_two_feasibility_checks(ros_context):
+    """Verify that castling triggers two sequential feasibility checks and builds King + Rook steps."""
+    from unittest.mock import MagicMock
+    from lekiwi_orchestrator.core.fsm import MacroMissionState
+    from lekiwi_orchestrator.core.parameters import OrchestratorParameters
+
+    node = Node("test_castling_workflow_node")
+    dispatcher = FakeMotionClient()
+    perception = PerceptionContextManager(node)
+    mock_tf = create_mock_tf_buffer()
+
+    host_mock = MagicMock()
+    host_mock.is_nav_ready = True
+    host_mock.mission_state = MacroMissionState.WAITING_FOR_PLAYER_MOVE
+    host_mock.transition_to.return_value = True
+
+    obs_nav = ObsNavigator(
+        node=node,
+        dispatcher=dispatcher,
+        map_frame="map",
+        board_frame="chessboard_frame",
+        standoff_distance=0.569,
+        angle_offsets_map={ObservationIntent.POST_MOVE_VERIFY: [0.0]},
+        tf_buffer=None,
+    )
+
+    sequencer = MoveSequencer(
+        node=node,
+        dispatcher=dispatcher,
+        perception=perception,
+        tf_buffer=mock_tf,
+    )
+
+    config = OrchestratorParameters(node)
+
+    workflow = MoveWorkflow(
+        node=node,
+        config=config,
+        host=host_mock,
+        dispatcher_provider=lambda: dispatcher,
+        observation_nav=obs_nav,
+        pipeline_executor=sequencer,
+        perception=perception,
+    )
+
+    castling_goal = ChessMoveGoal(
+        uci="e1g1",
+        piece_type="king",
+        color="white",
+        is_castling=True,
+    )
+    assert castling_goal.is_castling is True
+
+    ok, msg = workflow.dispatch_collection_task(castling_goal)
+    assert ok is True
+
+    # 1st feasibility check was dispatched for King
+    assert dispatcher.last_feasibility_callback is not None
+    cb_king = dispatcher.last_feasibility_callback
+
+    resp_king = CheckMoveFeasibility.Response()
+    resp_king.feasible = True
+    resp_king.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
+    resp_king.pick_base_pose.pose.position.x = 0.5
+    resp_king.pick_point.x = 0.02
+    resp_king.place_point.x = 0.12
+
+    # Provide King feasibility response -> triggers 2nd feasibility check for Rook
+    cb_king(resp_king)
+
+    assert dispatcher.last_feasibility_callback is not None
+    cb_rook = dispatcher.last_feasibility_callback
+
+    resp_rook = CheckMoveFeasibility.Response()
+    resp_rook.feasible = True
+    resp_rook.plan_type = CheckMoveFeasibility.Response.PLAN_ZERO_NAV
+    resp_rook.pick_point.x = 0.17
+    resp_rook.place_point.x = 0.07
+
+    # Provide Rook feasibility response -> completes assembly and starts pipeline
+    cb_rook(resp_rook)
+
+    assert host_mock.transition_to.call_count >= 2
+    perception.destroy()
+    dispatcher.destroy()
+    node.destroy_node()
+

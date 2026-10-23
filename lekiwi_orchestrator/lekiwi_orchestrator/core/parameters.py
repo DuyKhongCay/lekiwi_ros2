@@ -47,7 +47,12 @@ class OrchestratorParameters:
         node.declare_parameter("services.recover", "/orchestrator/recover")
         node.declare_parameter("services.import_fen", "/orchestrator/import_fen")
         node.declare_parameter("services.export_fen", "/orchestrator/export_fen")
+        node.declare_parameter(
+            "services.execute_collection_task",
+            "/orchestrator/execute_collection_task",
+        )
         node.declare_parameter("services.chess_set_fen", "/chess/set_fen")
+        node.declare_parameter("services.chess_set_candidate_move", "/chess/set_candidate_move")
         node.declare_parameter(
             "services.set_perception_context",
             "/orchestrator/set_perception_context",
@@ -128,7 +133,13 @@ class OrchestratorParameters:
         self.recover_srv = str(node.get_parameter("services.recover").value)
         self.import_fen_srv = str(node.get_parameter("services.import_fen").value)
         self.export_fen_srv = str(node.get_parameter("services.export_fen").value)
+        self.execute_collection_task_srv = str(
+            node.get_parameter("services.execute_collection_task").value
+        )
         self.chess_set_fen_srv = str(node.get_parameter("services.chess_set_fen").value)
+        self.chess_set_candidate_move_srv = str(
+            node.get_parameter("services.chess_set_candidate_move").value
+        )
         self.set_perception_srv = str(
             node.get_parameter("services.set_perception_context").value
         )

@@ -15,7 +15,7 @@ string instruction             # Active move instruction for recorder / telemetr
 geometry_msgs/Point pick_point # Grasp target in target_frame [m] (used in MOVE, CLEAR_*, PICK)
 geometry_msgs/Point place_point# Placement target in target_frame [m] (used in MOVE, PLACE)
 string target_frame            # TF frame for coordinates (default: "chessboard_frame")
-float32[10] environment_state  # 10D state in base_footprint: [src(3), tgt(3), one_hot(4)]
+float32[6] environment_state   # 6D spatial coordinates in base_footprint: [src(3), tgt(3)]
 ---
 # ==============================================================================
 # Result

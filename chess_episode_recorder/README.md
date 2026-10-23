@@ -22,9 +22,11 @@ post_date: '2026-10-21'
 
 ## Overview
 
-The `chess_episode_recorder` package provides a deterministic, high-throughput demonstration recording engine designed for Physical-AI and Imitation Learning (ACT, Diffusion Policy, SmolVLA) on the **LeKiwi** mobile manipulator robot.
+The `chess_episode_recorder` package provides a deterministic, high-throughput demonstration recording engine and **SmolVLA Campaign Conductor** designed for Physical-AI and Imitation Learning (ACT, Diffusion Policy, SmolVLA) on the **LeKiwi** mobile manipulator robot.
 
 Built on top of `rosbag2_cpp` with an **MCAP** storage backend and asynchronous 50MB write-caching, the recorder captures synchronized multi-modal sensory observations—including three camera perspectives (wrist, side, overhead stereo), arm joint states, cartesian TF trees, and high-level manipulation action feedback—packaging each demonstration into an isolated directory structure paired with standardized `episode_info.yaml` metadata conforming to the **LeRobot Dataset 3.0** format.
+
+In addition to manual teleoperation recording, the package embeds a C++17 Domain-Driven Design (DDD) **Campaign Conductor** (`collection_planner_domain`) capable of orchestrating 600 episodes across 30 sessions (20 eps/session), featuring deficit-weighted FEN position synthesis (`FenSynthesizer`), crash/restart progress recovery (`QuotaTracker`), move feasibility scoring, and automatic task dispatching (`MoveCandidateSelector`) pushing directives to `lekiwi_orchestrator`.
 
 ### When to Use
 - **Imitation Learning Data Collection**: Recording kinesthetic or gamepad-teleoperated demonstration episodes for policy training.
@@ -225,8 +227,9 @@ topics:
 | Service Name | Service Type | Description |
 | :--- | :--- | :--- |
 | `~/start_episode` | `std_srvs/srv/Trigger` | Prepares directory `episode_%06u`, opens the MCAP writer, and begins data logging. |
-| `~/save_episode` | `std_srvs/srv/Trigger` | Flushes writer, computes duration, generates `episode_info.yaml`, and advances episode counter. |
+| `~/save_episode` | `std_srvs/srv/Trigger` | Flushes writer, computes duration, generates `episode_info.yaml`, updates QuotaTracker, and advances episode counter. |
 | `~/discard_episode` | `std_srvs/srv/Trigger` | Stops recording (if active), deletes the active episode folder, and retains instruction for retry. |
+| `~/get_campaign_status` | `std_srvs/srv/Trigger` | Queries current progress across all 600 target episodes, sub-quotas, left/right bin counts, and active session. |
 
 ---
 
@@ -313,4 +316,33 @@ Use Foxglove CLI or standard rosbag2 tooling to verify bag health:
 ```bash
 ros2 bag info /root/docker_ws/lekiwi_ros2/ros_bag/chess_teleop_v5/episode_000042
 ```
+
+---
+
+## Diagnostics and Health Telemetry (`/diagnostics`)
+
+The recorder integrates with `diagnostic_updater` to publish real-time health telemetry to `/diagnostics` (Hardware ID: `chess_episode_recorder`), aggregated under `/LeKiwi/Recording/EpisodeRecorder`:
+
+### 1. `Episode Recorder Status`
+* **Episode State**: Current FSM state (`IDLE`, `RECORDING`, `STOPPED`).
+* **Current Episode Index**: Zero-padded identifier for the active or next demonstration (e.g. `000042`).
+* **Base Output Dir**: Absolute filesystem path for demonstration storage.
+* **Disk Free Space (GB)**: Remaining available disk capacity (`std::filesystem::space`).
+  * `OK`: $\ge 1.0\text{ GB}$.
+  * `WARN`: $0.2\text{ GB} \le \text{Free} < 1.0\text{ GB}$.
+  * `ERROR`: $< 0.2\text{ GB}$ (prevents disk exhaustion crashes).
+* **Total Recorded Msgs**: Cumulative sensory messages captured across all topics in the active episode.
+* **Active Instruction**: Active SmolVLA language instruction (e.g. `"Move white knight to target [b1 to c3]"`).
+
+### 2. `Collection Campaign Status`
+* **Campaign Mode**: `ENABLED` or `MANUAL_TELEOP`.
+* **Campaign State**: FSM state (`DISABLED`, `IDLE_AWAITING_BOARD`, `PLANNING_OR_SYNTHESIS`, `DISPATCHED_TO_ORCH`, `CAMPAIGN_FINISHED`).
+* **Total Progress**: Completed demonstration count against target (e.g. `120 / 600 (20.0%)`).
+* **Session Progress**: Progress within current 20-episode session (e.g. `Session 6: 14 / 20`).
+* **Board Stable**: Perception debounce verification state from `/chess/game_status`.
+* **Quotas Breakdown**: Real-time progress counters across all 4 manipulation primitives:
+  * `MOVE Quotas`: e.g. `60 / 240`.
+  * `CLEAR Quotas`: e.g. `30 / 120 (L: 15, R: 15)` (Round-Robin bin balance).
+  * `PICK Quotas`: e.g. `15 / 120`.
+  * `PLACE Quotas`: e.g. `15 / 120`.
 

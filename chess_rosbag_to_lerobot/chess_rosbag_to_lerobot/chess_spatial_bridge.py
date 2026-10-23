@@ -1,11 +1,11 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-"""Chess spatial bridge: maps chess algebraic notation to 3D metric coordinates.
+"""Chess spatial bridge: maps chess instructions to 3D metric coordinates and task metadata.
 
 Adheres to Single Source of Truth (SSOT) matching:
 - lekiwi_chess_master::domain
-- lekiwi_motion::ChessboardMapper
+- lekiwi_orchestrator::MovePlanBuilder
 - chessboard_pose_estimator
 """
 
@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 import re
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 import numpy as np
 
-from chess_rosbag_to_lerobot.config import ChessboardConfig, Config, PhaseConditioningConfig
+from chess_rosbag_to_lerobot.config import ChessboardConfig
 
 
 # -----------------------------------------------------------------------------
@@ -34,6 +35,31 @@ class TaskType(str, Enum):
 class ClearBinSide(str, Enum):
     LEFT = "left"
     RIGHT = "right"
+
+
+TASK_ORDER = {
+    TaskType.MOVE: 0,
+    TaskType.CLEAR: 1,
+    TaskType.PICK: 2,
+    TaskType.PLACE: 3,
+}
+
+PIECE_ORDER = {
+    "pawn": 0,
+    "knight": 1,
+    "bishop": 2,
+    "rook": 3,
+    "queen": 4,
+    "king": 5,
+    "piece": 6,
+    "unknown": 7,
+}
+
+COLOR_ORDER = {
+    "white": 0,
+    "black": 1,
+    "unknown": 2,
+}
 
 
 @dataclass(frozen=True)
@@ -55,27 +81,53 @@ class EpisodeSpatialPlan:
 
 
 @dataclass(frozen=True)
-class KinematicMilestones:
-    """Key physical phase transition points within an episode."""
-    onset_idx: int
-    grasp_idx: Optional[int]
-    release_idx: Optional[int]
-    settle_idx: int
-
-
-@dataclass(frozen=True)
 class ParsedChessTask:
     """Structured result of grammar parsing an input chess task instruction."""
     task_type: TaskType
+    piece_color: Optional[str] = None
+    piece_type: Optional[str] = None
     from_square: Optional[str] = None
     to_square: Optional[str] = None
     clear_bin_side: Optional[ClearBinSide] = None
 
 
 # -----------------------------------------------------------------------------
-# Regex Matchers for Chess Grammar
+# Regex Matchers for Chess Grammar (SmolVLA SSOT & Legacy Fallbacks)
 # -----------------------------------------------------------------------------
 
+# SmolVLA primary patterns (orchestrator SSOT):
+# - Move <color> <piece> to target [from_sq to to_sq]  (square brackets optional)
+# - Clear <color> <piece> to <left|right> bin [from_sq]  (square brackets optional)
+# - Pick <color> <piece> [from_sq]  (square brackets optional)
+# - Place <color> <piece> [to_sq]   (square brackets optional)
+
+_SMOLVLA_MOVE_RE = re.compile(
+    r"^\s*move\s+(white|black)\s+(pawn|knight|bishop|rook|queen|king|piece)"
+    r"(?:\s+to\s+target)?"
+    r"(?:\s*\[\s*([a-h][1-8])\s+to\s+([a-h][1-8])\s*\])?\s*$",
+    re.IGNORECASE,
+)
+
+_SMOLVLA_CLEAR_RE = re.compile(
+    r"^\s*clear\s+(white|black)\s+(pawn|knight|bishop|rook|queen|king|piece)"
+    r"\s+to\s+(left|right)\s+bin"
+    r"(?:\s*\[\s*([a-h][1-8])\s*\])?\s*$",
+    re.IGNORECASE,
+)
+
+_SMOLVLA_PICK_RE = re.compile(
+    r"^\s*pick\s+(white|black)\s+(pawn|knight|bishop|rook|queen|king|piece)"
+    r"(?:\s*\[\s*([a-h][1-8])\s*\])?\s*$",
+    re.IGNORECASE,
+)
+
+_SMOLVLA_PLACE_RE = re.compile(
+    r"^\s*place\s+(white|black)\s+(pawn|knight|bishop|rook|queen|king|piece)"
+    r"(?:\s*\[\s*([a-h][1-8])\s*\])?\s*$",
+    re.IGNORECASE,
+)
+
+# Legacy Teleop / UCI Fallback patterns
 UCI_REGEX = re.compile(r"\b([a-h][1-8])([a-h][1-8])([qrbn])?\b", re.IGNORECASE)
 SQUARE_PAIR_REGEX = re.compile(r"([a-h][1-8]).*?([a-h][1-8])", re.IGNORECASE)
 
@@ -121,8 +173,68 @@ def square_to_metric(square: str, cfg: ChessboardConfig) -> Tuple[float, float, 
     return x, y, z
 
 
-def _parse_clear_task(cleaned: str) -> Optional[ParsedChessTask]:
-    """Parse CLEAR instruction, enforcing explicit left/right bin side."""
+def parse_chess_task(task_text: str) -> ParsedChessTask:
+    """Parse a chess task instruction into a structured ParsedChessTask.
+
+    Primary (SmolVLA Orchestrator SSOT):
+        1. 'Move black pawn to target [c7 to c5]' or 'Move black pawn to target'
+        2. 'Clear white knight to left bin [d4]' or 'Clear white knight to left bin'
+        3. 'Pick black bishop [f8]' or 'Pick black bishop'
+        4. 'Place black bishop [c5]' or 'Place black bishop'
+
+    Fallback (Legacy Teleop):
+        5. 'Pick c7, place c5', 'e2e4', 'Move from e2 to e4'
+        6. 'Clear d4 to left onboard bin', 'clear_left e5'
+        7. 'Pick d5', 'Place e4'
+
+    Raises:
+        ValueError: if instruction is empty, ambiguous, or unparseable.
+    """
+    cleaned = (task_text or "").strip()
+    if not cleaned:
+        raise ValueError("Chess task instruction is empty")
+
+    # 1. Try SmolVLA primary matchers
+    m_smol_move = _SMOLVLA_MOVE_RE.match(cleaned)
+    if m_smol_move:
+        return ParsedChessTask(
+            TaskType.MOVE,
+            piece_color=m_smol_move.group(1).lower(),
+            piece_type=m_smol_move.group(2).lower(),
+            from_square=m_smol_move.group(3).lower() if m_smol_move.group(3) else None,
+            to_square=m_smol_move.group(4).lower() if m_smol_move.group(4) else None,
+        )
+
+    m_smol_clear = _SMOLVLA_CLEAR_RE.match(cleaned)
+    if m_smol_clear:
+        side = ClearBinSide.LEFT if m_smol_clear.group(3).lower() == "left" else ClearBinSide.RIGHT
+        return ParsedChessTask(
+            TaskType.CLEAR,
+            piece_color=m_smol_clear.group(1).lower(),
+            piece_type=m_smol_clear.group(2).lower(),
+            clear_bin_side=side,
+            from_square=m_smol_clear.group(4).lower() if m_smol_clear.group(4) else None,
+        )
+
+    m_smol_pick = _SMOLVLA_PICK_RE.match(cleaned)
+    if m_smol_pick:
+        return ParsedChessTask(
+            TaskType.PICK,
+            piece_color=m_smol_pick.group(1).lower(),
+            piece_type=m_smol_pick.group(2).lower(),
+            from_square=m_smol_pick.group(3).lower() if m_smol_pick.group(3) else None,
+        )
+
+    m_smol_place = _SMOLVLA_PLACE_RE.match(cleaned)
+    if m_smol_place:
+        return ParsedChessTask(
+            TaskType.PLACE,
+            piece_color=m_smol_place.group(1).lower(),
+            piece_type=m_smol_place.group(2).lower(),
+            to_square=m_smol_place.group(3).lower() if m_smol_place.group(3) else None,
+        )
+
+    # 2. Try legacy explicit CLEAR
     m_explicit = _CLEAR_EXPLICIT_RE.search(cleaned)
     if m_explicit:
         sq = m_explicit.group(1).lower()
@@ -137,7 +249,6 @@ def _parse_clear_task(cleaned: str) -> Optional[ParsedChessTask]:
         side = ClearBinSide.LEFT if side_str == "left" else ClearBinSide.RIGHT
         return ParsedChessTask(TaskType.CLEAR, from_square=sq, clear_bin_side=side)
 
-    # Detect ambiguous CLEAR lacking side specification
     if _CLEAR_AMBIGUOUS_RE.search(cleaned) or (
         re.search(r"\bclear\b", cleaned, re.IGNORECASE)
         and re.search(r"\b[a-h][1-8]\b", cleaned, re.IGNORECASE)
@@ -146,11 +257,7 @@ def _parse_clear_task(cleaned: str) -> Optional[ParsedChessTask]:
             f"Ambiguous CLEAR task missing left/right bin specification: '{cleaned}'"
         )
 
-    return None
-
-
-def _parse_atomic_task(cleaned: str) -> Optional[ParsedChessTask]:
-    """Parse atomic PICK or PLACE instruction."""
+    # 3. Try legacy atomic PICK / PLACE
     m_pick = _PICK_ATOMIC_RE.match(cleaned)
     if m_pick:
         return ParsedChessTask(TaskType.PICK, from_square=m_pick.group(1).lower())
@@ -159,11 +266,7 @@ def _parse_atomic_task(cleaned: str) -> Optional[ParsedChessTask]:
     if m_place:
         return ParsedChessTask(TaskType.PLACE, to_square=m_place.group(1).lower())
 
-    return None
-
-
-def _parse_move_task(cleaned: str) -> Optional[ParsedChessTask]:
-    """Parse full MOVE instruction (pick/place pair, UCI, or descriptive)."""
+    # 4. Try legacy MOVE
     m_move = _MOVE_PICK_PLACE_RE.match(cleaned)
     if m_move:
         return ParsedChessTask(
@@ -172,7 +275,6 @@ def _parse_move_task(cleaned: str) -> Optional[ParsedChessTask]:
             to_square=m_move.group(2).lower(),
         )
 
-    # Check for direct UCI match
     uci_match = UCI_REGEX.search(cleaned)
     if uci_match:
         return ParsedChessTask(
@@ -181,7 +283,6 @@ def _parse_move_task(cleaned: str) -> Optional[ParsedChessTask]:
             to_square=uci_match.group(2).lower(),
         )
 
-    # Check for pair of squares anywhere in descriptive text
     pair_match = SQUARE_PAIR_REGEX.search(cleaned)
     if pair_match:
         return ParsedChessTask(
@@ -189,38 +290,6 @@ def _parse_move_task(cleaned: str) -> Optional[ParsedChessTask]:
             from_square=pair_match.group(1).lower(),
             to_square=pair_match.group(2).lower(),
         )
-
-    return None
-
-
-def parse_chess_task(task_text: str) -> ParsedChessTask:
-    """Parse a chess task instruction into a structured ParsedChessTask.
-
-    Supports:
-        1. CLEAR with explicit side: 'Clear d4 to left onboard bin', 'clear_right e5'
-        2. CLEAR ambiguous: 'Clear d4 to onboard bin' -> raises ValueError
-        3. Atomic PICK: 'Pick d5'
-        4. Atomic PLACE: 'Place e4'
-        5. Full MOVE: 'Pick c7, place c5', 'e2e4', 'Move from e2 to e4'
-
-    Raises:
-        ValueError: if instruction is empty, ambiguous, or unparseable.
-    """
-    cleaned = (task_text or "").strip()
-    if not cleaned:
-        raise ValueError("Chess task instruction is empty")
-
-    res = _parse_clear_task(cleaned)
-    if res is not None:
-        return res
-
-    res = _parse_atomic_task(cleaned)
-    if res is not None:
-        return res
-
-    res = _parse_move_task(cleaned)
-    if res is not None:
-        return res
 
     raise ValueError(
         f"Cannot parse chess task instruction into known primitives: '{task_text}'"
@@ -236,46 +305,61 @@ def resolve_episode_spatial_plan(
     stow_xyz = np.array(cfg.landmarks.stow, dtype=np.float32)
 
     if parsed.task_type == TaskType.MOVE:
-        from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
-        to_xyz = np.array(square_to_metric(parsed.to_square, cfg), dtype=np.float32)
-        source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
-        target = SpatialEndpoint(xyz=to_xyz, is_board_frame=True)
+        if parsed.from_square:
+            from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
+            source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
+        else:
+            source = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
+
+        if parsed.to_square:
+            to_xyz = np.array(square_to_metric(parsed.to_square, cfg), dtype=np.float32)
+            target = SpatialEndpoint(xyz=to_xyz, is_board_frame=True)
+        else:
+            target = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
+
         one_hot = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        canonical = f"Pick {parsed.from_square}, place {parsed.to_square}"
 
     elif parsed.task_type == TaskType.CLEAR:
-        from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
-        source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
+        if parsed.from_square:
+            from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
+            source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
+        else:
+            source = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
+
         bin_coords = (
             cfg.landmarks.clear_left
             if parsed.clear_bin_side == ClearBinSide.LEFT
             else cfg.landmarks.clear_right
         )
-        target_xyz = np.array(bin_coords, dtype=np.float32)
-        target = SpatialEndpoint(xyz=target_xyz, is_board_frame=False)
+        target = SpatialEndpoint(xyz=np.array(bin_coords, dtype=np.float32), is_board_frame=False)
         one_hot = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
-        canonical = f"Clear {parsed.from_square} to {parsed.clear_bin_side.value} onboard bin"
 
     elif parsed.task_type == TaskType.PICK:
-        from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
-        source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
+        if parsed.from_square:
+            from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
+            source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
+        else:
+            source = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
+
         target = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
         one_hot = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
-        canonical = f"Pick {parsed.from_square}"
 
     elif parsed.task_type == TaskType.PLACE:
         source = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
-        to_xyz = np.array(square_to_metric(parsed.to_square, cfg), dtype=np.float32)
-        target = SpatialEndpoint(xyz=to_xyz, is_board_frame=True)
+        if parsed.to_square:
+            to_xyz = np.array(square_to_metric(parsed.to_square, cfg), dtype=np.float32)
+            target = SpatialEndpoint(xyz=to_xyz, is_board_frame=True)
+        else:
+            target = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
+
         one_hot = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-        canonical = f"Place {parsed.to_square}"
 
     else:
         raise ValueError(f"Unsupported task type: {parsed.task_type}")
 
     return EpisodeSpatialPlan(
         task_type=parsed.task_type,
-        canonical_task=canonical,
+        canonical_task=task_text,
         source=source,
         target=target,
         task_one_hot=one_hot,
@@ -283,241 +367,27 @@ def resolve_episode_spatial_plan(
     )
 
 
-def assemble_environment_state(
-    plan: EpisodeSpatialPlan,
-    transform_fn: Callable[[np.ndarray], Optional[np.ndarray]],
-    *,
-    has_grasped: float = 0.0,
-    has_released: float = 0.0,
-    override_to_stow: bool = False,
-) -> np.ndarray:
-    """Assemble 12D environment state vector for current reference tick.
+def sort_episodes(
+    episodes: Sequence[Path],
+    task_extractor: Optional[Callable[[Path], str]] = None,
+) -> List[Path]:
+    """Sort episode directories by Task (MOVE -> CLEAR -> PICK -> PLACE), Piece Type, Color, and ID.
 
-    Vector format:
-    [source_x, source_y, source_z, target_x, target_y, target_z,
-     is_move, is_clear, is_pick, is_place,
-     has_grasped, has_released]
+    Guarantees deterministic grouping of episodes for LeRobot dataset creation.
     """
-    if override_to_stow:
-        src_xyz = plan.stow_xyz
-        tgt_xyz = plan.stow_xyz
-    else:
-        if plan.source.is_board_frame:
-            transformed_src = transform_fn(plan.source.xyz)
-            src_xyz = transformed_src if transformed_src is not None else plan.source.xyz
-        else:
-            src_xyz = plan.source.xyz
+    def _episode_sort_key(ep_dir: Path) -> Tuple[int, int, int, str]:
+        task_str = task_extractor(ep_dir) if task_extractor is not None else ""
+        if not task_str:
+            return (99, 99, 99, ep_dir.name)
 
-        if plan.target.is_board_frame:
-            transformed_tgt = transform_fn(plan.target.xyz)
-            tgt_xyz = transformed_tgt if transformed_tgt is not None else plan.target.xyz
-        else:
-            tgt_xyz = plan.target.xyz
+        try:
+            parsed = parse_chess_task(task_str)
+            t_rank = TASK_ORDER.get(parsed.task_type, 99)
+            p_rank = PIECE_ORDER.get((parsed.piece_type or "unknown").lower(), 99)
+            c_rank = COLOR_ORDER.get((parsed.piece_color or "unknown").lower(), 99)
+            return (t_rank, p_rank, c_rank, ep_dir.name)
+        except Exception:
+            return (99, 99, 99, ep_dir.name)
 
-    flags = np.array([float(has_grasped), float(has_released)], dtype=np.float32)
-    return np.concatenate([src_xyz, tgt_xyz, plan.task_one_hot, flags]).astype(np.float32)
+    return sorted(episodes, key=_episode_sort_key)
 
-
-# -----------------------------------------------------------------------------
-# Kinematic Phase Detection & Frame Conditioning
-# -----------------------------------------------------------------------------
-
-def _detect_onset_idx(states: Sequence[np.ndarray], threshold: float) -> int:
-    """Detect first frame index where joint deviation from initial state exceeds threshold."""
-    q0 = states[0]
-    for i, q in enumerate(states):
-        if np.max(np.abs(q - q0)) > threshold:
-            return i
-    return 0
-
-
-def _detect_grasp_idx(
-    states: Sequence[np.ndarray],
-    cfg: PhaseConditioningConfig,
-    task_type: TaskType,
-) -> Optional[int]:
-    """Detect frame where gripper closes (< closed_max) while lift > lift_min, after gripper opened."""
-    if task_type == TaskType.PLACE:
-        return None
-
-    opened = False
-    for i, q in enumerate(states):
-        lift = float(q[1])
-        grip = float(q[5])
-        if not opened:
-            if grip > cfg.gripper_open_min_rad:
-                opened = True
-        else:
-            if lift > cfg.arm_extended_lift_min_rad and grip < cfg.gripper_closed_max_rad:
-                return i
-
-    raise ValueError(
-        f"Missing grasp event in {task_type.value} episode: gripper did not open "
-        f"> {cfg.gripper_open_min_rad} rad then close < {cfg.gripper_closed_max_rad} rad "
-        f"while lift > {cfg.arm_extended_lift_min_rad} rad"
-    )
-
-
-def _detect_release_idx(
-    states: Sequence[np.ndarray],
-    cfg: PhaseConditioningConfig,
-    task_type: TaskType,
-    fps: int,
-    grasp_idx: Optional[int],
-) -> Optional[int]:
-    """Detect frame where piece is released at destination."""
-    if task_type == TaskType.PICK:
-        return None
-
-    if task_type in (TaskType.MOVE, TaskType.CLEAR):
-        if grasp_idx is None:
-            raise ValueError(f"Cannot detect release for {task_type.value} without grasp milestone")
-        min_transport_frames = int(cfg.min_transport_duration_s * fps)
-        start_idx = grasp_idx + min_transport_frames
-        for i in range(start_idx, len(states)):
-            if float(states[i][5]) > cfg.gripper_open_min_rad:
-                return i
-        raise ValueError(
-            f"Missing release event in {task_type.value} episode: gripper did not open "
-            f"> {cfg.gripper_open_min_rad} rad after grasp (searched from frame {start_idx})"
-        )
-
-    if task_type == TaskType.PLACE:
-        for i, q in enumerate(states):
-            lift = float(q[1])
-            grip = float(q[5])
-            if lift > cfg.arm_extended_lift_min_rad and grip > cfg.gripper_open_min_rad:
-                return i
-        raise ValueError(
-            f"Missing release event in place episode: gripper did not open "
-            f"> {cfg.gripper_open_min_rad} rad while lift > {cfg.arm_extended_lift_min_rad} rad"
-        )
-
-    raise ValueError(f"Unsupported task type for release detection: {task_type}")
-
-
-def _detect_settle_idx(
-    states: Sequence[np.ndarray],
-    cfg: PhaseConditioningConfig,
-    last_event_idx: int,
-) -> int:
-    """Detect first frame after last event where arm is in stow and stays settled until episode end.
-
-    Prefers nominal stow position (lift < -1.35 rad) if reached by final frame; otherwise settles
-    at the final stationary rest position.
-    """
-    n = len(states)
-    q_last = states[-1]
-    require_stow = float(q_last[1]) < -1.35
-
-    def is_settled(q: np.ndarray) -> bool:
-        lift_ok = (float(q[1]) < -1.35) if require_stow else True
-        return lift_ok and bool(np.max(np.abs(q - q_last)) <= cfg.stow_settle_delta_rad)
-
-    k = n - 1
-    while k > last_event_idx and is_settled(states[k - 1]):
-        k -= 1
-
-    return k
-
-
-def detect_kinematic_milestones(
-    states: Sequence[np.ndarray],
-    task_type: TaskType,
-    cfg: PhaseConditioningConfig,
-    fps: int,
-) -> KinematicMilestones:
-    """Extract physical milestones [onset, grasp, release, settle] from joint trajectory."""
-    if not states:
-        raise ValueError("Cannot detect milestones on empty joint states")
-
-    onset_idx = _detect_onset_idx(states, cfg.motion_onset_delta_rad)
-    grasp_idx = _detect_grasp_idx(states, cfg, task_type)
-    release_idx = _detect_release_idx(states, cfg, task_type, fps, grasp_idx)
-
-    last_event = release_idx if release_idx is not None else (grasp_idx if grasp_idx is not None else 0)
-    settle_idx = _detect_settle_idx(states, cfg, last_event)
-
-    return KinematicMilestones(
-        onset_idx=onset_idx,
-        grasp_idx=grasp_idx,
-        release_idx=release_idx,
-        settle_idx=settle_idx,
-    )
-
-
-def condition_episode_frames(
-    raw_frames: List[Dict[str, Any]],
-    plan: EpisodeSpatialPlan,
-    cfg: Config,
-) -> List[Dict[str, Any]]:
-    """Apply 12D dynamic conditioning, trim leading idle, and pad/clamp trailing stow hold."""
-    if not raw_frames:
-        return []
-
-    states = [f["observation.state"] for f in raw_frames]
-    milestones = detect_kinematic_milestones(
-        states, plan.task_type, cfg.phase_conditioning, cfg.fps
-    )
-
-    # 1. Assign 12D observation.environment_state to each raw frame
-    for i, frame in enumerate(raw_frames):
-        if plan.task_type in (TaskType.MOVE, TaskType.CLEAR):
-            if i < milestones.grasp_idx:
-                has_grasped, has_released, override_to_stow = 0.0, 0.0, False
-            elif i < milestones.release_idx:
-                has_grasped, has_released, override_to_stow = 1.0, 0.0, False
-            else:
-                has_grasped, has_released, override_to_stow = 1.0, 1.0, True
-
-        elif plan.task_type == TaskType.PICK:
-            if i < milestones.grasp_idx:
-                has_grasped, has_released, override_to_stow = 0.0, 0.0, False
-            else:
-                has_grasped, has_released, override_to_stow = 1.0, 0.0, True
-
-        elif plan.task_type == TaskType.PLACE:
-            if i < milestones.release_idx:
-                has_grasped, has_released, override_to_stow = 1.0, 0.0, False
-            else:
-                has_grasped, has_released, override_to_stow = 1.0, 1.0, True
-        else:
-            has_grasped, has_released, override_to_stow = 0.0, 0.0, False
-
-        transform_fn = frame.pop("_transform_fn", None)
-        if transform_fn is None:
-            transform_fn = lambda pt: pt
-
-        frame["observation.environment_state"] = assemble_environment_state(
-            plan,
-            transform_fn,
-            has_grasped=has_grasped,
-            has_released=has_released,
-            override_to_stow=override_to_stow,
-        )
-
-    # 2. Pad or clamp trailing stow hold to target_trailing_stow_frames
-    target_stow_frames = cfg.phase_conditioning.target_trailing_stow_frames
-    n_tail = len(raw_frames) - milestones.settle_idx
-
-    if n_tail > target_stow_frames:
-        frames = raw_frames[: milestones.settle_idx + target_stow_frames]
-    elif n_tail < target_stow_frames:
-        frames = list(raw_frames)
-        pad_count = target_stow_frames - n_tail
-        last_frame = frames[-1]
-        for _ in range(pad_count):
-            pad_frame = dict(last_frame)
-            for k, v in last_frame.items():
-                if isinstance(v, np.ndarray):
-                    pad_frame[k] = v.copy()
-            if "observation.state" in pad_frame:
-                pad_frame["action"] = pad_frame["observation.state"].copy()
-            frames.append(pad_frame)
-    else:
-        frames = list(raw_frames)
-
-    # 3. Trim leading idle frames
-    trim_lead = cfg.phase_conditioning.trim_leading_idle_frames
-    start_idx = max(0, milestones.onset_idx - trim_lead)
-    return frames[start_idx:]

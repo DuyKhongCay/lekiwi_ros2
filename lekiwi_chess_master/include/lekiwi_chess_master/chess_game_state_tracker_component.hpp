@@ -9,22 +9,19 @@
  *
  * ROS 2 Interfaces:
  * - Subscription: `/chess/raw_fen` [std_msgs::msg::String, SensorDataQoS]
- * - Publisher: `/chess/game_status` [lekiwi_interfaces::msg::ChessGameStatus, SystemDefaultsQoS]
+ * - Publisher: `/chess/game_status` [lekiwi_interfaces::msg::ChessGameStatus, Reliable, TransientLocal, Depth 1]
  * - Service Server: `/chess/reset_game` [std_srvs::srv::Trigger]
- * - Action Client: `/chess/compute_best_move` [lekiwi_interfaces::action::ComputeBestMove]
+ * - Service Server: `/chess/set_fen` [lekiwi_interfaces::srv::SetFen]
  *
  * Parameters:
  * - `raw_fen_topic` (string, default: "/chess/raw_fen"): Vision detection topic.
  * - `game_status_topic` (string, default: "/chess/game_status"): Status broadcast topic.
+ * - `set_fen_service` (string, default: "/chess/set_fen"): Set FEN service topic.
  * - `debounce_frames` (int, default: 3): Consecutive identical frames needed for stability.
- * - `auto_trigger_engine` (bool, default: false): Auto-dispatch calculation on robot's turn.
  * - `robot_color` (string, default: "black"): Designates robot's playing side ("white"/"black").
- * - `think_time_ms` (int, default: 1000): Engine calculation time budget.
- * - `action_name` (string, default: "/chess/compute_best_move"): Action server target.
  *
  * Thread Safety:
- * - Guarded by `state_mutex_` across subscriptions, service calls, and action callbacks.
- * - `is_engine_busy_` provides lock-free re-entrancy prevention for engine triggers.
+ * - Guarded by `state_mutex_` across subscriptions and service calls.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -33,16 +30,14 @@
 #pragma once
 
 #include <rclcpp/rclcpp.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <lekiwi_interfaces/msg/chess_game_status.hpp>
 #include <lekiwi_interfaces/msg/chess_move_details.hpp>
 #include <lekiwi_interfaces/srv/set_fen.hpp>
-#include <lekiwi_interfaces/action/compute_best_move.hpp>
+#include <lekiwi_interfaces/srv/set_candidate_move.hpp>
 
 #include <chess.hpp>
-#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -63,29 +58,20 @@ namespace lekiwi_chess_master
   {
   public:
     using ChessGameStatus = lekiwi_interfaces::msg::ChessGameStatus;
-    using ComputeBestMove = lekiwi_interfaces::action::ComputeBestMove;
-    using GoalHandleComputeBestMove = rclcpp_action::ClientGoalHandle<ComputeBestMove>;
 
     explicit ChessGameStateTrackerComponent(const rclcpp::NodeOptions &options);
     ~ChessGameStateTrackerComponent() override = default;
 
     /**
      * @brief Resets the internal chess board state to standard starting position.
-     * Cancels any pending or active engine calculation goals.
      */
     void reset_game();
 
     /** @brief Accesses internal board representation (for testing). */
     [[nodiscard]] const chess::Board &get_board() const { return board_; }
 
-    /** @brief Checks if autonomous engine calculation triggering is enabled. */
-    [[nodiscard]] bool is_auto_trigger_enabled() const { return auto_trigger_engine_; }
-
     /** @brief Retrieves the configured robot player color ("white" or "black"). */
     [[nodiscard]] const std::string &get_robot_color() const { return robot_color_; }
-
-    /** @brief Retrieves the engine think time in milliseconds. */
-    [[nodiscard]] int get_think_time_ms() const { return think_time_ms_; }
 
     /** @brief Retrieves the current game lifecycle phase enum value. */
     [[nodiscard]] uint8_t get_game_phase() const { return current_phase_; }
@@ -125,6 +111,17 @@ namespace lekiwi_chess_master
         std::string &robot_color,
         std::string &message);
 
+    /**
+     * @brief Updates the recommended candidate move details and immediately publishes game status.
+     *
+     * @param[in] move Move details or UCI string to classify and display.
+     * @param[out] message Diagnostic status message.
+     * @return True if candidate move was valid and set.
+     */
+    bool set_candidate_move(
+        const lekiwi_interfaces::msg::ChessMoveDetails &move,
+        std::string &message);
+
   private:
     /**
      * @brief Ingests vision detection FEN placement and runs temporal debounce filtering.
@@ -151,6 +148,10 @@ namespace lekiwi_chess_master
         const std::shared_ptr<lekiwi_interfaces::srv::SetFen::Request> request,
         std::shared_ptr<lekiwi_interfaces::srv::SetFen::Response> response);
 
+    void handle_set_candidate_move_service(
+        const std::shared_ptr<lekiwi_interfaces::srv::SetCandidateMove::Request> request,
+        std::shared_ptr<lekiwi_interfaces::srv::SetCandidateMove::Response> response);
+
     /**
      * @brief Matches a stable vision placement against all legal FIDE candidate moves.
      *
@@ -171,44 +172,20 @@ namespace lekiwi_chess_master
      */
     void publish_game_status(bool is_legal = true, bool is_stable = true);
 
-    /**
-     * @brief Evaluates whether to automatically dispatch ComputeBestMove goal to engine.
-     *
-     * @details Checks if auto_trigger_engine is active, if it is currently robot's turn,
-     * if the game is active (not checkmate/draw), and if action server is available.
-     *
-     * @pre state_mutex_ must be held by caller.
-     * @post Dispatches async goal handle if criteria are satisfied.
-     */
-    void trigger_engine_if_needed();
-
-    /** @brief Action client callback handling server goal response acceptance/rejection. */
-    void on_goal_response(const GoalHandleComputeBestMove::SharedPtr &goal_handle);
-
-    /** @brief Action client callback receiving intermediate search progression feedback. */
-    void on_feedback(
-        GoalHandleComputeBestMove::SharedPtr,
-        const std::shared_ptr<const ComputeBestMove::Feedback> feedback);
-
-    /** @brief Action client callback processing final best move evaluation result. */
-    void on_result(const GoalHandleComputeBestMove::WrappedResult &result);
-
     // Node Parameters
     std::string raw_fen_topic_{"/chess/raw_fen"};
     std::string game_status_topic_{"/chess/game_status"};
     std::string set_fen_service_name_{"/chess/set_fen"};
+    std::string set_candidate_move_service_name_{"/chess/set_candidate_move"};
     int debounce_frames_{3};
-    bool auto_trigger_engine_{false};
     std::string robot_color_{"black"};
-    int think_time_ms_{1000};
-    std::string action_name_{"/chess/compute_best_move"};
 
     // ROS 2 Communications
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr raw_fen_sub_;
     rclcpp::Publisher<ChessGameStatus>::SharedPtr game_status_pub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_srv_;
     rclcpp::Service<lekiwi_interfaces::srv::SetFen>::SharedPtr set_fen_srv_;
-    rclcpp_action::Client<ComputeBestMove>::SharedPtr action_client_;
+    rclcpp::Service<lekiwi_interfaces::srv::SetCandidateMove>::SharedPtr set_candidate_move_srv_;
 
     // Game Engine & Debounce tracking
     mutable std::mutex state_mutex_;
@@ -218,15 +195,10 @@ namespace lekiwi_chess_master
     int consecutive_count_{0};
     bool awaiting_physical_sync_{false};
 
-    // Match & Engine Status
+    // Match Status
     lekiwi_interfaces::msg::ChessMoveDetails last_move_details_;
     lekiwi_interfaces::msg::ChessMoveDetails best_move_details_;
-    int32_t current_eval_centipawns_{0};
     uint8_t current_phase_{ChessGameStatus::PHASE_WAITING_PLAYER};
-
-    // Action Client state
-    std::atomic<bool> is_engine_busy_{false};
-    GoalHandleComputeBestMove::SharedPtr current_goal_handle_;
   };
 
 } // namespace lekiwi_chess_master

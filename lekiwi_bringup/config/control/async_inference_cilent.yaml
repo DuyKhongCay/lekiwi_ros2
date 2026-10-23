@@ -1,0 +1,51 @@
+# ==============================================================================
+# LeKiwi Physical-AI Async Policy Inference Client Configuration
+# Package: lekiwi_bringup/config/control/async_inference_cilent.yaml
+# Architecture: Tier 3 Perception & Policy Execution (Pi 5 -> Remote Server)
+# ==============================================================================
+
+async_ros2_inference_client:
+  ros__parameters:
+    # Remote ZMQ Policy Server endpoint
+    server_address: "192.168.1.9:8090"
+
+    # Model Configuration (LeRobot Dataset v3.0 SSOT - SmolVLA)
+    policy_type: "smolvla"
+    repo_id: "DuyKhongCay/smolvla_lekiwi_chess"
+    actions_per_chunk: 40
+    chunk_size_threshold: 0.15
+    observation_filter_epsilon: 0.05
+
+    # Rate and Freshness Parameters (25 Hz)
+    control_rate: 25.0
+    max_age_s: 0.04
+
+    # Smoothing & Auto-start
+    aggregation_fn: "weighted_average"
+    auto_start: true
+
+    # Camera & Joint Topics (3 compressed streams 384x384 @ 25Hz)
+    wrist_cam_topic: "/cameras/usb_wrist/image_raw/compressed"
+    side_cam_topic: "/cameras/usb_side/image_raw/compressed"
+    overhead_cam_topic: "/cameras/stereo_right/image_raw/compressed"
+    joints_topic: "/joint_states"
+    fwd_cmd_topic: "/arm_forward_controller/commands"
+    action_name: "/manipulation/execute_chess_move"
+
+    # Network Transport Timeouts
+    transport:
+      config_timeout_s: 60.0
+      infer_timeout_ms: 500
+
+    # Stream Integrity Watchdog
+    stream_timeout_s: 2.0
+
+    # Episode Convergence & Completion Criteria (Zero Backward-Compatibility)
+    convergence:
+      max_duration_s: 180.0       # Maximum rollout duration before aborting (timeout)
+      min_actions: 50             # Minimum executed policy actions before checking stow (2.0s @ 25Hz)
+      stow_tolerance_rad: 0.20    # Max joint error to calibrated named_poses.stow
+      settle_steps: 25            # Steps robot must remain settled at stow (25 @ 25Hz = 1.0s)
+      starvation_timeout_s: 2.0   # Stream starvation timeout
+
+

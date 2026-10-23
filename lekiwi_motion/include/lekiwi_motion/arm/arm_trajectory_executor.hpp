@@ -215,6 +215,7 @@ public:
 
   // Landmark & Gripper Configuration
   [[nodiscard]] std::optional<std::vector<double>> get_named_pose(const std::string & name) const;
+  bool set_named_pose(const std::string & name, std::vector<double> joints);
   [[nodiscard]] GripperConfig gripper_config() const;
   [[nodiscard]] double clamp_gripper(double target_rad) const;
   [[nodiscard]] double gripper_open_rad() const;

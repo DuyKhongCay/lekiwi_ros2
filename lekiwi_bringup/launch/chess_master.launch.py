@@ -3,14 +3,16 @@
 
 """Chess Master game engine and board state tracking bringup launch file.
 
-Launches ChessGameStateTracker, ChessEngineAction (Stockfish driver), and
-Chessboard2DVisualizer inside a multi-threaded composable container.
+Launches ChessGameStateTracker, Chessboard2DVisualizer, and conditionally
+ChessEngineAction (Stockfish driver, disabled when record:=true) inside
+a multi-threaded composable container.
 """
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import UnlessCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import ComposableNodeContainer
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
 
@@ -21,14 +23,12 @@ def generate_launch_description():
     Returns:
         LaunchDescription containing chess tracking and engine container.
     """
-    # 1. Resolve chess master parameter configuration file path
     bringup_share = FindPackageShare("lekiwi_bringup")
 
     default_config = PathJoinSubstitution(
         [bringup_share, "config", "chess", "chess_master_params.yaml"]
     )
 
-    # 2. Declare launch arguments
     config_file_arg = DeclareLaunchArgument(
         "config_file",
         default_value=default_config,
@@ -41,7 +41,12 @@ def generate_launch_description():
         description="Use simulation clock if true",
     )
 
-    # 3. Define multi-threaded composable container holding chess components
+    record_arg = DeclareLaunchArgument(
+        "record",
+        default_value="false",
+        description="Disable Stockfish chess engine action component during episode recording",
+    )
+
     container = ComposableNodeContainer(
         name="chess_master_container",
         namespace="",
@@ -52,16 +57,6 @@ def generate_launch_description():
                 package="lekiwi_chess_master",
                 plugin="lekiwi_chess_master::ChessGameStateTrackerComponent",
                 name="chess_game_state_tracker",
-                parameters=[
-                    LaunchConfiguration("config_file"),
-                    {"use_sim_time": LaunchConfiguration("use_sim_time")},
-                ],
-                extra_arguments=[{"use_intra_process_comms": True}],
-            ),
-            ComposableNode(
-                package="lekiwi_chess_master",
-                plugin="lekiwi_chess_master::ChessEngineActionComponent",
-                name="chess_engine_action",
                 parameters=[
                     LaunchConfiguration("config_file"),
                     {"use_sim_time": LaunchConfiguration("use_sim_time")},
@@ -82,11 +77,29 @@ def generate_launch_description():
         output="screen",
     )
 
-    # 4. Assemble LaunchDescription
+    load_engine_action = LoadComposableNodes(
+        target_container=container,
+        composable_node_descriptions=[
+            ComposableNode(
+                package="lekiwi_chess_master",
+                plugin="lekiwi_chess_master::ChessEngineActionComponent",
+                name="chess_engine_action",
+                parameters=[
+                    LaunchConfiguration("config_file"),
+                    {"use_sim_time": LaunchConfiguration("use_sim_time")},
+                ],
+                extra_arguments=[{"use_intra_process_comms": True}],
+            )
+        ],
+        condition=UnlessCondition(LaunchConfiguration("record")),
+    )
+
     return LaunchDescription(
         [
             config_file_arg,
             use_sim_time_arg,
+            record_arg,
             container,
+            load_engine_action,
         ]
     )

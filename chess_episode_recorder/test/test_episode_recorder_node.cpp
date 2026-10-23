@@ -61,6 +61,9 @@ protected:
       "feedback_topic", "/manipulation/execute_chess_move/_action/feedback");
     options.append_parameter_override("topics", std::vector<std::string>{});
 
+    options.append_parameter_override("enable_collection_planner", true);
+    options.append_parameter_override("collection_config_path", "");
+
     recorder_node_ = std::make_shared<EpisodeRecorderNode>(options);
     client_node_ = std::make_shared<rclcpp::Node>("test_episode_recorder_client");
 
@@ -71,6 +74,8 @@ protected:
       "/episode_recorder_node/save_episode");
     discard_client_ = client_node_->create_client<std_srvs::srv::Trigger>(
       "/episode_recorder_node/discard_episode");
+    status_client_ = client_node_->create_client<std_srvs::srv::Trigger>(
+      "/episode_recorder_node/get_campaign_status");
 
     // Initialize feedback publisher to emulate ManipulationActionServer
     feedback_pub_ =
@@ -94,6 +99,7 @@ protected:
     ASSERT_TRUE(start_client_->wait_for_service(std::chrono::seconds(5)));
     ASSERT_TRUE(save_client_->wait_for_service(std::chrono::seconds(5)));
     ASSERT_TRUE(discard_client_->wait_for_service(std::chrono::seconds(5)));
+    ASSERT_TRUE(status_client_->wait_for_service(std::chrono::seconds(5)));
   }
 
   void TearDown() override
@@ -112,6 +118,7 @@ protected:
     start_client_.reset();
     save_client_.reset();
     discard_client_.reset();
+    status_client_.reset();
     client_node_.reset();
     recorder_node_.reset();
     executor_.reset();
@@ -169,6 +176,7 @@ protected:
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr save_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr discard_client_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr status_client_;
   rclcpp::Publisher<lekiwi_interfaces::action::ExecuteChessMove_FeedbackMessage>::SharedPtr feedback_pub_;
 
   std::atomic<bool> spinning_{false};
@@ -270,6 +278,76 @@ TEST_F(EpisodeRecorderNodeTestFixture, DiscardEpisode_RetainsInstructionOnRetry)
 
   // Crucial assertion: task field maintained instruction from feedback across discard
   EXPECT_EQ(info["task"].as<std::string>(), move_instruction);
+}
+
+/**
+ * @brief Campaign Conductor Test: Verifies that saving an episode updates the QuotaTracker
+ *        and reflects in the ~/get_campaign_status service response.
+ */
+TEST_F(EpisodeRecorderNodeTestFixture, CampaignConductor_TracksProgressOnSaveEpisode)
+{
+  std::string response_msg;
+
+  // 1. Check initial campaign status service
+  bool status_ok = call_trigger(status_client_, response_msg);
+  EXPECT_TRUE(status_ok);
+  EXPECT_NE(response_msg.find("Campaign: 0/600"), std::string::npos);
+
+  // 2. Publish feedback with valid SmolVLA instruction
+  const std::string move_instruction = "Move white knight to target";
+  publish_feedback(move_instruction, "APPROACH_PICK", 50.0f);
+
+  // 3. Start and Save an episode
+  EXPECT_TRUE(call_trigger(start_client_, response_msg));
+  EXPECT_TRUE(call_trigger(save_client_, response_msg));
+
+  // 4. Verify that QuotaTracker received the episode
+  domain::PieceKey wn{chess::Color::WHITE, chess::PieceType::KNIGHT};
+  EXPECT_EQ(recorder_node_->get_quota_tracker().get_completed(domain::StepKind::MOVE, wn), 1u);
+
+  // 5. Query campaign status service again
+  EXPECT_TRUE(call_trigger(status_client_, response_msg));
+  EXPECT_NE(response_msg.find("Campaign: 1/600"), std::string::npos);
+  EXPECT_NE(response_msg.find("MOVE: 1"), std::string::npos);
+}
+
+TEST_F(EpisodeRecorderNodeTestFixture, DiagnosticUpdaterProducesValidTelemetry)
+{
+  diagnostic_updater::DiagnosticStatusWrapper recorder_stat;
+  recorder_node_->produce_recorder_diagnostics(recorder_stat);
+
+  EXPECT_EQ(recorder_stat.level, diagnostic_msgs::msg::DiagnosticStatus::OK);
+  EXPECT_EQ(recorder_stat.message, "Episode recorder nominal");
+
+  bool found_episode_state = false;
+  bool found_topic_sub = false;
+  for (const auto &kv : recorder_stat.values) {
+    if (kv.key == "Episode State") {
+      found_episode_state = true;
+    }
+    if (kv.key == "Topic Subscriptions") {
+      found_topic_sub = true;
+    }
+  }
+  EXPECT_TRUE(found_episode_state);
+  EXPECT_FALSE(found_topic_sub);
+
+  diagnostic_updater::DiagnosticStatusWrapper campaign_stat;
+  recorder_node_->produce_campaign_diagnostics(campaign_stat);
+
+  EXPECT_EQ(campaign_stat.level, diagnostic_msgs::msg::DiagnosticStatus::OK);
+  bool found_campaign_mode = false;
+  bool found_last_fen = false;
+  for (const auto &kv : campaign_stat.values) {
+    if (kv.key == "Campaign Mode") {
+      found_campaign_mode = true;
+    }
+    if (kv.key == "Last Seen FEN") {
+      found_last_fen = true;
+    }
+  }
+  EXPECT_TRUE(found_campaign_mode);
+  EXPECT_FALSE(found_last_fen);
 }
 
 }  // namespace test

@@ -336,24 +336,29 @@ namespace lekiwi_motion
       const lekiwi_interfaces::srv::CheckMoveFeasibility::Request &request) const noexcept
   {
     const auto &move = request.move;
-    if (move.from_square.empty() || move.to_square.empty())
+    if (move.uci.length() < 4)
     {
-      return "Malformed request: from_square and to_square cannot be empty";
+      return "Malformed request: uci move string must be at least 4 characters";
     }
-    if (!ChessboardMapper::is_valid_square(move.from_square))
+    const std::string from_sq = move.uci.substr(0, 2);
+    const std::string to_sq = move.uci.substr(2, 2);
+    if (!ChessboardMapper::is_valid_square(from_sq))
     {
-      return "Malformed request: invalid from_square '" + move.from_square + "'";
+      return "Malformed request: invalid from_square '" + from_sq + "' in uci '" + move.uci + "'";
     }
-    if (!ChessboardMapper::is_valid_square(move.to_square))
+    if (!ChessboardMapper::is_valid_square(to_sq))
     {
-      return "Malformed request: invalid to_square '" + move.to_square + "'";
+      return "Malformed request: invalid to_square '" + to_sq + "' in uci '" + move.uci + "'";
     }
     if (move.is_capture)
     {
-      const std::string &cap_sq = move.captured_square.empty() ? move.to_square : move.captured_square;
+      // En-passant pawn capture target is at (to_file, from_rank)
+      const std::string cap_sq = move.is_en_passant
+        ? std::string{move.uci[2], move.uci[1]}
+        : to_sq;
       if (!ChessboardMapper::is_valid_square(cap_sq))
       {
-        return "Malformed request: invalid captured_square '" + cap_sq + "'";
+        return "Malformed request: invalid captured_square '" + cap_sq + "' for move '" + move.uci + "'";
       }
     }
     return std::nullopt;
@@ -444,8 +449,10 @@ namespace lekiwi_motion
       {
         throw std::runtime_error("Chessboard mapper not initialized");
       }
-      auto pick_coord = chessboard_mapper_->square_to_metric(request.move.from_square);
-      auto place_coord = chessboard_mapper_->square_to_metric(request.move.to_square);
+      const std::string from_sq = request.move.uci.substr(0, 2);
+      const std::string to_sq = request.move.uci.substr(2, 2);
+      auto pick_coord = chessboard_mapper_->square_to_metric(from_sq);
+      auto place_coord = chessboard_mapper_->square_to_metric(to_sq);
 
       targets.pick = workspace::Point3D{pick_coord.x, pick_coord.y, pick_coord.z};
       targets.place = workspace::Point3D{place_coord.x, place_coord.y, place_coord.z};
@@ -454,9 +461,10 @@ namespace lekiwi_motion
 
       if (request.move.is_capture)
       {
-        const std::string &cap_sq = request.move.captured_square.empty()
-                                        ? request.move.to_square
-                                        : request.move.captured_square;
+        // En-passant pawn capture target is at (to_file, from_rank)
+        const std::string cap_sq = request.move.is_en_passant
+                                       ? std::string{request.move.uci[2], request.move.uci[1]}
+                                       : to_sq;
         auto clear_coord = chessboard_mapper_->square_to_metric(cap_sq);
         targets.clear = workspace::Point3D{clear_coord.x, clear_coord.y, clear_coord.z};
         targets.clear_pt_msg = clear_coord.to_point_msg();
@@ -507,7 +515,7 @@ namespace lekiwi_motion
       const std::shared_ptr<lekiwi_interfaces::srv::CheckMoveFeasibility::Request> request,
       std::shared_ptr<lekiwi_interfaces::srv::CheckMoveFeasibility::Response> response)
   {
-    const std::string move_uci = request->move.from_square + request->move.to_square;
+    const std::string move_uci = request->move.uci;
     const auto now_stamp = get_clock()->now();
 
     auto publish_markers_guard = [&]()

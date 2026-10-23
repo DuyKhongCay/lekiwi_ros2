@@ -17,7 +17,7 @@ tags:
   - data-engineering
   - pixi
 ai_note: 'Documentation updated following technical writer standards'
-summary: 'Deterministic ROS 2 MCAP to LeRobot Dataset v3.0 converter with anti-future-leakage synchronization and 6D chess goal-conditioning for Physical-AI training'
+summary: 'Deterministic ROS 2 MCAP to LeRobot Dataset v3.0 converter with anti-future-leakage synchronization and 12D unified SmolVLA observation state (joints + source/target endpoints) for Physical-AI training'
 post_date: '2026-10-19'
 ---
 
@@ -34,7 +34,8 @@ Physical-AI models like ACT and Diffusion Policy require strictly synchronous, f
 `chess_rosbag_to_lerobot` resolves this fundamental domain mismatch through four key capabilities:
 
 * **Anti-Future-Leakage Temporal Synchronizer**: Drives the dataset clock from a high-priority visual reference stream (`/cameras/usb_wrist/image_raw/compressed` at 25 Hz) while sampling peripheral visual and proprioceptive streams using strict causal "As-Of" alignment ($t_{\text{sample}} \le t_{\text{ref}}$).
-* **Multi-Primitive 10D Spatial Conditioning**: Parses task instructions across all four manipulation primitives (`MOVE`, `CLEAR`, `PICK`, `PLACE`), projects board endpoints dynamically into `base_footprint` via `/tf` replay or forward kinematics (FK) landmarks (`stow`, `clear_left`, `clear_right`), and bundles them with a 4D one-hot primitive selector into a 10D `observation.environment_state` conditioning vector.
+* **SmolVLA 12D Unified Observation State**: Directly packs 6-DoF joint positions with 3D source $(x, y, z)$ and 3D target $(x, y, z)$ coordinates into a single 12D `observation.state` tensor, eliminating auxiliary environment conditioning vectors for native SmolVLA training.
+* **Deterministic Episode Sorting**: Automatically groups and sorts episodes by manipulation primitive (`MOVE` $\to$ `CLEAR` $\to$ `PICK` $\to$ `PLACE`), piece type, and piece color before dataset conversion, ensuring clean dataset chunking and curriculum training.
 * **Direct Multi-Camera Decoding**: Decodes compressed JPEG frames from up to three camera perspectives (`usb_wrist`, `usb_side`, `stereo_right`) and encodes them directly into MP4 video chunks (`libsvtav1` / `libx264`).
 * **Offline TF Replaying with Seeding & Pure-NumPy Fallback**: Reconstructs frame transformations offline even when `/tf_static` is omitted from rosbags (via configurable `map -> chessboard_frame` seeding) and provides an integrated pure-NumPy BFS transform graph that works with zero ROS 2 dependencies.
 * **Pixi-First Host Workstation Integration**: Seamlessly pre-configured to execute on GPU training workstations via isolated `pixi` environments with zero host ROS 2 dependency pollution.
@@ -62,7 +63,7 @@ flowchart TD
     end
 
     subgraph Tensors ["3. Synchronized State Frame"]
-        FRAME["Unified Frame Tensor<br/>- observation.images (384x384x3)<br/>- observation.state (6-DoF joints)<br/>- action (6-DoF targets)<br/>- observation.environment_state (6D)"]
+        FRAME["Unified Frame Tensor<br/>- observation.images (384x384x3)<br/>- observation.state (12D: 6-DoF joints + 3D src + 3D tgt)<br/>- action (6-DoF targets)"]
     end
 
     subgraph Sinks ["4. Storage Artifacts (LeRobot v3.0)"]
@@ -106,39 +107,23 @@ In imitation learning, passing future observation data ($t > t_{\text{ref}}$) in
 
 ---
 
-### 2.3 Multi-Primitive 10D Spatial Conditioning
+### 2.3 SmolVLA 12D State Construction & Natural Language Integration
 
-To enable generalized manipulation across diverse board actions without requiring separate policy models, the policy is conditioned on a unified 10D target vector across all 4 manipulation primitives:
+SmolVLA policies consume a single unified `observation.state` vector rather than split environment conditioning vectors. The 12D state vector combines the robot's physical configuration with metric task endpoints in `base_footprint`:
 
-1. **`MOVE`** (`"Pick <from_sq>, place <to_sq>"` / `"e2e4"`):
-   - Source: `<from_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
-   - Target: `<to_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
-   - One-hot: `[1, 0, 0, 0]`.
-2. **`CLEAR`** (`"Clear <from_sq> to left onboard bin"` / `"Clear <from_sq> to right onboard bin"`):
-   - Source: `<from_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
-   - Target: Calibrated discard bin landmark (`clear_left` or `clear_right`) computed via 5-DoF forward kinematics in `base_footprint`.
-   - One-hot: `[0, 1, 0, 0]`.
-   - *Validation Policy*: Any episode lacking explicit `"left"` or `"right"` (e.g. `"Clear d4 to onboard bin"`) raises `AmbiguousClearBinError` and is immediately skipped with a `WARNING` log without reading the MCAP payload.
-3. **`PICK`** (`"Pick <from_sq>"`):
-   - Source: `<from_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
-   - Target: Calibrated `stow` position in `base_footprint` via forward kinematics.
-   - One-hot: `[0, 0, 1, 0]`.
-4. **`PLACE`** (`"Place <to_sq>"`):
-   - Source: Calibrated `stow` position in `base_footprint` via forward kinematics.
-   - Target: `<to_sq>` on chessboard ($T_{\text{base} \leftarrow \text{board}}$).
-   - One-hot: `[0, 0, 0, 1]`.
+$$\mathbf{s}_{\text{state}} = \begin{bmatrix} q_1 & q_2 & q_3 & q_4 & q_5 & q_6 & x_{\text{source}}^{\text{base}} & y_{\text{source}}^{\text{base}} & z_{\text{source}}^{\text{base}} & x_{\text{target}}^{\text{base}} & y_{\text{target}}^{\text{base}} & z_{\text{target}}^{\text{base}} \end{bmatrix}^T \in \mathbb{R}^{12}$$
 
-```
-       [Rank 8]  a8  b8  c8  d8  e8  f8  g8  h8
-                 ..  ..  ..  ..  ..  ..  ..  ..
-       [Rank 4]  a4  b4  c4  [Origin (0,0)]
-       [Rank 1]  a1  b1  c1  d1  e1  f1  g1  h1
-                [File A]                       [File H]
-```
-
-#### Vector Packaging
-The resulting 10-dimensional **Environment State** vector is:
-$$\mathbf{s}_{\text{env}} = \begin{bmatrix} x_{\text{source}}^{\text{base}} & y_{\text{source}}^{\text{base}} & z_{\text{source}}^{\text{base}} & x_{\text{target}}^{\text{base}} & y_{\text{target}}^{\text{base}} & z_{\text{target}}^{\text{base}} & \text{is\_move} & \text{is\_clear} & \text{is\_pick} & \text{is\_place} \end{bmatrix}^T \in \mathbb{R}^{10}$$
+1. **SmolVLA Instruction Parsing**:
+   Instructions generated by `lekiwi_orchestrator`'s Single Source of Truth (SSOT) via `/manipulation/execute_chess_move/_action/feedback` are parsed to extract primitive, color, and piece type:
+   - `"Move <color> <piece> to target"`: Chessboard source to chessboard target.
+   - `"Clear <color> <piece> to <left|right> bin"`: Chessboard source to calibrated onboard discard bin (`clear_left` / `clear_right`).
+   - `"Pick <color> <piece>"`: Chessboard source to calibrated `stow` landmark.
+   - `"Place <color> <piece>"`: Calibrated `stow` landmark to chessboard target.
+2. **Deterministic Episode Sorting**:
+   To maximize training convergence and chunk consistency, `sort_episodes()` organizes episodes deterministically before parquet conversion:
+   - **Task hierarchy**: `MOVE` ($0$) $\to$ `CLEAR` ($1$) $\to$ `PICK` ($2$) $\to$ `PLACE` ($3$).
+   - **Piece hierarchy**: `pawn` ($0$) $\to$ `knight` ($1$) $\to$ `bishop` ($2$) $\to$ `rook` ($3$) $\to$ `queen` ($4$) $\to$ `king` ($5$).
+   - **Color hierarchy**: `white` ($0$) $\to$ `black` ($1$).
 
 ---
 
@@ -151,9 +136,8 @@ When converted, each episode produces a standardized schema compatible with PyTo
 | `observation.images.wrist` | `[384, 384, 3]` | `video` (AV1/MP4) | Wrist camera (eye-in-hand) egocentric view |
 | `observation.images.side` | `[384, 384, 3]` | `video` (AV1/MP4) | Lateral side view monitoring arm elevation and depth |
 | `observation.images.overhead` | `[384, 384, 3]` | `video` (AV1/MP4) | Overhead perspective (`stereo_right`) of board |
-| `observation.state` | `[6]` | `float32` | Current 6-DoF joint positions (`arm_shoulder_pan`..`arm_gripper`) |
+| `observation.state` | `[12]` | `float32` | 12D unified state: 6-DoF joint positions + 3D source $(x, y, z)$ + 3D target $(x, y, z)$ in meters |
 | `action` | `[6]` | `float32` | Commanded/actual trajectory controller joint positions |
-| `observation.environment_state` | `[10]` | `float32` | 10D conditioning target: `[source_xyz, target_xyz, is_move, is_clear, is_pick, is_place]` in meters / one-hot |
 
 ### Generated Directory Layout
 ```
@@ -355,7 +339,7 @@ features:
     stamp_src: "bag"
     shape: [384, 384, 3]
 
-  # Proprioception (measured follower joints)
+  # Proprioception + Spatial Endpoints (12D: 6 joint states + 3D source + 3D target)
   - key: "observation.state"
     topic: "/joint_states"
     msg_type: "sensor_msgs/msg/JointState"
@@ -370,11 +354,6 @@ features:
     stamp_src: "bag"
     max_age_s: 0.04
     names: *arm_joints
-
-  # 10D Multi-Primitive Goal Conditioning (source_xyz + target_xyz + 4D one-hot)
-  - key: "observation.environment_state"
-    msg_type: "spatial/environment_state"
-    shape: [10]
 ```
 
 ---
@@ -410,15 +389,15 @@ Passing the `--sync-p95` flag outputs detailed synchronization telemetry for eac
 * **Cause**: Camera frame rates are mismatched or `/joint_states` published intermittently.
 * **Check**: Increase `default_max_age_s: 0.10` in YAML or verify USB bus bandwidth on the robot.
 
-### Q3: `observation.environment_state` has identical default coordinates
-* **Cause**: The episode metadata recorded task as generic `"chess_pick_and_place"` without explicit squares.
+### Q3: `observation.state` source/target endpoints use default coordinates
+* **Cause**: The episode metadata recorded task does not contain explicit board coordinates.
 * **Fix**: Ensure `chess_episode_recorder` receives active move feedback from `ExecuteChessMove` action before starting an episode.
 
 ---
 
 ## 8. Verification & Quality Assurance
 
-The package includes a comprehensive suite of unit tests validating buffers, timestamp arithmetic, decoders, and spatial transforms:
+The package includes a comprehensive suite of unit tests validating buffers, timestamp arithmetic, decoders, SmolVLA parsing, and spatial transforms:
 
 ```bash
 cd ~/lerobot_ws/lekiwi_ros2
@@ -427,5 +406,5 @@ PYTHONPATH=chess_rosbag_to_lerobot pytest chess_rosbag_to_lerobot/test
 
 Expected result:
 ```
-============================== 17 passed in 0.21s ==============================
+============================== 20 passed in 0.93s ==============================
 ```

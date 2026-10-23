@@ -29,6 +29,9 @@ def generate_launch_description():
     default_params_file = PathJoinSubstitution(
         [bringup_share, "config", "control", "orchestrator.yaml"]
     )
+    inference_client_params_file = PathJoinSubstitution(
+        [bringup_share, "config", "control", "async_inference_cilent.yaml"]
+    )
 
     # 2. Declare launch arguments
     params_file_arg = DeclareLaunchArgument(
@@ -123,6 +126,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             params_file,
+            inference_client_params_file,
             {
                 "use_sim_time": use_sim_time,
             },

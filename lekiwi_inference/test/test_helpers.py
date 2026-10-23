@@ -85,3 +85,33 @@ def test_aggregation_functions():
     # conservative: 0.7 * old + 0.3 * new
     cons = AGGREGATE_FUNCTIONS["conservative"](old_act, new_act)
     assert np.allclose(cons, [7.0, 44.0])
+
+
+def test_observations_similar_identical():
+    """Identical state vectors must evaluate as similar for any positive atol."""
+    from lekiwi_inference.helpers import observations_similar
+
+    s1 = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6], dtype=np.float32)
+    s2 = s1.copy()
+    assert observations_similar(s1, s2, atol=0.05) is True
+
+
+def test_observations_similar_within_tolerance():
+    """Displacement strictly less than Euclidean norm atol must evaluate as True."""
+    from lekiwi_inference.helpers import observations_similar
+
+    s1 = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    # Norm is sqrt(0.02^2 + 0.02^2) = 0.02828 < 0.05
+    s2 = np.array([0.02, 0.02, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    assert observations_similar(s1, s2, atol=0.05) is True
+
+
+def test_observations_similar_exceed_tolerance():
+    """Displacement equal or greater than atol must evaluate as False."""
+    from lekiwi_inference.helpers import observations_similar
+
+    s1 = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    # Norm is sqrt(0.04^2 + 0.04^2) = 0.05657 > 0.05
+    s2 = np.array([0.04, 0.04, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    assert observations_similar(s1, s2, atol=0.05) is False
+

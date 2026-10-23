@@ -45,7 +45,7 @@ The LeKiwi ROS 2 workspace is organized into 15 active packages across 6 functio
 
 | Package | Language | Build Tool | Description |
 | :--- | :---: | :---: | :--- |
-| `lekiwi_interfaces` | Custom IDL | `ament_cmake` | Custom ROS 2 Actions (`ComputeBestMove`, `ExecuteChessMove`), Services (`SetCamMode`, `CheckMoveFeasibility`), and Messages. |
+| `lekiwi_interfaces` | Custom IDL | `ament_cmake` | Custom ROS 2 Actions (`ComputeBestMove`, `ExecuteChessMove`), Services (`CheckMoveFeasibility`, `ExecuteCollectionTask`), and Messages. |
 | `lekiwi_description` | URDF / Xacro | `ament_cmake` | Kinematic robot description, CAD STL meshes, joint limits, transmissions, and `ros2_control` hardware tags. |
 | `lekiwi_bringup` | Launch & Config | `ament_cmake` | Master launch compositions (`robot.launch.py`), controller parameters, udev rules, and diagnostic monitors. |
 

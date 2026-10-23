@@ -13,7 +13,6 @@ std_msgs/Header header
 string full_fen                    # Standard 6-field FEN board representation
 ChessMoveDetails last_move_details # Details of last executed move
 ChessMoveDetails best_move_details # Engine recommended move for active turn
-int32 eval_centipawns              # Stockfish evaluation (+ = White, - = Black) [cp]
 string active_color                # Turn color: "w" or "b"
 string robot_color                 # Robot player color: "w" or "b"
 uint8 game_phase                   # Current match phase (PHASE_*)

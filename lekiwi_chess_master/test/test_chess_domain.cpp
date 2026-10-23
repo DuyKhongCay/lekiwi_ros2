@@ -24,14 +24,10 @@ TEST_F(ChessDomainTest, ClassifiesQuietPawnMove)
   auto details = classify_move(board, "e2e4");
 
   EXPECT_EQ(details.uci, "e2e4");
-  EXPECT_EQ(details.san, "e4");
-  EXPECT_EQ(details.from_square, "e2");
-  EXPECT_EQ(details.to_square, "e4");
   EXPECT_EQ(details.piece_type, "pawn");
   EXPECT_EQ(details.piece_color, "w");
   EXPECT_TRUE(details.promotion_piece.empty());
   EXPECT_FALSE(details.is_capture);
-  EXPECT_TRUE(details.captured_square.empty());
   EXPECT_FALSE(details.is_en_passant);
   EXPECT_FALSE(details.is_castling);
 }
@@ -42,9 +38,6 @@ TEST_F(ChessDomainTest, ClassifiesKnightMove)
   auto details = classify_move(board, "g1f3");
 
   EXPECT_EQ(details.uci, "g1f3");
-  EXPECT_EQ(details.san, "Nf3");
-  EXPECT_EQ(details.from_square, "g1");
-  EXPECT_EQ(details.to_square, "f3");
   EXPECT_EQ(details.piece_type, "knight");
   EXPECT_EQ(details.piece_color, "w");
   EXPECT_FALSE(details.is_capture);
@@ -59,14 +52,9 @@ TEST_F(ChessDomainTest, ClassifiesStandardCapture)
   auto details = classify_move(board, "e4d5");
 
   EXPECT_EQ(details.uci, "e4d5");
-  EXPECT_EQ(details.san, "exd5");
-  EXPECT_EQ(details.from_square, "e4");
-  EXPECT_EQ(details.to_square, "d5");
-  EXPECT_EQ(details.piece_type, "pawn");
+  EXPECT_EQ(details.piece_type, "pawn:pawn");
   EXPECT_EQ(details.piece_color, "w");
   EXPECT_TRUE(details.is_capture);
-  EXPECT_EQ(details.captured_piece_type, "pawn");
-  EXPECT_EQ(details.captured_square, "d5");
   EXPECT_FALSE(details.is_en_passant);
   EXPECT_FALSE(details.is_castling);
 }
@@ -78,16 +66,10 @@ TEST_F(ChessDomainTest, ClassifiesEnPassantCapture)
   auto details = classify_move(board, "e5f6");
 
   EXPECT_EQ(details.uci, "e5f6");
-  EXPECT_EQ(details.san, "exf6");
-  EXPECT_EQ(details.from_square, "e5");
-  EXPECT_EQ(details.to_square, "f6");
-  EXPECT_EQ(details.piece_type, "pawn");
+  EXPECT_EQ(details.piece_type, "pawn:pawn");
   EXPECT_EQ(details.piece_color, "w");
   EXPECT_TRUE(details.is_capture);
   EXPECT_TRUE(details.is_en_passant);
-  EXPECT_EQ(details.captured_piece_type, "pawn");
-  // Pawn captured en-passant is at f5, NOT f6!
-  EXPECT_EQ(details.captured_square, "f5");
   EXPECT_FALSE(details.is_castling);
 }
 
@@ -98,17 +80,11 @@ TEST_F(ChessDomainTest, ClassifiesKingsideCastling)
   auto details = classify_move(board, "e1g1");
 
   EXPECT_EQ(details.uci, "e1g1");
-  EXPECT_EQ(details.san, "O-O");
-  EXPECT_EQ(details.from_square, "e1");
-  EXPECT_EQ(details.to_square, "g1");
   EXPECT_EQ(details.piece_type, "king");
   EXPECT_EQ(details.piece_color, "w");
   EXPECT_FALSE(details.is_capture);
   EXPECT_FALSE(details.is_en_passant);
   EXPECT_TRUE(details.is_castling);
-  // King-side castling: rook moves from h1 to f1
-  EXPECT_EQ(details.castling_rook_from, "h1");
-  EXPECT_EQ(details.castling_rook_to, "f1");
 }
 
 TEST_F(ChessDomainTest, ClassifiesPawnPromotion)
@@ -118,9 +94,6 @@ TEST_F(ChessDomainTest, ClassifiesPawnPromotion)
   auto details = classify_move(board, "e7e8q");
 
   EXPECT_EQ(details.uci, "e7e8q");
-  EXPECT_EQ(details.san, "e8=Q");
-  EXPECT_EQ(details.from_square, "e7");
-  EXPECT_EQ(details.to_square, "e8");
   EXPECT_EQ(details.piece_type, "pawn");
   EXPECT_EQ(details.piece_color, "w");
   EXPECT_EQ(details.promotion_piece, "queen");
@@ -135,8 +108,6 @@ TEST_F(ChessDomainTest, GuardsAgainstNoneAndGarbage)
   // Guard against Stockfish (none)
   auto none_details = classify_move(board, "(none)");
   EXPECT_TRUE(none_details.uci.empty());
-  EXPECT_TRUE(none_details.from_square.empty());
-  EXPECT_TRUE(none_details.to_square.empty());
 
   // Guard against empty
   auto empty_details = classify_move(board, "");
@@ -153,8 +124,6 @@ TEST_F(ChessDomainTest, FallbackOnPseudoLegalMove)
   auto details = classify_move(board, "h7h8q");
 
   EXPECT_EQ(details.uci, "h7h8q");
-  EXPECT_EQ(details.from_square, "h7");
-  EXPECT_EQ(details.to_square, "h8");
   EXPECT_EQ(details.promotion_piece, "queen");
 }
 

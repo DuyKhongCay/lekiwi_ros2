@@ -86,7 +86,7 @@ def test_ros_action_dispatcher_mock_nav2(monkeypatch, ros_context):
         # Feasibility check
         feasibility_result = []
         success = dispatcher.check_feasibility(
-            goal=ChessMoveGoal(uci="e2e4", from_square="e2", to_square="e4"),
+            goal=ChessMoveGoal(uci="e2e4"),
             on_success=lambda resp: feasibility_result.append(resp.feasible),
         )
         assert success
@@ -477,7 +477,7 @@ def test_fake_motion_client():
     assert len(client.nav_goals) == 0
     assert len(client.manip_goals) == 0
 
-    assert client.check_feasibility(ChessMoveGoal("e2e4", "e2", "e4"))
+    assert client.check_feasibility(ChessMoveGoal("e2e4"))
     assert client.send_navigation_goal(PoseStamped())
     assert len(client.nav_goals) == 1
     assert client.send_manipulation_goal(Mock(instruction="move"))

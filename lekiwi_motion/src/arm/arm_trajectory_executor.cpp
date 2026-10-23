@@ -355,6 +355,13 @@ std::optional<std::vector<double>> ArmTrajectoryExecutor::get_named_pose(
   return motion_planner_.get_named_pose(name);
 }
 
+bool ArmTrajectoryExecutor::set_named_pose(
+  const std::string & name, std::vector<double> joints)
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  return motion_planner_.set_named_pose(name, std::move(joints));
+}
+
 GripperConfig ArmTrajectoryExecutor::gripper_config() const
 {
   std::lock_guard<std::mutex> lock(planner_mutex_);

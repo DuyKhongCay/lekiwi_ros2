@@ -3,7 +3,7 @@
  * @brief Implementation of ChessGameStateTrackerComponent.
  *
  * Implements camera vision debounce filtering, FIDE legal move validation,
- * board state tracking, and autonomous Stockfish action goal dispatching.
+ * and board state tracking.
  *
  * @author DuyKhongCay
  * @copyright Apache-2.0
@@ -30,22 +30,23 @@ namespace lekiwi_chess_master
     raw_fen_topic_ = declare_parameter<std::string>("raw_fen_topic", "/chess/raw_fen");
     game_status_topic_ = declare_parameter<std::string>("game_status_topic", "/chess/game_status");
     set_fen_service_name_ = declare_parameter<std::string>("set_fen_service", "/chess/set_fen");
+    set_candidate_move_service_name_ = declare_parameter<std::string>("set_candidate_move_service", "/chess/set_candidate_move");
     debounce_frames_ = declare_parameter<int>("debounce_frames", 3);
-    auto_trigger_engine_ = declare_parameter<bool>("auto_trigger_engine", false);
     robot_color_ = declare_parameter<std::string>("robot_color", "black");
-    think_time_ms_ = declare_parameter<int>("think_time_ms", 1000);
-    action_name_ = declare_parameter<std::string>("action_name", "/chess/compute_best_move");
 
     RCLCPP_INFO(
         get_logger(),
         "Starting ChessGameStateTrackerComponent (Sub: %s, Pub: %s, Service: %s, Debounce: %d frames, "
-        "AutoTrigger: %s, RobotColor: %s, ThinkTime: %d ms)",
+        "RobotColor: %s)",
         raw_fen_topic_.c_str(), game_status_topic_.c_str(), set_fen_service_name_.c_str(), debounce_frames_,
-        auto_trigger_engine_ ? "true" : "false", robot_color_.c_str(), think_time_ms_);
+        robot_color_.c_str());
 
-    // Publish game status with reliable QoS for UI panels and motion orchestrators
+    // Publish game status with latched reliable QoS (TransientLocal, Depth 1) for UI panels and orchestrators
+    rclcpp::QoS game_status_qos(1);
+    game_status_qos.reliable();
+    game_status_qos.transient_local();
     game_status_pub_ = create_publisher<ChessGameStatus>(
-        game_status_topic_, rclcpp::SystemDefaultsQoS());
+        game_status_topic_, game_status_qos);
 
     // Ingest high-rate camera FEN stream with best-effort SensorDataQoS
     raw_fen_sub_ = create_subscription<std_msgs::msg::String>(
@@ -64,36 +65,19 @@ namespace lekiwi_chess_master
         std::bind(&ChessGameStateTrackerComponent::handle_set_fen_service, this,
                   std::placeholders::_1, std::placeholders::_2));
 
-    // Optionally instantiate action client for autonomous Stockfish queries
-    if (auto_trigger_engine_)
-    {
-      action_client_ = rclcpp_action::create_client<ComputeBestMove>(this, action_name_);
-    }
+    // Provide set candidate move service for collection campaigns and visualizations
+    set_candidate_move_srv_ = create_service<lekiwi_interfaces::srv::SetCandidateMove>(
+        set_candidate_move_service_name_,
+        std::bind(&ChessGameStateTrackerComponent::handle_set_candidate_move_service, this,
+                  std::placeholders::_1, std::placeholders::_2));
 
     // Broadcast standard starting position status
     publish_game_status(true, true);
-
-    if (auto_trigger_engine_)
-    {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      trigger_engine_if_needed();
-    }
   }
 
   void ChessGameStateTrackerComponent::reset_game()
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    // Abort active engine search if game reset occurs mid-calculation
-    if (is_engine_busy_ && current_goal_handle_)
-    {
-      RCLCPP_INFO(get_logger(), "Canceling active engine search due to game reset.");
-      if (action_client_)
-      {
-        action_client_->async_cancel_goal(current_goal_handle_);
-      }
-      current_goal_handle_.reset();
-    }
-    is_engine_busy_ = false;
 
     // Restore standard FIDE starting layout and clear historical move structures
     board_ = chess::Board();
@@ -102,15 +86,11 @@ namespace lekiwi_chess_master
     consecutive_count_ = 0;
     last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
     best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
-    current_eval_centipawns_ = 0;
     current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
     awaiting_physical_sync_ = false;
 
     RCLCPP_INFO(get_logger(), "Chess game board reset to starting position: %s", board_.getFen().c_str());
     publish_game_status(true, true);
-
-    // If robot plays White, initiate the opening calculation immediately
-    trigger_engine_if_needed();
   }
 
   bool ChessGameStateTrackerComponent::set_fen(
@@ -147,18 +127,6 @@ namespace lekiwi_chess_master
 
     std::lock_guard<std::mutex> lock(state_mutex_);
 
-    // Abort active engine search if running
-    if (is_engine_busy_ && current_goal_handle_)
-    {
-      RCLCPP_INFO(get_logger(), "Canceling active engine search due to FEN import.");
-      if (action_client_)
-      {
-        action_client_->async_cancel_goal(current_goal_handle_);
-      }
-      current_goal_handle_.reset();
-    }
-    is_engine_busy_ = false;
-
     // Update robot color
     robot_color_ = (norm_color == "w" || norm_color == "white") ? "white" : "black";
     robot_color = (robot_color_ == "white") ? "w" : "b";
@@ -174,7 +142,6 @@ namespace lekiwi_chess_master
     consecutive_count_ = 0;
     last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
     best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
-    current_eval_centipawns_ = 0;
 
     awaiting_physical_sync_ = true;
     current_phase_ = ChessGameStatus::PHASE_AWAITING_BOARD_SYNC;
@@ -203,6 +170,52 @@ namespace lekiwi_chess_master
         response->active_color,
         response->robot_color,
         response->message);
+  }
+
+  bool ChessGameStateTrackerComponent::set_candidate_move(
+      const lekiwi_interfaces::msg::ChessMoveDetails &move,
+      std::string &message)
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (move.uci.empty())
+    {
+      best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
+      publish_game_status(true, true);
+      message = "Candidate move cleared";
+      RCLCPP_INFO(get_logger(), "Candidate move cleared");
+      return true;
+    }
+
+    if (!move.piece_type.empty())
+    {
+      best_move_details_ = move;
+    }
+    else
+    {
+      best_move_details_ = domain::classify_move(board_, move.uci);
+    }
+
+    publish_game_status(true, true);
+    message = "Candidate move set to " + best_move_details_.uci;
+    RCLCPP_INFO(get_logger(), "Candidate move set: %s (piece=%s, color=%s)",
+                best_move_details_.uci.c_str(),
+                best_move_details_.piece_type.c_str(),
+                best_move_details_.piece_color.c_str());
+    return true;
+  }
+
+  void ChessGameStateTrackerComponent::handle_set_candidate_move_service(
+      const std::shared_ptr<lekiwi_interfaces::srv::SetCandidateMove::Request> request,
+      std::shared_ptr<lekiwi_interfaces::srv::SetCandidateMove::Response> response)
+  {
+    if (!request)
+    {
+      response->success = false;
+      response->message = "Null request";
+      return;
+    }
+
+    response->success = set_candidate_move(request->move, response->message);
   }
 
   void ChessGameStateTrackerComponent::handle_reset_service(
@@ -251,7 +264,6 @@ namespace lekiwi_chess_master
     msg.full_fen = board_.getFen();
     msg.last_move_details = last_move_details_;
     msg.best_move_details = best_move_details_;
-    msg.eval_centipawns = current_eval_centipawns_;
     msg.active_color = (board_.sideToMove() == chess::Color::WHITE) ? "w" : "b";
     std::string norm_color = robot_color_;
     std::transform(norm_color.begin(), norm_color.end(), norm_color.begin(), ::tolower);
@@ -301,169 +313,6 @@ namespace lekiwi_chess_master
     game_status_pub_->publish(msg);
   }
 
-  void ChessGameStateTrackerComponent::trigger_engine_if_needed()
-  {
-    if (!auto_trigger_engine_)
-    {
-      return;
-    }
-
-    // Normalize color parameter and determine if it is the robot's active turn
-    std::string norm_color = robot_color_;
-    std::transform(norm_color.begin(), norm_color.end(), norm_color.begin(), ::tolower);
-    bool is_white_turn = (board_.sideToMove() == chess::Color::WHITE);
-    bool is_robot_turn = is_white_turn ? (norm_color == "white" || norm_color == "w")
-                                       : (norm_color == "black" || norm_color == "b");
-
-    if (!is_robot_turn)
-    {
-      return;
-    }
-
-    // Do not dispatch engine queries if position is already terminal (checkmate/stalemate)
-    chess::Movelist legal_moves;
-    chess::movegen::legalmoves(legal_moves, board_);
-    if (legal_moves.empty())
-    {
-      RCLCPP_INFO(get_logger(), "Game has concluded (no legal moves). Auto-trigger skipped.");
-      return;
-    }
-
-    // Lock-free check-and-set: prevent launching concurrent overlapping calculation jobs
-    if (is_engine_busy_.exchange(true))
-    {
-      RCLCPP_WARN(get_logger(), "Engine is already computing a move. Ignoring duplicate trigger.");
-      return;
-    }
-
-    if (!action_client_)
-    {
-      action_client_ = rclcpp_action::create_client<ComputeBestMove>(this, action_name_);
-    }
-
-    // Verify Action Server endpoint connectivity before constructing goal
-    if (!action_client_->action_server_is_ready())
-    {
-      RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 2000,
-          "Engine action server '%s' is not ready yet. Skipping auto trigger.",
-          action_name_.c_str());
-      is_engine_busy_ = false;
-      return;
-    }
-
-    // Transition game phase to robot thinking and notify downstream observers
-    current_phase_ = ChessGameStatus::PHASE_ROBOT_THINKING;
-    best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
-    publish_game_status(true, true);
-
-    auto goal_msg = ComputeBestMove::Goal();
-    goal_msg.fen = board_.getFen();
-    goal_msg.think_time_ms = static_cast<uint32_t>(think_time_ms_);
-    goal_msg.depth = 0;
-
-    RCLCPP_INFO(
-        get_logger(),
-        "Auto-triggering engine: FEN='%s', movetime=%u ms",
-        goal_msg.fen.c_str(), goal_msg.think_time_ms);
-
-    auto send_goal_options = rclcpp_action::Client<ComputeBestMove>::SendGoalOptions();
-    send_goal_options.goal_response_callback =
-        std::bind(&ChessGameStateTrackerComponent::on_goal_response, this, std::placeholders::_1);
-    send_goal_options.feedback_callback =
-        std::bind(&ChessGameStateTrackerComponent::on_feedback, this, std::placeholders::_1, std::placeholders::_2);
-    send_goal_options.result_callback =
-        std::bind(&ChessGameStateTrackerComponent::on_result, this, std::placeholders::_1);
-
-    action_client_->async_send_goal(goal_msg, send_goal_options);
-  }
-
-  void ChessGameStateTrackerComponent::on_goal_response(
-      const GoalHandleComputeBestMove::SharedPtr &goal_handle)
-  {
-    if (!goal_handle)
-    {
-      // Handle goal rejection by resetting state back to waiting for player
-      RCLCPP_ERROR(get_logger(), "Auto-trigger goal was rejected by engine action server.");
-      is_engine_busy_ = false;
-      current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
-      publish_game_status(true, true);
-    }
-    else
-    {
-      // Retain handle under lock to allow cancellation during game resets
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      current_goal_handle_ = goal_handle;
-      RCLCPP_INFO(get_logger(), "Auto-trigger goal accepted by engine action server, calculating best move...");
-    }
-  }
-
-  void ChessGameStateTrackerComponent::on_feedback(
-      GoalHandleComputeBestMove::SharedPtr,
-      const std::shared_ptr<const ComputeBestMove::Feedback> feedback)
-  {
-    RCLCPP_DEBUG(
-        get_logger(),
-        "Engine thinking feedback: depth=%u, eval=%d cp, nps=%lu, pv=%s",
-        feedback->current_depth, feedback->current_eval,
-        feedback->nodes_per_second, feedback->current_pv.c_str());
-  }
-
-  void ChessGameStateTrackerComponent::on_result(
-      const GoalHandleComputeBestMove::WrappedResult &result)
-  {
-    is_engine_busy_ = false;
-    {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      current_goal_handle_.reset();
-      if (awaiting_physical_sync_)
-      {
-        RCLCPP_INFO(get_logger(), "Ignoring late engine result while awaiting board sync.");
-        return;
-      }
-    }
-
-    switch (result.code)
-    {
-    case rclcpp_action::ResultCode::SUCCEEDED:
-      // Classify the engine's best move against current board state
-      best_move_details_ = domain::classify_move(board_, result.result->best_move);
-      current_eval_centipawns_ = result.result->eval_centipawns;
-      current_phase_ = ChessGameStatus::PHASE_ROBOT_READY;
-      publish_game_status(true, true);
-
-      RCLCPP_INFO(
-          get_logger(),
-          "\n============================================================\n"
-          ">>> ROBOT MOVE (%s): [ %s ] (SAN: %s) | Ponder: %s | Eval: %d cp\n"
-          "============================================================",
-          robot_color_.c_str(),
-          result.result->best_move.c_str(),
-          best_move_details_.san.c_str(),
-          result.result->ponder_move.c_str(),
-          result.result->eval_centipawns);
-      break;
-    case rclcpp_action::ResultCode::ABORTED:
-      current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
-      best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
-      publish_game_status(true, true);
-      RCLCPP_WARN(get_logger(), "Auto-trigger engine goal was aborted: %s", result.result->message.c_str());
-      break;
-    case rclcpp_action::ResultCode::CANCELED:
-      current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
-      best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
-      publish_game_status(true, true);
-      RCLCPP_WARN(get_logger(), "Auto-trigger engine goal was canceled.");
-      break;
-    default:
-      current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
-      best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
-      publish_game_status(true, true);
-      RCLCPP_ERROR(get_logger(), "Auto-trigger received unknown result code from engine.");
-      break;
-    }
-  }
-
   void ChessGameStateTrackerComponent::raw_fen_callback(const std_msgs::msg::String::ConstSharedPtr msg)
   {
     if (!msg || msg->data.empty())
@@ -506,7 +355,6 @@ namespace lekiwi_chess_master
             "Physical board synchronization complete! Matched placement: %s",
             placement.c_str());
         publish_game_status(true, true);
-        trigger_engine_if_needed();
       }
       return;
     }
@@ -535,7 +383,6 @@ namespace lekiwi_chess_master
         current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
         RCLCPP_INFO(get_logger(), "Board reset to starting position detected from vision.");
         publish_game_status(true, true);
-        trigger_engine_if_needed();
       }
       return;
     }
@@ -551,11 +398,10 @@ namespace lekiwi_chess_master
       best_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
       current_phase_ = ChessGameStatus::PHASE_WAITING_PLAYER;
 
-      RCLCPP_INFO(get_logger(), "Confirmed Legal Move: %s (SAN: %s) | New Full FEN: %s",
-                  move_uci.c_str(), last_move_details_.san.c_str(), board_.getFen().c_str());
+      RCLCPP_INFO(get_logger(), "Confirmed Legal Move: %s | New Full FEN: %s",
+                  move_uci.c_str(), board_.getFen().c_str());
 
       publish_game_status(true, true);
-      trigger_engine_if_needed();
     }
     else
     {

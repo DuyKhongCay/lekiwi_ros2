@@ -112,6 +112,22 @@ struct NamedPosesConfig
     if (key == "clear_right") return clear_right;
     return std::nullopt;
   }
+
+  bool set(const std::string & name, std::vector<double> joints)
+  {
+    const size_t first = name.find_first_not_of(" \t\n\r");
+    if (first == std::string::npos) {
+      return false;
+    }
+    const size_t last = name.find_last_not_of(" \t\n\r");
+    std::string key = name.substr(first, last - first + 1);
+    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+    if (key == "approach") { approach = std::move(joints); return true; }
+    if (key == "stow") { stow = std::move(joints); return true; }
+    if (key == "clear_left") { clear_left = std::move(joints); return true; }
+    if (key == "clear_right") { clear_right = std::move(joints); return true; }
+    return false;
+  }
 };
 
 /**
@@ -165,6 +181,11 @@ public:
   [[nodiscard]] std::optional<std::vector<double>> get_named_pose(const std::string & pose_name) const
   {
     return named_poses_cfg_.get(pose_name);
+  }
+
+  bool set_named_pose(const std::string & pose_name, std::vector<double> joints)
+  {
+    return named_poses_cfg_.set(pose_name, std::move(joints));
   }
 
   /**
