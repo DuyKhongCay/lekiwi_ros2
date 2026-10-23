@@ -97,17 +97,25 @@ namespace lekiwi_chess_master
                 "Starting Chessboard2DVisualizer (Status: %s, 2D Topic: %s, Debug: %s, Rate: %.1f Hz)",
                 game_status_topic_.c_str(), board_2d_topic_.c_str(), debug_ ? "true" : "false", render_rate_hz_);
 
+    rclcpp::QoS board_2d_qos(1);
+    board_2d_qos.reliable();
+    board_2d_qos.transient_local();
+
     board_2d_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
-        board_2d_topic_, rclcpp::SensorDataQoS());
+        board_2d_topic_, board_2d_qos);
+
+    rclcpp::QoS game_status_qos(1);
+    game_status_qos.reliable();
+    game_status_qos.transient_local();
 
     game_status_sub_ = create_subscription<ChessGameStatus>(
-        game_status_topic_, rclcpp::SystemDefaultsQoS(),
+        game_status_topic_, game_status_qos,
         std::bind(&Chessboard2DVisualizer::gameStatusCallback, this, std::placeholders::_1));
 
     if (debug_)
     {
       board_2d_raw_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
-          board_2d_raw_topic_, rclcpp::SensorDataQoS());
+          board_2d_raw_topic_, board_2d_qos);
 
       raw_fen_sub_ = create_subscription<std_msgs::msg::String>(
           raw_fen_topic_, rclcpp::SensorDataQoS(),

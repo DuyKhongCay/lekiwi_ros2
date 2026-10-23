@@ -8,10 +8,10 @@
  *
  * ROS 2 Interfaces:
  * - Subscriptions:
- *   - `/chess/game_status` [lekiwi_interfaces::msg::ChessGameStatus, SystemDefaultsQoS]
+ *   - `/chess/game_status` [lekiwi_interfaces::msg::ChessGameStatus, Reliable, TransientLocal, Depth 1]
  *   - `/chess/raw_fen` [std_msgs::msg::String, SensorDataQoS]
  * - Publisher:
- *   - `/chess/board_2d/compressed` [sensor_msgs::msg::CompressedImage, SensorDataQoS]
+ *   - `/chess/board_2d/compressed` [sensor_msgs::msg::CompressedImage, Reliable, TransientLocal, Depth 1]
  *
  * Parameters:
  * - `game_status_topic` (string, default: "/chess/game_status"): Status telemetry input topic.
@@ -95,12 +95,10 @@ namespace lekiwi_chess_master
     std::string fen{"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"}; ///< Position FEN.
     std::string last_move;       ///< UCI string of last executed move (highlighted in green).
     std::string best_move;       ///< UCI string of engine recommended move (highlighted in orange).
-    int32_t eval_cp{0};          ///< Engine evaluation score in centipawns.
     uint8_t game_phase{0};       ///< Current game lifecycle phase enum value.
     bool is_check{false};        ///< True if active side is in check.
     bool is_checkmate{false};    ///< True if position is terminal checkmate.
     bool is_draw{false};         ///< True if position is terminal stalemate or draw.
-    bool is_raw_view{false};     ///< Retained for struct backward compatibility.
 
     /**
      * @brief Constructs a BoardDisplayContext snapshot from a ROS 2 ChessGameStatus message.
@@ -111,12 +109,10 @@ namespace lekiwi_chess_master
       ctx.fen = status.full_fen;
       ctx.last_move = status.last_move_details.uci;
       ctx.best_move = status.best_move_details.uci;
-      ctx.eval_cp = status.eval_centipawns;
       ctx.game_phase = status.game_phase;
       ctx.is_check = status.is_check;
       ctx.is_checkmate = status.is_checkmate;
       ctx.is_draw = status.is_draw;
-      ctx.is_raw_view = false;
       return ctx;
     }
   };

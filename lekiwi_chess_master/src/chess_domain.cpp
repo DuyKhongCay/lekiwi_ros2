@@ -64,8 +64,6 @@ namespace lekiwi_chess_master::domain
     }
 
     details.uci = std::string(uci_move);
-    details.from_square = std::string{f_col, f_row};
-    details.to_square = std::string{t_col, t_row};
     details.piece_color = (board.sideToMove() == chess::Color::WHITE) ? "w" : "b";
 
     chess::Move move = chess::uci::uciToMove(board, uci_move);
@@ -84,7 +82,6 @@ namespace lekiwi_chess_master::domain
         else if (promo_ch == 'n')
           details.promotion_piece = "knight";
       }
-      details.san = details.uci;
       return details;
     }
 
@@ -92,71 +89,24 @@ namespace lekiwi_chess_master::domain
     auto piece_at_from = board.at(move.from());
     details.piece_type = piece_type_to_string(piece_at_from.type());
 
-    // Evaluate capture properties
+    // Evaluate capture properties and merge captured piece type into piece_type
     details.is_capture = board.isCapture(move);
     details.is_en_passant = (move.typeOf() == chess::Move::ENPASSANT);
 
-    if (details.is_en_passant)
+    if (details.is_capture)
     {
-      // En Passant: captured pawn is at (to.file, from.rank)
-      chess::Square cap_sq(move.to().file(), move.from().rank());
-      details.captured_square = static_cast<std::string>(cap_sq);
-      details.captured_piece_type = "pawn";
-    }
-    else if (details.is_capture)
-    {
-      details.captured_square = details.to_square;
-      details.captured_piece_type = piece_type_to_string(board.at(move.to()).type());
+      std::string cap_type = details.is_en_passant
+        ? "pawn"
+        : piece_type_to_string(board.at(move.to()).type());
+      details.piece_type += ":" + cap_type;
     }
 
-    // Evaluate castling trajectories for arm motion planning
+    // Evaluate castling and promotion flags
     details.is_castling = (move.typeOf() == chess::Move::CASTLING);
-    if (details.is_castling)
-    {
-      bool is_white = (board.sideToMove() == chess::Color::WHITE);
-      bool is_kingside = (move.to().file() > move.from().file());
-      if (is_white)
-      {
-        if (is_kingside)
-        {
-          details.castling_rook_from = "h1";
-          details.castling_rook_to = "f1";
-        }
-        else
-        {
-          details.castling_rook_from = "a1";
-          details.castling_rook_to = "d1";
-        }
-      }
-      else
-      {
-        if (is_kingside)
-        {
-          details.castling_rook_from = "h8";
-          details.castling_rook_to = "f8";
-        }
-        else
-        {
-          details.castling_rook_from = "a8";
-          details.castling_rook_to = "d8";
-        }
-      }
-    }
 
-    // Evaluate promotion target piece type
     if (move.typeOf() == chess::Move::PROMOTION)
     {
       details.promotion_piece = piece_type_to_string(move.promotionType());
-    }
-
-    // Generate Standard Algebraic Notation (SAN) for human-readable logs and visualizer
-    try
-    {
-      details.san = chess::uci::moveToSan(board, move);
-    }
-    catch (...)
-    {
-      details.san = details.uci;
     }
 
     return details;
