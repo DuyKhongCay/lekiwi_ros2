@@ -31,6 +31,7 @@ from lekiwi_inference.helpers import (
     RemotePolicyConfig,
     TimedAction,
     TimedObservation,
+    observations_similar,
 )
 from lekiwi_inference.transport.base import PolicyTransport
 
@@ -42,11 +43,12 @@ class ClientConfig:
     """Configures connection parameters and inference thresholds for the client."""
 
     server_address: str = "127.0.0.1:8090"
-    policy_type: str = "act"
-    repo_id: str = "DuyKhongCay/act_lekiwi_chess"
+    policy_type: str = "smolvla"
+    repo_id: str = "DuyKhongCay/smolvla_lekiwi_chess"
     fps: float = 25.0
     actions_per_chunk: int = 40
-    chunk_size_threshold: float = 0.5
+    chunk_size_threshold: float = 0.15
+    observation_filter_epsilon: float = 0.05
     aggregation_fn: str = "weighted_average"
     device: str = "cuda"
     features: dict[str, Any] = field(default_factory=dict)
@@ -73,6 +75,10 @@ class AsyncInferenceClient:
 
         self.action_queue: Queue[TimedAction] = Queue()
         self.action_queue_lock = threading.Lock()
+
+        # Observation filtering state & telemetry (Edge Pi 5)
+        self._last_sent_state: Optional[np.ndarray] = None
+        self._obs_filtered_count: int = 0
 
         # Observation queue for asynchronous inference worker
         self._pending_obs_queue: Queue[TimedObservation] = Queue(maxsize=1)
@@ -104,14 +110,9 @@ class AsyncInferenceClient:
             self._log.error("Failed to connect transport to policy server.")
             return False
 
-        if hasattr(self.transport, "send_handshake"):
-            if not self.transport.send_handshake():
-                self._log.error("Failed handshake with remote policy server.")
-                return False
-        elif hasattr(self.transport, "handshake"):
-            if not self.transport.handshake():
-                self._log.error("Failed handshake with remote policy server.")
-                return False
+        if not self.transport.send_handshake():
+            self._log.error("Failed handshake with remote policy server.")
+            return False
 
         policy_cfg = RemotePolicyConfig(
             policy_type=self.config.policy_type,
@@ -158,16 +159,47 @@ class AsyncInferenceClient:
             except Empty:
                 break
         self._inference_in_flight = False
+        self._actions_executed_count = 0
+        self._last_sent_state = None
         self.must_go.set()
         self.fps_tracker.reset()
         self._log.info("Episode reset: queues cleared, timestep tracking re-initialized.")
 
-    def ready_to_send(self) -> bool:
-        """Return True when the action queue is low enough to request more actions from server."""
-        if self._inference_in_flight:
+    def notify_phase_transition(self, keep_steps: int = 3) -> None:
+        """Truncates stale pre-transition action tail, keeping a small RTT bridge, and forces immediate send."""
+        max_keep = max(0, int(keep_steps))
+        with self.action_queue_lock:
+            retained: Queue[TimedAction] = Queue()
+            while not self.action_queue.empty() and retained.qsize() < max_keep:
+                try:
+                    retained.put_nowait(self.action_queue.get_nowait())
+                except Empty:
+                    break
+            self.action_queue = retained
+
+        while not self._pending_obs_queue.empty():
+            try:
+                self._pending_obs_queue.get_nowait()
+            except Empty:
+                break
+
+        self.must_go.set()
+        self._last_sent_state = None
+        self._log.info(f"Phase transition notified: action queue truncated to {max_keep} steps, must_go set.")
+
+    def ready_to_send(self, current_state: np.ndarray) -> bool:
+        """Determines if a new observation should be submitted to the policy server.
+
+        Zero backward-compatible implementation: current_state is strictly required.
+        Bypass Rule: If must_go is active or the action queue is empty, sending is permitted immediately.
+        Threshold & Filter: If queue ratio <= chunk_size_threshold (0.15), verifies joint displacement
+        exceeds observation_filter_epsilon (0.05 rad) relative to _last_sent_state.
+        """
+        if self._inference_in_flight or not self._pending_obs_queue.empty():
             return False
-        if not self._pending_obs_queue.empty():
-            return False
+
+        if self.must_go.is_set():
+            return True
 
         with self.action_queue_lock:
             qsize = self.action_queue.qsize()
@@ -176,7 +208,18 @@ class AsyncInferenceClient:
             return True
 
         ratio = qsize / max(1, self.action_chunk_size)
-        return ratio <= self.config.chunk_size_threshold
+        if ratio > self.config.chunk_size_threshold:
+            return False
+
+        if self._last_sent_state is not None and observations_similar(
+            current_state,
+            self._last_sent_state,
+            atol=self.config.observation_filter_epsilon,
+        ):
+            self._obs_filtered_count += 1
+            return False
+
+        return True
 
     def submit_observation(self, raw_obs: dict[str, Any], timestamp: Optional[float] = None) -> bool:
         """Schedules latest observation snapshot for remote evaluation, discarding stale frames."""
@@ -184,10 +227,7 @@ class AsyncInferenceClient:
         with self.latest_action_lock:
             latest = max(self.latest_action, 0)
 
-        with self.action_queue_lock:
-            qsize = self.action_queue.qsize()
-
-        must_go_val = self.must_go.is_set() and (qsize == 0)
+        must_go_val = self.must_go.is_set()
         if must_go_val:
             self.must_go.clear()
 
@@ -207,6 +247,9 @@ class AsyncInferenceClient:
 
         try:
             self._pending_obs_queue.put_nowait(obs)
+            if "observation.state" in raw_obs:
+                st = raw_obs["observation.state"]
+                self._last_sent_state = np.asarray(st, dtype=np.float32).copy()
             return True
         except Exception:
             return False
@@ -218,19 +261,17 @@ class AsyncInferenceClient:
                 return None
             timed_action = self.action_queue.get_nowait()
 
-        action_val = timed_action.get_action()
-        if hasattr(action_val, "detach"):
-            action_np = action_val.detach().cpu().numpy().astype(np.float64).reshape(-1)
-        elif isinstance(action_val, np.ndarray):
-            action_np = action_val.astype(np.float64).reshape(-1)
-        else:
-            action_np = np.asarray(action_val, dtype=np.float64).reshape(-1)
+        action_np = np.asarray(timed_action.get_action(), dtype=np.float64).reshape(-1)
 
         with self.latest_action_lock:
             self.latest_action = timed_action.get_timestep()
 
         self._actions_executed_count += 1
         return action_np
+
+    def get_actions_executed_count(self) -> int:
+        """Returns the total number of actions popped and executed in the current episode."""
+        return self._actions_executed_count
 
     def actions_available(self) -> bool:
         """Reports whether at least one action is buffered and ready for execution."""
@@ -245,6 +286,14 @@ class AsyncInferenceClient:
     def get_last_action_timestamp(self) -> float:
         """Returns arrival timestamp of the most recent action chunk."""
         return self._last_action_timestamp
+
+    def get_obs_filtered_count(self) -> int:
+        """Returns the total number of redundant observations filtered out on the edge."""
+        return self._obs_filtered_count
+
+    def get_last_sent_state(self) -> Optional[np.ndarray]:
+        """Returns the last state vector successfully submitted for inference."""
+        return self._last_sent_state
 
     def _inference_loop(self) -> None:
         """Continuous background worker loop processing pending frames over ZeroMQ."""

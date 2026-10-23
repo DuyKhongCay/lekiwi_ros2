@@ -62,12 +62,13 @@ class AsyncRos2ClientNode(Node):
         # 1. Parameter Declarations
         # -------------------------------------------------------------------
         self.declare_parameter("server_address", "127.0.0.1:8090")
-        self.declare_parameter("policy_type", "act")
-        self.declare_parameter("repo_id", "DuyKhongCay/act_lekiwi_chess")
+        self.declare_parameter("policy_type", "smolvla")
+        self.declare_parameter("repo_id", "DuyKhongCay/smolvla_lekiwi_chess")
         self.declare_parameter("control_rate", 25.0)
         self.declare_parameter("max_age_s", 0.08)
         self.declare_parameter("actions_per_chunk", 40)
-        self.declare_parameter("chunk_size_threshold", 0.5)
+        self.declare_parameter("chunk_size_threshold", 0.15)
+        self.declare_parameter("observation_filter_epsilon", 0.05)
         self.declare_parameter("wrist_cam_topic", "/cameras/usb_wrist/image_raw/compressed")
         self.declare_parameter("side_cam_topic", "/cameras/usb_side/image_raw/compressed")
         self.declare_parameter("overhead_cam_topic", "/cameras/stereo_right/image_raw/compressed")
@@ -94,11 +95,13 @@ class AsyncRos2ClientNode(Node):
             [1.5616, -1.7411, 1.5570, 0.7747, -2.7888, 0.0813],
         )
 
-        # Episode convergence & completion criteria (Single Responsibility)
+        # Episode convergence & completion criteria (Zero Backward-Compatibility)
         self.declare_parameter("convergence.max_duration_s", 180.0)
-        self.declare_parameter("convergence.min_actions", 15)
+        self.declare_parameter("convergence.min_actions", 50)
         self.declare_parameter("convergence.stow_tolerance_rad", 0.20)
-        self.declare_parameter("convergence.settle_steps", 10)
+        self.declare_parameter("convergence.settle_steps", 25)
+        self.declare_parameter("convergence.starvation_timeout_s", 2.0)
+
 
         # Network transport & safety watchdogs
         self.declare_parameter("transport.config_timeout_s", 60.0)
@@ -113,6 +116,7 @@ class AsyncRos2ClientNode(Node):
         self.max_age_s = float(self.get_parameter("max_age_s").value)
         self.actions_per_chunk = int(self.get_parameter("actions_per_chunk").value)
         self.chunk_size_threshold = float(self.get_parameter("chunk_size_threshold").value)
+        self.observation_filter_epsilon = float(self.get_parameter("observation_filter_epsilon").value)
         self.wrist_cam_topic = str(self.get_parameter("wrist_cam_topic").value)
         self.side_cam_topic = str(self.get_parameter("side_cam_topic").value)
         self.overhead_cam_topic = str(self.get_parameter("overhead_cam_topic").value)
@@ -139,6 +143,10 @@ class AsyncRos2ClientNode(Node):
         self.settle_steps = int(
             self.get_parameter("convergence.settle_steps").value
         )
+        self.starvation_timeout_s = float(
+            self.get_parameter("convergence.starvation_timeout_s").value
+        )
+
 
         self.config_timeout_s = float(
             self.get_parameter("transport.config_timeout_s").value
@@ -162,7 +170,6 @@ class AsyncRos2ClientNode(Node):
         self._latest_overhead_stamp: float = 0.0
         self._latest_joint_positions: Optional[np.ndarray] = None
         self._latest_joint_stamp: float = 0.0
-        self._previous_joint_positions: Optional[np.ndarray] = None
 
         self._estop_active = False
         self._is_active = False
@@ -193,10 +200,10 @@ class AsyncRos2ClientNode(Node):
             fps=self.control_rate,
             actions_per_chunk=self.actions_per_chunk,
             chunk_size_threshold=self.chunk_size_threshold,
+            observation_filter_epsilon=self.observation_filter_epsilon,
             aggregation_fn=self.aggregation_fn,
             features={
-                "observation.state": {"shape": (len(self.arm_joints),), "dtype": "float32"},
-                "observation.environment_state": {"shape": (10,), "dtype": "float32"},
+                "observation.state": {"shape": (12,), "dtype": "float32"},
                 "observation.images.wrist": {"dtype": "image", "shape": (384, 384, 3)},
                 "observation.images.side": {"dtype": "image", "shape": (384, 384, 3)},
                 "observation.images.overhead": {"dtype": "image", "shape": (384, 384, 3)},
@@ -392,6 +399,12 @@ class AsyncRos2ClientNode(Node):
             self.get_logger().error(f"Rejecting goal: unknown operation enum {op}.")
             return GoalResponse.REJECT
 
+        if len(goal_request.environment_state) != 6:
+            self.get_logger().error(
+                f"Rejecting goal: expected 6D spatial coordinates in environment_state [src(3), tgt(3)], got {len(goal_request.environment_state)}D."
+            )
+            return GoalResponse.REJECT
+
         return GoalResponse.ACCEPT
 
     def _handle_cancel_received(self, goal_handle) -> CancelResponse:
@@ -401,11 +414,12 @@ class AsyncRos2ClientNode(Node):
     def _execute_chess_move_goal(self, goal_handle) -> ExecuteChessMove.Result:
         goal = goal_handle.request
         op = goal.operation
-        task = TASK_DESCRIPTION_MAP.get(op, "Chess pick and place move")
-        env_state = np.array(goal.environment_state, dtype=np.float32)
+        instruction = goal.instruction.strip() if goal.instruction else ""
+        task = instruction or TASK_DESCRIPTION_MAP.get(op, "Chess manipulation move")
+        env_state = np.array(goal.environment_state[:6], dtype=np.float32)
 
         self.get_logger().info(
-            f"Executing manipulation goal: op={op} ('{task}'), env_state={env_state.tolist()[:6]}..."
+            f"Executing manipulation goal: op={op} ('{task}'), env_state={env_state.tolist()}..."
         )
 
         with self._active_goal_lock:
@@ -480,11 +494,6 @@ class AsyncRos2ClientNode(Node):
                 if self._latest_joint_positions is not None
                 else None
             )
-            prev_joints = (
-                self._previous_joint_positions.copy()
-                if self._previous_joint_positions is not None
-                else current_joints
-            )
             wrist_bytes = self._latest_wrist_bytes
             side_bytes = self._latest_side_bytes
             overhead_bytes = self._latest_overhead_bytes
@@ -494,19 +503,21 @@ class AsyncRos2ClientNode(Node):
 
         with self._active_goal_lock:
             active_handle = self._active_goal_handle
-            env_state = self._active_env_state
+            base_env_state = self._active_env_state
             task = self._active_task
             start_time = self._active_goal_start_time
 
-        # 1. Observation Dispatch (when goal is running and client is ready)
-        if active_handle is not None and env_state is not None:
-            if self.client.ready_to_send() and self._is_sensor_data_fresh(now):
+        # 1. 12D Sensorimotor Observation Synthesis & Dispatch
+        if active_handle is not None and base_env_state is not None:
+            # S_t = [q1..q6, x_src, y_src, z_src, x_tgt, y_tgt, z_tgt] (12D)
+            obs_state_12d = np.concatenate([current_joints[:6], base_env_state[:6]]).astype(np.float32)
+
+            if self.client.ready_to_send(obs_state_12d) and self._is_sensor_data_fresh(now):
                 raw_obs = {
                     "observation.images.wrist": wrist_bytes,
                     "observation.images.side": side_bytes,
                     "observation.images.overhead": overhead_bytes,
-                    "observation.state": current_joints.astype(np.float32),
-                    "observation.environment_state": env_state,
+                    "observation.state": obs_state_12d,
                     "task": task,
                 }
                 self.client.submit_observation(raw_obs, timestamp=now)
@@ -531,10 +542,10 @@ class AsyncRos2ClientNode(Node):
                 with self._active_goal_lock:
                     if self._active_starvation_start_time is None:
                         self._active_starvation_start_time = now
-                    elif (now - self._active_starvation_start_time) >= self.stream_timeout_s:
+                    elif (now - self._active_starvation_start_time) >= self.starvation_timeout_s:
                         self._goal_success = False
                         self._goal_result_message = (
-                            f"Policy action stream starved for > {self.stream_timeout_s:.1f}s."
+                            f"Policy action stream starved for > {self.starvation_timeout_s:.1f}s."
                         )
                         self._goal_finished_event.set()
 
@@ -632,6 +643,7 @@ class AsyncRos2ClientNode(Node):
         stat.add("inference_active", str(self._is_active))
         stat.add("estop_active", str(self._estop_active))
         stat.add("queue_size", str(self.client.get_queue_size()))
+        stat.add("obs_filtered_count", str(self.client.get_obs_filtered_count()))
         stat.add("rtt_latency_ms", f"{rtt_latency:.1f}")
         stat.add("server_address", self.server_address)
         stat.add("policy_type", self.policy_type)

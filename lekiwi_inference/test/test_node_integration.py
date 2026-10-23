@@ -52,7 +52,7 @@ def test_goal_validation_and_task_mapping():
 
     req = ExecuteChessMove.Goal()
     req.operation = ExecuteChessMove.Goal.OP_MOVE
-    req.environment_state = [0.1] * 10
+    req.environment_state = [0.1] * 6
 
     # 1. Zero backward-compatible: Reject goal if client is inactive/disconnected
     assert node._handle_goal_received(req) == GoalResponse.REJECT
@@ -65,7 +65,7 @@ def test_goal_validation_and_task_mapping():
     for op, expected_task in TASK_DESCRIPTION_MAP.items():
         req_valid = ExecuteChessMove.Goal()
         req_valid.operation = op
-        req_valid.environment_state = [0.1] * 10
+        req_valid.environment_state = [0.1] * 6
         resp = node._handle_goal_received(req_valid)
         assert resp == GoalResponse.ACCEPT
         assert TASK_DESCRIPTION_MAP[op] == expected_task
@@ -73,7 +73,19 @@ def test_goal_validation_and_task_mapping():
     # 3. Invalid operation enum
     invalid_req = ExecuteChessMove.Goal()
     invalid_req.operation = 99
+    invalid_req.environment_state = [0.1] * 6
     assert node._handle_goal_received(invalid_req) == GoalResponse.REJECT
+
+    # 4. Zero backward-compatible: Reject goal if environment_state is not 6D
+    invalid_env_req = ExecuteChessMove.Goal()
+    invalid_env_req.operation = ExecuteChessMove.Goal.OP_MOVE
+    invalid_env_req.environment_state = [0.1] * 4
+    assert node._handle_goal_received(invalid_env_req) == GoalResponse.REJECT
+
+    # 5. Verify 12D schema declared for observation.state and no environment_state feature
+    assert node.client.config.features["observation.state"]["shape"] == (12,)
+    assert node.client.config.features["observation.state"]["dtype"] == "float32"
+    assert "observation.environment_state" not in node.client.config.features
 
     node.destroy_node()
 
@@ -169,10 +181,18 @@ def test_diagnostic_updater_integration_and_zero_backward_compat():
     assert "inference_active" in val_dict
     assert "estop_active" in val_dict
     assert "queue_size" in val_dict
+    assert "obs_filtered_count" in val_dict
     assert "rtt_latency_ms" in val_dict
+    assert val_dict["obs_filtered_count"] == "0"
     assert val_dict["transport_connected"] == "False"
     assert val_dict["estop_active"] == "False"
     assert val_dict["active_goal"] == "False"
+
+    # Verify zero backward-compatible default parameters
+    assert node.chunk_size_threshold == 0.15
+    assert node.observation_filter_epsilon == 0.05
+    assert node.client.config.chunk_size_threshold == 0.15
+    assert node.client.config.observation_filter_epsilon == 0.05
 
     # 4. Test _produce_diagnostics when E-Stop is active
     node._estop_active = True
@@ -208,6 +228,7 @@ def test_stream_starvation_watchdog_and_strict_convergence():
         parameter_overrides=[
             Parameter("auto_start", value=False),
             Parameter("stream_timeout_s", value=0.2),
+            Parameter("convergence.starvation_timeout_s", value=0.2),
             Parameter("named_poses.stow", value=stow_val),
             Parameter("convergence.min_actions", value=5),
             Parameter("convergence.stow_tolerance_rad", value=0.20),
@@ -235,7 +256,7 @@ def test_stream_starvation_watchdog_and_strict_convergence():
 
     mock_handle = MockGoalHandle()
     node._active_goal_handle = mock_handle
-    node._active_env_state = np.zeros(10, dtype=np.float32)
+    node._active_env_state = np.zeros(6, dtype=np.float32)
     node._active_task = "Test Task"
     node._active_goal_start_time = time.time()
     node._active_policy_actions_executed = 0  # No actions executed!

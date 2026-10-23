@@ -164,7 +164,7 @@ def deserialize_policy_config(data: bytes) -> RemotePolicyConfig:
     d = msgpack.unpackb(data, raw=False)
     return RemotePolicyConfig(
         policy_type=d.get("policy_type", "act"),
-        pretrained_name_or_path=d.get("pretrained_name_or_path", d.get("repo_id", "")),
+        pretrained_name_or_path=d.get("pretrained_name_or_path", ""),
         lerobot_features=d.get("lerobot_features", {}),
         actions_per_chunk=d.get("actions_per_chunk", 40),
         device=d.get("device", "cuda"),

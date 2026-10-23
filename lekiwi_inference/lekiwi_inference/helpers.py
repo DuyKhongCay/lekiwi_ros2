@@ -103,3 +103,26 @@ class FPSTracker:
         """Resets the timing accumulator."""
         self.first_timestamp = None
         self.total_obs_count = 0
+
+
+def observations_similar(
+    state_a: np.ndarray,
+    state_b: np.ndarray,
+    atol: float,
+) -> bool:
+    """Check if two joint-space observation states are within Euclidean distance threshold.
+
+    Calculates ||state_a - state_b||_2 < atol using pure NumPy.
+    Used for observation filtering on edge clients to eliminate action looping/stalling.
+
+    Args:
+        state_a: Current robot state vector (e.g. 6D arm joint positions).
+        state_b: Reference or previously sent robot state vector.
+        atol: Euclidean distance threshold in radians.
+
+    Returns:
+        True if Euclidean norm is strictly less than atol, False otherwise.
+    """
+    diff = np.asarray(state_a, dtype=np.float64).ravel() - np.asarray(state_b, dtype=np.float64).ravel()
+    return bool(np.linalg.norm(diff) < atol)
+
