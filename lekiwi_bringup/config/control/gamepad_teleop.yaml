@@ -169,8 +169,8 @@ joy_teleop:
     lekiwi_arm_pose_approach:
       type: service
       interface_type: lekiwi_interfaces/srv/GoToNamedPose
-      service_name: /cartesian_jog_server_node/go_to_named_pose
-      buttons: [4, 3] # Start + Y
+      service_name: /manipulation_action_server/go_to_named_pose
+      buttons: [5, 3] # Start + Y
       service_request:
         pose_name: "approach"
 

@@ -62,6 +62,16 @@
             contains: ['Policy Inference Status']
             timeout: 5.0
 
+      recording:
+        type: diagnostic_aggregator/AnalyzerGroup
+        path: Recording
+        analyzers:
+          episode_recorder:
+            type: diagnostic_aggregator/GenericAnalyzer
+            path: EpisodeRecorder
+            contains: ['Episode Recorder', 'Collection Campaign']
+            timeout: 5.0
+
 cpu_monitor:
   ros__parameters:
     warning_percentage: 90

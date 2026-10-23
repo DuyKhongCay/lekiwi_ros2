@@ -76,13 +76,13 @@
       queue leaky=downstream max-size-buffers=1 !
       jpegdec !
       video/x-raw,format=I420 !
-      videocrop left=280 right=280 !
-      videoscale n-threads=4 !
+      videoscale add-borders=true n-threads=4 !
       video/x-raw,format=I420,width=384,height=384,pixel-aspect-ratio=1/1 !
       videobalance contrast=1.2 brightness=-0.2 !
       videoconvert n-threads=4 !
       jpegenc quality=80 idct-method=ifast !
       image/jpeg
+    # videocrop left=280 right=280 !
 
 /cameras/usb_side/gscam:
   ros__parameters:
