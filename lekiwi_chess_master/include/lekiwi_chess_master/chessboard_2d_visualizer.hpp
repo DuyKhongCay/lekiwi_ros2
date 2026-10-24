@@ -46,6 +46,7 @@
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <lekiwi_interfaces/msg/chess_game_status.hpp>
+#include <lekiwi_interfaces/msg/chess_move_details.hpp>
 
 namespace lekiwi_chess_master
 {
@@ -94,22 +95,26 @@ namespace lekiwi_chess_master
   {
     std::string fen{"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"}; ///< Position FEN.
     std::string last_move;       ///< UCI string of last executed move (highlighted in green).
-    std::string best_move;       ///< UCI string of engine recommended move (highlighted in orange).
-    uint8_t game_phase{0};       ///< Current game lifecycle phase enum value.
+    std::string candidate_move;  ///< UCI string of robot planned/candidate move (highlighted in orange).
+    std::string active_color{"w"}; ///< Current side to move ("w" or "b").
+    bool is_board_synced{true};  ///< True if physical board layout matches FEN.
     bool is_check{false};        ///< True if active side is in check.
     bool is_checkmate{false};    ///< True if position is terminal checkmate.
     bool is_draw{false};         ///< True if position is terminal stalemate or draw.
 
     /**
-     * @brief Constructs a BoardDisplayContext snapshot from a ROS 2 ChessGameStatus message.
+     * @brief Constructs a BoardDisplayContext snapshot from a ROS 2 ChessGameStatus and candidate move.
      */
-    static BoardDisplayContext fromGameStatus(const lekiwi_interfaces::msg::ChessGameStatus &status)
+    static BoardDisplayContext fromGameStatus(
+      const lekiwi_interfaces::msg::ChessGameStatus &status,
+      const std::string &candidate_move)
     {
       BoardDisplayContext ctx;
       ctx.fen = status.full_fen;
       ctx.last_move = status.last_move_details.uci;
-      ctx.best_move = status.best_move_details.uci;
-      ctx.game_phase = status.game_phase;
+      ctx.candidate_move = candidate_move;
+      ctx.active_color = status.active_color;
+      ctx.is_board_synced = status.is_board_synced;
       ctx.is_check = status.is_check;
       ctx.is_checkmate = status.is_checkmate;
       ctx.is_draw = status.is_draw;
@@ -131,6 +136,9 @@ namespace lekiwi_chess_master
   private:
     /** @brief Callback receiving authoritative game status updates. */
     void gameStatusCallback(const ChessGameStatus::ConstSharedPtr msg);
+
+    /** @brief Callback receiving candidate move planned by orchestrator. */
+    void candidateMoveCallback(const lekiwi_interfaces::msg::ChessMoveDetails::ConstSharedPtr msg);
 
     /** @brief Callback receiving raw unverified vision detection strings for debug overlay. */
     void rawFenCallback(const std_msgs::msg::String::ConstSharedPtr msg);
@@ -218,6 +226,7 @@ namespace lekiwi_chess_master
 
     // Subscriptions & Publishers
     rclcpp::Subscription<ChessGameStatus>::SharedPtr game_status_sub_;
+    rclcpp::Subscription<lekiwi_interfaces::msg::ChessMoveDetails>::SharedPtr candidate_move_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr raw_fen_sub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr board_2d_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr board_2d_raw_pub_;
@@ -225,6 +234,7 @@ namespace lekiwi_chess_master
 
     // Parameters
     std::string game_status_topic_{"/chess/game_status"};
+    std::string candidate_move_topic_{"/chess/candidate_move"};
     std::string raw_fen_topic_{"/chess/raw_fen"};
     std::string board_2d_topic_{"/chess/board_2d/compressed"};
     std::string board_2d_raw_topic_{"/chess/board_2d/raw/compressed"};
@@ -236,6 +246,7 @@ namespace lekiwi_chess_master
     // State & Cache
     mutable std::mutex state_mutex_;
     ChessGameStatus latest_status_;
+    std::string latest_candidate_move_;
     std::string latest_raw_fen_;
     bool has_status_{false};
     bool legal_state_dirty_{true};

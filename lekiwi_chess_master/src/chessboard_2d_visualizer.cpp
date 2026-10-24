@@ -39,6 +39,10 @@ namespace lekiwi_chess_master
 
     HeaderStyle resolveHeaderStyle(const BoardDisplayContext &ctx)
     {
+      if (!ctx.is_board_synced)
+      {
+        return {"SYNCING BOARD", cv::Scalar(0, 180, 255)};
+      }
       if (ctx.is_checkmate)
       {
         return {"CHECKMATE", cv::Scalar(0, 0, 255)};
@@ -51,23 +55,11 @@ namespace lekiwi_chess_master
       {
         return {"CHECK", cv::Scalar(0, 0, 255)};
       }
-
-      using lekiwi_interfaces::msg::ChessGameStatus;
-      switch (ctx.game_phase)
+      if (!ctx.candidate_move.empty())
       {
-      case ChessGameStatus::PHASE_ROBOT_THINKING:
-        return {"THINKING...", cv::Scalar(0, 165, 255)};
-      case ChessGameStatus::PHASE_ROBOT_READY:
         return {"ROBOT READY", cv::Scalar(80, 220, 80)};
-      case ChessGameStatus::PHASE_ROBOT_EXECUTING:
-        return {"ROBOT MOVING", cv::Scalar(0, 200, 255)};
-      case ChessGameStatus::PHASE_WAITING_PLAYER:
-        return {"PLAYER TURN", cv::Scalar(240, 240, 240)};
-      case ChessGameStatus::PHASE_AWAITING_BOARD_SYNC:
-        return {"SYNCING BOARD", cv::Scalar(0, 180, 255)};
-      default:
-        return {"IDLE", cv::Scalar(255, 220, 0)};
       }
+      return {ctx.active_color == "b" ? "BLACK TURN" : "WHITE TURN", cv::Scalar(240, 240, 240)};
     }
   }
 
@@ -75,6 +67,7 @@ namespace lekiwi_chess_master
       : Node("chessboard_2d_visualizer", options)
   {
     game_status_topic_ = declare_parameter<std::string>("game_status_topic", "/chess/game_status");
+    candidate_move_topic_ = declare_parameter<std::string>("candidate_move_topic", "/chess/candidate_move");
     raw_fen_topic_ = declare_parameter<std::string>("raw_fen_topic", "/chess/raw_fen");
     board_2d_topic_ = declare_parameter<std::string>("board_2d_topic", "/chess/board_2d/compressed");
     board_2d_raw_topic_ = declare_parameter<std::string>("board_2d_raw_topic", "/chess/board_2d/raw/compressed");
@@ -106,11 +99,19 @@ namespace lekiwi_chess_master
 
     rclcpp::QoS game_status_qos(1);
     game_status_qos.reliable();
-    game_status_qos.transient_local();
+    game_status_qos.durability_volatile();
 
     game_status_sub_ = create_subscription<ChessGameStatus>(
         game_status_topic_, game_status_qos,
         std::bind(&Chessboard2DVisualizer::gameStatusCallback, this, std::placeholders::_1));
+
+    rclcpp::QoS candidate_qos(1);
+    candidate_qos.reliable();
+    candidate_qos.transient_local();
+
+    candidate_move_sub_ = create_subscription<lekiwi_interfaces::msg::ChessMoveDetails>(
+        candidate_move_topic_, candidate_qos,
+        std::bind(&Chessboard2DVisualizer::candidateMoveCallback, this, std::placeholders::_1));
 
     if (debug_)
     {
@@ -144,6 +145,24 @@ namespace lekiwi_chess_master
       std::lock_guard<std::mutex> lock(state_mutex_);
       latest_status_ = *msg;
       has_status_ = true;
+      legal_state_dirty_ = true;
+    }
+    renderAndPublishLegal();
+  }
+
+  void Chessboard2DVisualizer::candidateMoveCallback(const lekiwi_interfaces::msg::ChessMoveDetails::ConstSharedPtr msg)
+  {
+    if (!msg)
+    {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (latest_candidate_move_ == msg->uci)
+      {
+        return;
+      }
+      latest_candidate_move_ = msg->uci;
       legal_state_dirty_ = true;
     }
     renderAndPublishLegal();
@@ -509,9 +528,9 @@ namespace lekiwi_chess_master
     {
       header_text += " | Move: " + ctx.last_move;
     }
-    if (!ctx.best_move.empty() && ctx.best_move != ctx.last_move)
+    if (!ctx.candidate_move.empty() && ctx.candidate_move != ctx.last_move)
     {
-      header_text += " | Best: " + ctx.best_move;
+      header_text += " | Best: " + ctx.candidate_move;
     }
 
     cv::putText(panel, header_text, cv::Point(20, static_cast<int>(layout.header_h * 0.65)),
@@ -545,12 +564,12 @@ namespace lekiwi_chess_master
     ensureSpriteCache(layout.cell_size);
 
     drawBoardTiles(panel, layout, kLegalWoodTheme);
-    drawMoveHighlights(panel, ctx.last_move, ctx.best_move, layout);
+    drawMoveHighlights(panel, ctx.last_move, ctx.candidate_move, layout);
 
     auto occupancy = parseFenToOccupancy(ctx.fen);
     int piece_count = drawPieceSprites(panel, occupancy, layout);
 
-    drawMoveArrows(panel, ctx.last_move, ctx.best_move, layout);
+    drawMoveArrows(panel, ctx.last_move, ctx.candidate_move, layout);
     drawBoardCoordinates(panel, layout, kLegalWoodTheme.border_color);
     drawLegalHeaderFooter(panel, ctx, piece_count, layout);
   }
@@ -593,7 +612,7 @@ namespace lekiwi_chess_master
     BoardDisplayContext ctx;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      ctx = has_status_ ? BoardDisplayContext::fromGameStatus(latest_status_)
+      ctx = has_status_ ? BoardDisplayContext::fromGameStatus(latest_status_, latest_candidate_move_)
                         : BoardDisplayContext{};
     }
 
