@@ -73,7 +73,7 @@ def _clear_step(
     nav_state: MotionExecutionState | None = None,
     requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
-    cap_color = details.opposing_color
+    cap_color = details.opposing_color_name
     cap_piece = details.captured_piece or "piece"
     instruction = f"Clear {cap_color} {cap_piece} to {bin_side} bin"
     return MoveStep(
@@ -101,7 +101,7 @@ def _pick_step(
     nav_state: MotionExecutionState | None = None,
     requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
-    instruction = f"Pick {details.color} {details.piece}"
+    instruction = f"Pick {details.color_name} {details.piece}"
     return MoveStep(
         name=StepKind.PICK,
         target_pose=target_pose,
@@ -126,7 +126,7 @@ def _place_step(
     nav_state: MotionExecutionState | None = None,
     requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
-    instruction = f"Place {details.color} {details.piece}"
+    instruction = f"Place {details.color_name} {details.piece}"
     return MoveStep(
         name=StepKind.PLACE,
         target_pose=target_pose,
@@ -154,7 +154,7 @@ def _move_step(
     nav_state: MotionExecutionState | None = None,
     requires_pre_grasp_gate: bool = True,
 ) -> MoveStep:
-    instruction = f"Move {details.color} {details.piece} to target"
+    instruction = f"Move {details.color_name} {details.piece} to target"
     return MoveStep(
         name=StepKind.MOVE,
         target_pose=target_pose,

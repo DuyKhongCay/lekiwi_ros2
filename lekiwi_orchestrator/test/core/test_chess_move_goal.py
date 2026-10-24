@@ -15,10 +15,12 @@ def test_goal_from_clean_uci_standard():
     assert goal.from_square == "e2"
     assert goal.to_square == "e4"
     assert goal.piece == "pawn"
-    assert goal.color == "white"
+    assert goal.piece_color == "w"
+    assert goal.color_name == "white"
+    assert goal.opposing_color_name == "black"
     assert goal.is_capture is False
     assert goal.captured_square == ""
-    assert goal.promotion is None
+    assert goal.promotion_piece == ""
     assert goal.is_castling is False
 
 
@@ -28,7 +30,7 @@ def test_goal_from_clean_uci_promotion():
     assert goal.uci == "e7e8q"
     assert goal.from_square == "e7"
     assert goal.to_square == "e8"
-    assert goal.promotion == "q"
+    assert goal.promotion_piece == "q"
 
 
 def test_goal_from_move_details_normal_capture():
@@ -49,7 +51,9 @@ def test_goal_from_move_details_normal_capture():
     assert goal.captured_piece == "knight"
     assert goal.is_capture is True
     assert goal.captured_square == "d5"
-    assert goal.opposing_color == "black"
+    assert goal.piece_color == "w"
+    assert goal.color_name == "white"
+    assert goal.opposing_color_name == "black"
 
 
 def test_goal_from_move_details_en_passant_white_captures_black():
@@ -72,7 +76,9 @@ def test_goal_from_move_details_en_passant_white_captures_black():
     assert goal.is_capture is True
     # En-passant clear square MUST be f5 (to_file 'f', from_rank '5')
     assert goal.captured_square == "f5"
-    assert goal.opposing_color == "black"
+    assert goal.piece_color == "w"
+    assert goal.color_name == "white"
+    assert goal.opposing_color_name == "black"
 
 
 def test_goal_from_move_details_en_passant_black_captures_white():
@@ -91,11 +97,12 @@ def test_goal_from_move_details_en_passant_black_captures_white():
     assert goal.from_square == "d4"
     assert goal.to_square == "c3"
     assert goal.piece == "pawn"
-    assert goal.color == "black"
+    assert goal.piece_color == "b"
+    assert goal.color_name == "black"
     assert goal.is_capture is True
     # En-passant clear square MUST be c4 (to_file 'c', from_rank '4')
     assert goal.captured_square == "c4"
-    assert goal.opposing_color == "white"
+    assert goal.opposing_color_name == "white"
 
 
 def test_goal_from_move_details_castling_white_kingside():
@@ -111,6 +118,8 @@ def test_goal_from_move_details_castling_white_kingside():
     goal = ChessMoveGoal.from_uci_or_details("e1g1", move_details=details)
     assert goal is not None
     assert goal.is_castling is True
+    assert goal.piece_color == "w"
+    assert goal.color_name == "white"
     assert goal.castling_rook_from == "h1"
     assert goal.castling_rook_to == "f1"
 
@@ -128,7 +137,8 @@ def test_goal_from_move_details_castling_black_queenside():
     goal = ChessMoveGoal.from_uci_or_details("e8c8", move_details=details)
     assert goal is not None
     assert goal.is_castling is True
-    assert goal.color == "black"
+    assert goal.piece_color == "b"
+    assert goal.color_name == "black"
     assert goal.castling_rook_from == "a8"
     assert goal.castling_rook_to == "d8"
 
@@ -150,6 +160,8 @@ def test_goal_direct_instantiation_minimal():
     assert goal.is_capture is False
     assert goal.is_en_passant is False
     assert goal.is_castling is False
+    assert goal.piece_color == "w"
+    assert goal.color_name == "white"
 
 
 def test_goal_direct_instantiation_capture_and_en_passant():
@@ -157,7 +169,7 @@ def test_goal_direct_instantiation_capture_and_en_passant():
     goal = ChessMoveGoal(
         uci="e5f6",
         piece_type="pawn:pawn",
-        color="white",
+        piece_color="w",
         is_capture=True,
         is_en_passant=True,
     )
@@ -166,6 +178,8 @@ def test_goal_direct_instantiation_capture_and_en_passant():
     assert goal.piece == "pawn"
     assert goal.captured_piece == "pawn"
     assert goal.captured_square == "f5"
+    assert goal.piece_color == "w"
+    assert goal.color_name == "white"
 
 
 def test_goal_direct_instantiation_castling():
@@ -173,10 +187,36 @@ def test_goal_direct_instantiation_castling():
     goal = ChessMoveGoal(
         uci="e1g1",
         piece_type="king",
-        color="white",
+        piece_color="w",
         is_castling=True,
     )
     assert goal.is_castling is True
     assert goal.castling_rook_from == "h1"
     assert goal.castling_rook_to == "f1"
+    assert goal.piece_color == "w"
+    assert goal.color_name == "white"
+
+
+def test_goal_from_existing_chess_move_goal_identity_preserved():
+    """Verify that passing an existing ChessMoveGoal returns it directly without data loss or color corruption."""
+    original = ChessMoveGoal(
+        uci="f2h2",
+        piece_type="rook:pawn",
+        piece_color="b",
+        promotion_piece="",
+        is_capture=True,
+        is_en_passant=False,
+        is_castling=False,
+        force_pick_place=True,
+        clear_bin_side="left",
+        bypass_steps=("PICK", "PLACE"),
+    )
+    parsed = ChessMoveGoal.from_uci_or_details(original.uci, move_details=original)
+    assert parsed is original
+    assert parsed.piece_color == "b"
+    assert parsed.color_name == "black"
+    assert parsed.opposing_color_name == "white"
+    assert parsed.force_pick_place is True
+    assert parsed.clear_bin_side == "left"
+    assert parsed.bypass_steps == ("PICK", "PLACE")
 

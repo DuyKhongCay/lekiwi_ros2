@@ -31,7 +31,6 @@ from lekiwi_interfaces.msg import (
 from lekiwi_interfaces.srv import (
     CheckMoveFeasibility,
     ExecuteCollectionTask,
-    SetCandidateMove,
     SetFen,
 )
 from rclpy.callback_groups import (
@@ -53,6 +52,7 @@ from lekiwi_orchestrator.core.fsm import (
 )
 from lekiwi_orchestrator.core.mission_types import ActionResult, ChessMoveGoal, ObservationIntent
 from lekiwi_orchestrator.core.parameters import OrchestratorParameters
+from lekiwi_orchestrator.execution.engine_client import EngineClient
 from lekiwi_orchestrator.execution.motion_client import (
     MotionClient,
     RosMotionClient,
@@ -86,6 +86,7 @@ class OrchestratorSubsystems:
     post_move_verifier: PostMoveVerifier
     game_status_handler: GameStatusHandler
     move_workflow: MoveWorkflow
+    engine_client: EngineClient
 
 
 class ChessMissionOrchestrator(Node):
@@ -137,12 +138,18 @@ class ChessMissionOrchestrator(Node):
         self._post_move_verifier = self._subsystems.post_move_verifier
         self._game_status_handler = self._subsystems.game_status_handler
         self._move_workflow = self._subsystems.move_workflow
+        self._engine_client = self._subsystems.engine_client
 
         # ROS 2 Subscriptions & Services
         latched_qos = QoSProfile(
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        game_status_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
         )
         self._nav_ready_sub = self.create_subscription(
             Bool,
@@ -162,8 +169,13 @@ class ChessMissionOrchestrator(Node):
             ChessGameStatus,
             self.parameters.game_status_topic,
             self._on_game_status,
-            latched_qos,
+            game_status_qos,
             callback_group=self._cb_group_sub,
+        )
+        self._candidate_move_pub = self.create_publisher(
+            ChessMoveDetails,
+            self.parameters.candidate_move_topic,
+            latched_qos,
         )
         self._recover_service = self.create_service(
             Trigger,
@@ -204,11 +216,6 @@ class ChessMissionOrchestrator(Node):
         self._chess_set_fen_client = self.create_client(
             SetFen,
             self.parameters.chess_set_fen_srv,
-            callback_group=self._cb_group_client,
-        )
-        self._chess_set_candidate_move_client = self.create_client(
-            SetCandidateMove,
-            self.parameters.chess_set_candidate_move_srv,
             callback_group=self._cb_group_client,
         )
 
@@ -367,7 +374,14 @@ class ChessMissionOrchestrator(Node):
             callback_group=self._cb_group_client,
         )
 
-        # 6. Game Status Handler
+        # 6. Engine Client
+        engine_client = EngineClient(
+            self,
+            action_name=config.chess_compute_best_move_action,
+            callback_group=self._cb_group_client,
+        )
+
+        # 7. Game Status Handler
         game_status_handler = GameStatusHandler(
             node=self,
             config=config,
@@ -378,10 +392,11 @@ class ChessMissionOrchestrator(Node):
             finalize_turn_fn=self._finalize_turn_completed,
             dispatch_workflow_fn=self._dispatch_move_workflow,
             reset_obs_viewpoints_fn=obs_navigator.reset_tour,
+            engine_client=engine_client,
             on_robot_color_updated_cb=health_supervisor.set_robot_color,
         )
 
-        # 7. Move Workflow
+        # 8. Move Workflow
         move_workflow = MoveWorkflow(
             node=self,
             config=config,
@@ -401,6 +416,7 @@ class ChessMissionOrchestrator(Node):
             post_move_verifier=post_move_verifier,
             game_status_handler=game_status_handler,
             move_workflow=move_workflow,
+            engine_client=engine_client,
         )
 
 
@@ -410,6 +426,9 @@ class ChessMissionOrchestrator(Node):
         self._health_supervisor.destroy()
         self._move_sequencer.destroy()
         self._perception.destroy()
+        if self._engine_client is not None:
+            self._engine_client.destroy()
+            self._engine_client = None
         if self._system_reset_client is not None:
             self.destroy_client(self._system_reset_client)
             self._system_reset_client = None
@@ -419,9 +438,9 @@ class ChessMissionOrchestrator(Node):
         if self._chess_set_fen_client is not None:
             self.destroy_client(self._chess_set_fen_client)
             self._chess_set_fen_client = None
-        if self._chess_set_candidate_move_client is not None:
-            self.destroy_client(self._chess_set_candidate_move_client)
-            self._chess_set_candidate_move_client = None
+        if self._candidate_move_pub is not None:
+            self.destroy_publisher(self._candidate_move_pub)
+            self._candidate_move_pub = None
         if self._motion_client is not None:
             self._motion_client.destroy()
         return super().destroy_node()
@@ -536,6 +555,11 @@ class ChessMissionOrchestrator(Node):
     def post_move_verifier(self) -> PostMoveVerifier:
         """Reference to PostMoveVerifier subsystem."""
         return self._post_move_verifier
+
+    @property
+    def engine_client(self) -> EngineClient:
+        """Reference to EngineClient subsystem."""
+        return self._engine_client
 
 
     # ================= State Machine Management =================
@@ -712,19 +736,18 @@ class ChessMissionOrchestrator(Node):
         response.message = json.dumps({"fen": fen, "robot_color": robot_color})
         return response
 
-    def set_candidate_move(self, move_details: ChessMoveDetails | None) -> None:
-        """Call /chess/set_candidate_move asynchronously. Clears candidate if move_details is None."""
-        if self._chess_set_candidate_move_client is None:
+    def publish_candidate_move(
+        self, details: ChessMoveGoal | ChessMoveDetails | None
+    ) -> None:
+        """Publish candidate move goal to /chess/candidate_move (latched). Clears candidate if details is None."""
+        if details is None:
+            self._candidate_move_pub.publish(ChessMoveDetails())
             return
-        if not self._chess_set_candidate_move_client.service_is_ready():
-            self.get_logger().debug(
-                f"Candidate move service '{self.parameters.chess_set_candidate_move_srv}' not ready."
-            )
-            return
-        req = SetCandidateMove.Request()
-        if move_details is not None:
-            req.move = move_details
-        self._chess_set_candidate_move_client.call_async(req)
+        if isinstance(details, ChessMoveGoal):
+            msg = details.to_ros_move_details()
+        else:
+            msg = details
+        self._candidate_move_pub.publish(msg)
 
     def _handle_execute_collection_task_service(
         self,
@@ -748,9 +771,6 @@ class ChessMissionOrchestrator(Node):
 
         # Mark current FEN as processed to prevent re-dispatching from referee latched state
         self._game_status_handler.last_processed_fen = self._game_status_handler.latest_full_fen
-
-        # Set candidate move on ChessGameStateTracker so 2D and 3D visualizers show arrows immediately
-        self.set_candidate_move(mv)
 
         success, msg = self._move_workflow.dispatch_collection_task(details)
         response.success = success
@@ -850,9 +870,10 @@ class ChessMissionOrchestrator(Node):
         self._health_supervisor.cancel_recovery_timer()
         self._health_supervisor.set_operator_latched(False)
 
-        # Update robot color immediately in HealthSupervisor
+        # Update robot color immediately in HealthSupervisor and GameStatusHandler
         if res.robot_color:
             self._health_supervisor.set_robot_color(res.robot_color)
+            self._game_status_handler.set_robot_color(res.robot_color)
 
         self.clear_move_goals()
         self._game_status_handler.on_fen_imported(res.canonical_fen)
@@ -880,7 +901,7 @@ class ChessMissionOrchestrator(Node):
         """Reset verification state and transition FSM to await opponent move."""
         self._post_move_verifier.reset()
         self._last_interaction_pose = None
-        self.set_candidate_move(None)
+        self.clear_move_goals()
         self.transition_to(MacroMissionState.TURN_COMPLETED)
         self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
         self.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
@@ -962,7 +983,7 @@ class ChessMissionOrchestrator(Node):
             self._pending_recovery_move = None
             self._current_goal_move = None
             self._current_move_details = None
-        self.set_candidate_move(None)
+        self.publish_candidate_move(None)
 
     def set_last_interaction_pose(self, pose: PoseStamped | None) -> None:
         """Record base pose where last board manipulation occurred."""
@@ -975,7 +996,7 @@ class ChessMissionOrchestrator(Node):
     def _dispatch_move_workflow(
         self,
         uci_move: str,
-        move_details: ChessMoveDetails | None = None,
+        move_details: ChessMoveDetails | ChessMoveGoal | None = None,
     ) -> None:
         """Dispatch move feasibility check and execution pipeline."""
         self._move_workflow.dispatch_move_workflow(uci_move, move_details)
