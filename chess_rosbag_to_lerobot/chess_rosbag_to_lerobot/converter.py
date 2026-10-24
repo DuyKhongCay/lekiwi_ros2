@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 import shutil
@@ -357,6 +358,42 @@ def convert_one_bag(
     return _log_and_save_episode(bag_dir, frame_count, dropped_count, buffers, dataset)
 
 
+MANIFEST_FILE_NAME = "converted_bags.json"
+
+
+def _get_bag_identifier(ep_dir: Path, input_dir: Path) -> str:
+    """Compute unique namespaced identifier for an episode bag (e.g. 'chess_teleop_v6/episode_000001')."""
+    try:
+        rel = ep_dir.relative_to(input_dir)
+        return f"{input_dir.name}/{rel.as_posix()}"
+    except ValueError:
+        return f"{ep_dir.parent.name}/{ep_dir.name}"
+
+
+def _load_converted_manifest(target_path: Path) -> Set[str]:
+    """Load set of successfully converted bag directory names from dataset metadata."""
+    manifest_path = target_path / "meta" / MANIFEST_FILE_NAME
+    if manifest_path.is_file():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            return set(data.get("converted_bags", []))
+        except Exception as exc:
+            logger.warning("Could not read manifest at %s: %s", manifest_path, exc)
+            return set()
+    return set()
+
+
+def _save_converted_manifest(target_path: Path, converted_bags: Set[str]) -> None:
+    """Atomically persist successfully converted bag directory names to manifest."""
+    manifest_path = target_path / "meta" / MANIFEST_FILE_NAME
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "converted_bags": sorted(list(converted_bags)),
+        "count": len(converted_bags),
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def convert_all_bags(
     cfg: Config,
     input_dir: Path,
@@ -374,13 +411,49 @@ def convert_all_bags(
     if not episodes:
         raise RuntimeError(f"No valid rosbag episode directories found in {input_dir}")
 
+    target_path = output_dir if output_dir is not None else (Path.home() / ".cache" / "huggingface" / "lerobot" / repo_id)
+    dataset_exists = target_path.exists() and (target_path / "meta" / "info.json").exists()
+
+    if overwrite and target_path.exists():
+        logger.info("Removing existing dataset at %s (--overwrite)", target_path)
+        shutil.rmtree(target_path)
+        already_converted: Set[str] = set()
+    else:
+        already_converted = _load_converted_manifest(target_path)
+
+    def _is_already_converted(ep: Path) -> bool:
+        bag_id = _get_bag_identifier(ep, input_dir)
+        if bag_id in already_converted:
+            return True
+        # Backward compatibility: match legacy flat names only if whole manifest has no session slashes
+        if ep.name in already_converted and not any("/" in item for item in already_converted):
+            return True
+        return False
+
+    # Filter out already converted episodes when resuming
+    pending_episodes = [ep for ep in episodes if not _is_already_converted(ep)]
+
+    if not pending_episodes:
+        logger.info(
+            "All %d episode(s) in %s have already been successfully converted to %s. Nothing to do.",
+            len(episodes),
+            input_dir,
+            target_path,
+        )
+        return
+
     # Sort episodes deterministically: Task (MOVE, CLEAR, PICK, PLACE) -> Piece -> Color -> ID
-    episodes = sort_episodes(
-        episodes,
+    pending_episodes = sort_episodes(
+        pending_episodes,
         task_extractor=lambda ep: _extract_episode_task(ep, cfg.task),
     )
 
-    logger.info("Found %d episode(s) to convert in %s (sorted by task & piece)", len(episodes), input_dir)
+    logger.info(
+        "Total episodes found: %d | Already converted: %d | Pending conversion: %d (sorted by task & piece)",
+        len(episodes),
+        len(already_converted),
+        len(pending_episodes),
+    )
 
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -389,11 +462,6 @@ def convert_all_bags(
         raise ImportError(
             "LeRobot is required for dataset conversion. Please install lerobot or run in an environment with lerobot installed."
         ) from e
-
-    target_path = output_dir if output_dir is not None else (Path.home() / ".cache" / "huggingface" / "lerobot" / repo_id)
-    if overwrite and target_path.exists():
-        logger.info("Removing existing dataset at %s (--overwrite)", target_path)
-        shutil.rmtree(target_path)
 
     features = build_lerobot_features(cfg, use_videos=use_videos)
 
@@ -406,24 +474,34 @@ def convert_all_bags(
     else:
         rgb_encoder = None
 
-    dataset = LeRobotDataset.create(
-        repo_id=repo_id,
-        root=output_dir,
-        fps=cfg.fps,
-        robot_type=cfg.robot_type,
-        features=features,
-        use_videos=use_videos,
-        rgb_encoder=rgb_encoder,
-    )
+    if dataset_exists and not overwrite:
+        logger.info("Resuming existing LeRobot dataset at %s to append pending episodes", target_path)
+        dataset = LeRobotDataset.resume(
+            repo_id=repo_id,
+            root=target_path,
+            rgb_encoder=rgb_encoder,
+        )
+    else:
+        logger.info("Creating new LeRobot dataset at %s", target_path)
+        dataset = LeRobotDataset.create(
+            repo_id=repo_id,
+            root=output_dir,
+            fps=cfg.fps,
+            robot_type=cfg.robot_type,
+            features=features,
+            use_videos=use_videos,
+            rgb_encoder=rgb_encoder,
+        )
 
     active_allowed = set(allowed_task_types) if allowed_task_types is not None else set(cfg.include_task_types)
 
     t0 = time.perf_counter()
     total_frames = 0
     total_dropped = 0
+    newly_converted: Set[str] = set(already_converted)
 
-    for ep_idx, ep_dir in enumerate(episodes):
-        logger.info("[%d/%d] Converting episode: %s", ep_idx + 1, len(episodes), ep_dir.name)
+    for ep_idx, ep_dir in enumerate(pending_episodes):
+        logger.info("[%d/%d] Converting episode: %s", ep_idx + 1, len(pending_episodes), ep_dir.name)
         frames, dropped = convert_one_bag(
             ep_dir,
             cfg,
@@ -433,10 +511,16 @@ def convert_all_bags(
         )
         total_frames += frames
         total_dropped += dropped
+        if frames > 0:
+            bag_id = _get_bag_identifier(ep_dir, input_dir)
+            newly_converted.add(bag_id)
+            _save_converted_manifest(target_path, newly_converted)
 
     if total_frames > 0:
         logger.info("Finalizing LeRobot dataset...")
         dataset.finalize()
+    else:
+        logger.info("No new frames added to dataset.")
 
     if push_to_hub:
         logger.info("Pushing dataset to Hugging Face Hub: %s", repo_id)
@@ -444,9 +528,10 @@ def convert_all_bags(
 
     elapsed = time.perf_counter() - t0
     logger.info(
-        "Conversion finished in %.1fs: %d episodes, %d total frames, %d dropped (%.1f%%)",
+        "Conversion finished in %.1fs: %d pending processed (%d total in dataset), %d new frames, %d dropped (%.1f%%)",
         elapsed,
-        len(episodes),
+        len(pending_episodes),
+        len(newly_converted),
         total_frames,
         total_dropped,
         (100.0 * total_dropped / max(1, total_frames + total_dropped)),

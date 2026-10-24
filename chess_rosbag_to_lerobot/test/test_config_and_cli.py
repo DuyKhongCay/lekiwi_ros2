@@ -106,3 +106,38 @@ def test_convert_one_bag_skips_ambiguous_clear_via_value_error(caplog):
         assert dropped == 0
         assert any("Skipping episode" in rec.message and "Ambiguous CLEAR" in rec.message for rec in caplog.records)
 
+
+def test_manifest_save_and_load():
+    from chess_rosbag_to_lerobot.converter import _load_converted_manifest, _save_converted_manifest
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        target_path = Path(tmpdir)
+        # Empty when non-existent
+        assert _load_converted_manifest(target_path) == set()
+
+        # Save and reload
+        sample_bags = {"episode_000001", "episode_000002", "episode_000005"}
+        _save_converted_manifest(target_path, sample_bags)
+        loaded = _load_converted_manifest(target_path)
+        assert loaded == sample_bags
+
+        # Append and re-save
+        sample_bags.add("episode_000006")
+        _save_converted_manifest(target_path, sample_bags)
+        assert _load_converted_manifest(target_path) == sample_bags
+
+
+def test_get_bag_identifier():
+    from chess_rosbag_to_lerobot.converter import _get_bag_identifier
+
+    input_dir = Path("/data/ros_bag/chess_teleop_v6")
+    ep_dir = Path("/data/ros_bag/chess_teleop_v6/episode_000001")
+    assert _get_bag_identifier(ep_dir, input_dir) == "chess_teleop_v6/episode_000001"
+
+    # Different session directory with same episode subfolder name
+    input_dir_v7 = Path("/data/ros_bag/chess_teleop_v7")
+    ep_dir_v7 = Path("/data/ros_bag/chess_teleop_v7/episode_000001")
+    assert _get_bag_identifier(ep_dir_v7, input_dir_v7) == "chess_teleop_v7/episode_000001"
+    assert _get_bag_identifier(ep_dir, input_dir) != _get_bag_identifier(ep_dir_v7, input_dir_v7)
+
+
