@@ -18,6 +18,7 @@
 chessboard_2d_visualizer:
   ros__parameters:
     game_status_topic: "/chess/game_status"
+    candidate_move_topic: "/chess/candidate_move"
     raw_fen_topic: "/chess/raw_fen"
     board_2d_topic: "/chess/board_2d/compressed"
     jpeg_quality: 85

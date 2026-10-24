@@ -118,6 +118,9 @@ chess_mission_orchestrator:
   ros__parameters:
     # --- Mission Execution Settings ---
     navigation: true
+    record: false
+    robot_color: "white"
+    think_time_ms: 1000
     feasibility_timeout_sec: 5.0
     action_timeout_sec: 0.0
     readiness_timeout_sec: 1.0
@@ -134,6 +137,7 @@ chess_mission_orchestrator:
       nav_ready: "/system/nav_ready"
       grasp_ready: "/system/grasp_ready"
       game_status: "/chess/game_status"
+      candidate_move: "/chess/candidate_move"
       perception_context: "/perception_context"
       diagnostics: "/diagnostics"
 
@@ -143,7 +147,6 @@ chess_mission_orchestrator:
       import_fen: "/orchestrator/import_fen"
       export_fen: "/orchestrator/export_fen"
       chess_set_fen: "/chess/set_fen"
-      chess_set_candidate_move: "/chess/set_candidate_move"
       set_perception_context: "/orchestrator/set_perception_context"
       system_reset_readiness: "/system/reset_readiness"
       ekf_reset: "/ekf_filter_node_map/reset"
@@ -158,6 +161,7 @@ chess_mission_orchestrator:
     actions:
       navigate_to_pose: "/navigate_to_pose"
       execute_chess_move: "/manipulation/execute_chess_move"
+      chess_compute_best_move: "/chess/compute_best_move"
 
     # --- Active Observation & Vantage Point Settings ---
     observation:

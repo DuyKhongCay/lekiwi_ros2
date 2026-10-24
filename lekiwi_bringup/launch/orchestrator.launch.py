@@ -151,6 +151,7 @@ def generate_launch_description():
             {
                 "use_sim_time": use_sim_time,
                 "navigation": LaunchConfiguration("navigation"),
+                "record": LaunchConfiguration("record"),
             },
         ],
     )
