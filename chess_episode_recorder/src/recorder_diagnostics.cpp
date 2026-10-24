@@ -64,6 +64,9 @@ void RecorderDiagnostics::evaluate_campaign_status(
 
   stat.add("Campaign Mode", "ENABLED");
   stat.add("Campaign State", std::string(to_string(snapshot.campaign_state)));
+  stat.add("System Nav Ready", snapshot.is_system_ready ? "true" : "false");
+  stat.add("Board Synced", snapshot.is_board_synced ? "true" : "false");
+  stat.add("Board Stable", snapshot.is_board_stable ? "true" : "false");
 
   const double progress_pct = (snapshot.target_total_episodes > 0)
     ? (100.0 * static_cast<double>(snapshot.total_completed_episodes) /
@@ -78,8 +81,6 @@ void RecorderDiagnostics::evaluate_campaign_status(
     "Session Progress", "Session %u: %u / %u",
     snapshot.session_id, snapshot.episodes_in_session, snapshot.session_target_episodes);
 
-  stat.add("Board Stable", snapshot.board_is_stable ? "true" : "false");
-
   stat.addf("MOVE Quotas", "%u / %u", snapshot.completed_move, snapshot.target_move);
   stat.addf(
     "CLEAR Quotas", "%u / %u (L: %u, R: %u)",
@@ -89,13 +90,18 @@ void RecorderDiagnostics::evaluate_campaign_status(
   stat.addf("PLACE Quotas", "%u / %u", snapshot.completed_place, snapshot.target_place);
 
   if (snapshot.campaign_state == CampaignState::CAMPAIGN_FINISHED) {
-    stat.summary(
+    stat.summaryf(
       diagnostic_msgs::msg::DiagnosticStatus::OK,
-      "Campaign complete: target 600 episodes reached");
-  } else if (snapshot.campaign_state == CampaignState::IDLE_AWAITING_BOARD && !snapshot.board_is_stable) {
+      "Campaign complete: target %u episodes reached",
+      snapshot.target_total_episodes);
+  } else if (snapshot.campaign_state == CampaignState::WAITING_FOR_SYSTEM_READY) {
     stat.summary(
-      diagnostic_msgs::msg::DiagnosticStatus::OK,
-      "Campaign active: awaiting stable chessboard state");
+      diagnostic_msgs::msg::DiagnosticStatus::WARN,
+      "Waiting for system readiness (/system/nav_ready)");
+  } else if (!snapshot.is_board_synced) {
+    stat.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::WARN,
+      "Waiting for physical board synchronization (/chess/game_status)");
   } else {
     stat.summary(
       diagnostic_msgs::msg::DiagnosticStatus::OK,

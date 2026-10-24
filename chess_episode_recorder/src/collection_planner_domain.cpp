@@ -428,14 +428,15 @@ bool QuotaTracker::load_session_state(const std::filesystem::path &file_path)
 {
   if (!std::filesystem::exists(file_path)) {
     session_state_ = SessionState{};
+    active_board_ = chess::Board();
     return false;
   }
   try {
     YAML::Node node = YAML::LoadFile(file_path.string());
     if (node["session_id"]) session_state_.session_id = node["session_id"].as<uint32_t>();
     if (node["episodes_in_session"]) session_state_.episodes_in_session = node["episodes_in_session"].as<uint32_t>();
+    if (node["initial_fen"]) session_state_.initial_fen = node["initial_fen"].as<std::string>();
     if (node["active_fen"]) session_state_.active_fen = node["active_fen"].as<std::string>();
-    session_state_.is_active = !session_state_.active_fen.empty();
 
     session_state_.executed_moves.clear();
     if (node["executed_moves"] && node["executed_moves"].IsSequence()) {
@@ -443,10 +444,48 @@ bool QuotaTracker::load_session_state(const std::filesystem::path &file_path)
         session_state_.executed_moves.push_back(item.as<std::string>());
       }
     }
-    return true;
+    return reconstruct_session_board();
   } catch (...) {
     return false;
   }
+}
+
+bool QuotaTracker::reconstruct_session_board()
+{
+  if (session_state_.initial_fen.empty()) {
+    session_state_.initial_fen = session_state_.active_fen;
+  }
+  if (session_state_.initial_fen.empty()) {
+    session_state_.is_active = false;
+    active_board_ = chess::Board();
+    return false;
+  }
+
+  chess::Board temp_board;
+  if (!temp_board.setFen(session_state_.initial_fen)) {
+    session_state_.is_active = false;
+    return false;
+  }
+
+  for (const auto &uci : session_state_.executed_moves) {
+    chess::Move m = chess::uci::uciToMove(temp_board, uci);
+    if (m == chess::Move::NO_MOVE) {
+      session_state_.is_active = false;
+      return false;
+    }
+    chess::Movelist legal_moves;
+    chess::movegen::legalmoves(legal_moves, temp_board);
+    if (std::find(legal_moves.begin(), legal_moves.end(), m) == legal_moves.end()) {
+      session_state_.is_active = false;
+      return false;
+    }
+    temp_board.makeMove(m);
+  }
+
+  active_board_ = std::move(temp_board);
+  session_state_.active_fen = active_board_.getFen();
+  session_state_.is_active = true;
+  return true;
 }
 
 bool QuotaTracker::save_session_state(const std::filesystem::path &file_path) const
@@ -456,6 +495,7 @@ bool QuotaTracker::save_session_state(const std::filesystem::path &file_path) co
     out << YAML::BeginMap;
     out << YAML::Key << "session_id" << YAML::Value << session_state_.session_id;
     out << YAML::Key << "episodes_in_session" << YAML::Value << session_state_.episodes_in_session;
+    out << YAML::Key << "initial_fen" << YAML::Value << session_state_.initial_fen;
     out << YAML::Key << "active_fen" << YAML::Value << session_state_.active_fen;
 
     out << YAML::Key << "executed_moves" << YAML::Value << YAML::BeginSeq;
@@ -581,21 +621,59 @@ bool QuotaTracker::has_executed_move(const std::string &uci) const
                    uci) != session_state_.executed_moves.end();
 }
 
+void QuotaTracker::set_active_fen(const std::string &fen)
+{
+  session_state_.active_fen = fen;
+  session_state_.is_active = !fen.empty();
+  if (session_state_.initial_fen.empty()) {
+    session_state_.initial_fen = fen;
+  }
+  active_board_.setFen(fen);
+}
+
+bool QuotaTracker::apply_move(const std::string &uci)
+{
+  chess::Move m = chess::uci::uciToMove(active_board_, uci);
+  if (m == chess::Move::NO_MOVE) {
+    return false;
+  }
+  chess::Movelist legal_moves;
+  chess::movegen::legalmoves(legal_moves, active_board_);
+  if (std::find(legal_moves.begin(), legal_moves.end(), m) == legal_moves.end()) {
+    return false;
+  }
+  active_board_.makeMove(m);
+  session_state_.active_fen = active_board_.getFen();
+  session_state_.is_active = true;
+  record_executed_move(uci);
+  return true;
+}
+
+void QuotaTracker::set_session_state(const SessionState &state)
+{
+  session_state_ = state;
+  reconstruct_session_board();
+}
+
 void QuotaTracker::advance_session()
 {
   session_state_.session_id++;
   session_state_.episodes_in_session = 0;
+  session_state_.initial_fen.clear();
   session_state_.active_fen.clear();
   session_state_.is_active = false;
   session_state_.executed_moves.clear();
+  active_board_ = chess::Board();
 }
 
 void QuotaTracker::reset_session(const std::string &new_fen)
 {
   session_state_.episodes_in_session = 0;
+  session_state_.initial_fen = new_fen;
   session_state_.active_fen = new_fen;
   session_state_.is_active = !new_fen.empty();
   session_state_.executed_moves.clear();
+  active_board_.setFen(new_fen);
 }
 
 // ============================================================================

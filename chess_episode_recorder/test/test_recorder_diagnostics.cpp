@@ -120,7 +120,9 @@ TEST_F(RecorderDiagnosticsTest, CampaignStatusActiveAndFinished)
     RecorderDiagnosticsSnapshot snap;
     snap.enable_collection_planner = true;
     snap.campaign_state = CampaignState::DISPATCHED_TO_ORCH;
-    snap.board_is_stable = true;
+    snap.is_system_ready = true;
+    snap.is_board_synced = true;
+    snap.is_board_stable = true;
     snap.total_completed_episodes = 120;
     snap.target_total_episodes = 600;
     snap.session_id = 6;
@@ -152,7 +154,6 @@ TEST_F(RecorderDiagnosticsTest, CampaignStatusActiveAndFinished)
     EXPECT_EQ(values["Campaign State"], "DISPATCHED_TO_ORCH");
     EXPECT_EQ(values["Total Progress"], "120 / 600 (20.0%)");
     EXPECT_EQ(values["Session Progress"], "Session 6: 14 / 20");
-    EXPECT_EQ(values["Board Stable"], "true");
     EXPECT_EQ(values["MOVE Quotas"], "60 / 240");
     EXPECT_EQ(values["CLEAR Quotas"], "30 / 120 (L: 15, R: 15)");
     EXPECT_EQ(values["PICK Quotas"], "15 / 120");
@@ -175,6 +176,52 @@ TEST_F(RecorderDiagnosticsTest, CampaignStatusActiveAndFinished)
 
     EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::OK);
     EXPECT_TRUE(stat.message.find("target 600 episodes reached") != std::string::npos);
+  }
+
+  // 3. Waiting for System Readiness (/system/nav_ready)
+  {
+    RecorderDiagnosticsSnapshot snap;
+    snap.enable_collection_planner = true;
+    snap.campaign_state = CampaignState::WAITING_FOR_SYSTEM_READY;
+    snap.is_system_ready = false;
+
+    diagnostic_updater::DiagnosticStatusWrapper stat;
+    RecorderDiagnostics::evaluate_campaign_status(snap, stat);
+
+    EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
+    EXPECT_TRUE(stat.message.find("Waiting for system readiness") != std::string::npos);
+
+    std::map<std::string, std::string> values;
+    for (const auto &kv : stat.values) {
+      values[kv.key] = kv.value;
+    }
+    EXPECT_EQ(values["Campaign State"], "WAITING_FOR_SYSTEM_READY");
+    EXPECT_EQ(values["System Nav Ready"], "false");
+  }
+
+  // 4. Waiting for Physical Board Synchronization (/chess/game_status)
+  {
+    RecorderDiagnosticsSnapshot snap;
+    snap.enable_collection_planner = true;
+    snap.campaign_state = CampaignState::IDLE_READY;
+    snap.is_system_ready = true;
+    snap.is_board_synced = false;
+    snap.is_board_stable = false;
+
+    diagnostic_updater::DiagnosticStatusWrapper stat;
+    RecorderDiagnostics::evaluate_campaign_status(snap, stat);
+
+    EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
+    EXPECT_TRUE(stat.message.find("Waiting for physical board synchronization") != std::string::npos);
+
+    std::map<std::string, std::string> values;
+    for (const auto &kv : stat.values) {
+      values[kv.key] = kv.value;
+    }
+    EXPECT_EQ(values["Campaign State"], "IDLE_READY");
+    EXPECT_EQ(values["System Nav Ready"], "true");
+    EXPECT_EQ(values["Board Synced"], "false");
+    EXPECT_EQ(values["Board Stable"], "false");
   }
 }
 

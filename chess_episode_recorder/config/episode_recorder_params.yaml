@@ -14,9 +14,9 @@ episode_recorder_node:
     collection_config_path: ""
 
     # Service & Topic interfaces
+    nav_ready_topic: "/system/nav_ready"
     game_status_topic: "/chess/game_status"
     import_fen_service: "/orchestrator/import_fen"
-    export_fen_service: "/orchestrator/export_fen"
     check_feasibility_service: "/workspace/check_move_feasibility"
     execute_collection_task_service: "/orchestrator/execute_collection_task"
 
