@@ -24,7 +24,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/CheckMoveFeasibility.srv"
   "srv/GoToNamedPose.srv"
   "srv/SetFen.srv"
-  "srv/SetCandidateMove.srv"
   "srv/ExecuteCollectionTask.srv"
   "action/ComputeBestMove.action"
   "action/ExecuteChessMove.action"
