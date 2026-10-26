@@ -11,6 +11,8 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+from rcl_interfaces.msg import ParameterDescriptor
+
 if TYPE_CHECKING:
     from rclpy.node import Node
 
@@ -25,12 +27,16 @@ class OrchestratorParameters:
         """Declare and parse all orchestrator ROS 2 parameters from node handle."""
         node.declare_parameter("board_frame", "chessboard_frame")
         node.declare_parameter("map_frame", "map")
-        node.declare_parameter("feasibility_timeout_sec", 5.0)
+        node.declare_parameter("service_timeout_sec", 5.0)
         node.declare_parameter("action_timeout_sec", 60.0)
         node.declare_parameter("readiness_timeout_sec", 1.0)
         node.declare_parameter("chassis_settle_timeout_sec", 2.0)
-        node.declare_parameter("navigation", True)
-        node.declare_parameter("record", False)
+        node.declare_parameter(
+            "navigation", True, ParameterDescriptor(dynamic_typing=True)
+        )
+        node.declare_parameter(
+            "record", False, ParameterDescriptor(dynamic_typing=True)
+        )
         node.declare_parameter("robot_color", "white")
         node.declare_parameter("think_time_ms", 1000)
 
@@ -52,7 +58,7 @@ class OrchestratorParameters:
         node.declare_parameter("services.import_fen", "/orchestrator/import_fen")
         node.declare_parameter("services.export_fen", "/orchestrator/export_fen")
         node.declare_parameter(
-            "services.execute_collection_task",
+            "actions.execute_collection_task",
             "/orchestrator/execute_collection_task",
         )
         node.declare_parameter("services.chess_set_fen", "/chess/set_fen")
@@ -105,16 +111,26 @@ class OrchestratorParameters:
 
         self.board_frame = str(node.get_parameter("board_frame").value)
         self.map_frame = str(node.get_parameter("map_frame").value)
-        self.feasibility_timeout_sec = float(
-            node.get_parameter("feasibility_timeout_sec").value
+        self.service_timeout_sec = float(
+            node.get_parameter("service_timeout_sec").value
         )
         self.action_timeout_sec = float(node.get_parameter("action_timeout_sec").value)
         self.readiness_timeout_sec = readiness_to
         self.chassis_settle_timeout_sec = float(
             node.get_parameter("chassis_settle_timeout_sec").value
         )
-        self.navigation = bool(node.get_parameter("navigation").value)
-        self.record = bool(node.get_parameter("record").value)
+        raw_nav = node.get_parameter("navigation").value
+        self.navigation = (
+            str(raw_nav).strip().lower() in ("true", "1", "yes")
+            if isinstance(raw_nav, str)
+            else bool(raw_nav)
+        )
+        raw_record = node.get_parameter("record").value
+        self.record = (
+            str(raw_record).strip().lower() in ("true", "1", "yes")
+            if isinstance(raw_record, str)
+            else bool(raw_record)
+        )
         raw_color = str(node.get_parameter("robot_color").value).strip().lower()
         self.robot_color = "b" if raw_color in ("b", "black") else "w"
         self.think_time_ms = int(node.get_parameter("think_time_ms").value)
@@ -144,8 +160,8 @@ class OrchestratorParameters:
         self.recover_srv = str(node.get_parameter("services.recover").value)
         self.import_fen_srv = str(node.get_parameter("services.import_fen").value)
         self.export_fen_srv = str(node.get_parameter("services.export_fen").value)
-        self.execute_collection_task_srv = str(
-            node.get_parameter("services.execute_collection_task").value
+        self.execute_collection_task_action = str(
+            node.get_parameter("actions.execute_collection_task").value
         )
         self.chess_set_fen_srv = str(node.get_parameter("services.chess_set_fen").value)
         self.chess_compute_best_move_action = str(

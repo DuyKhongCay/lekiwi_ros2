@@ -71,13 +71,14 @@ class VisualizerConfig:
 _HUD_STATE_COLORS: dict[MacroMissionState, tuple[float, float, float, float]] = {
     MacroMissionState.BOOT_INITIALIZING: (1.0, 0.8, 0.0, 1.0),
     MacroMissionState.WAITING_FOR_TF_READY: (1.0, 0.8, 0.0, 1.0),
-    MacroMissionState.WAITING_FOR_PLAYER_MOVE: (0.2, 0.8, 1.0, 1.0),
+    MacroMissionState.WAITING_FOR_NEXT_MOVE: (0.2, 0.8, 1.0, 1.0),
     MacroMissionState.EVALUATING_BEST_MOVE: (0.95, 0.9, 0.2, 1.0),
     MacroMissionState.CHECKING_REACHABILITY: (0.95, 0.9, 0.2, 1.0),
     MacroMissionState.EXECUTING_MOVE_PIPELINE: (0.1, 1.0, 0.3, 1.0),
     MacroMissionState.TURN_COMPLETED: (0.0, 1.0, 0.8, 1.0),
     MacroMissionState.ERROR_FALLBACK: (1.0, 0.1, 0.1, 1.0),
     MacroMissionState.AWAITING_BOARD_SYNC: (1.0, 0.55, 0.0, 1.0),
+    MacroMissionState.RELOCALIZE: (0.2, 0.6, 1.0, 1.0),
 }
 _HUD_DEFAULT_COLOR: tuple[float, float, float, float] = (0.85, 0.85, 0.85, 1.0)
 
@@ -122,7 +123,7 @@ class StatusMarkerBuilder:
 
         if state in (MacroMissionState.BOOT_INITIALIZING, MacroMissionState.WAITING_FOR_TF_READY):
             return f"[{state_str}]\nWaiting for Nav Ready | Robot: {color_name}"
-        if state == MacroMissionState.WAITING_FOR_PLAYER_MOVE:
+        if state == MacroMissionState.WAITING_FOR_NEXT_MOVE:
             idle_nav = "Ready" if nav_ready else "Unready"
             return f"[IDLE] Waiting for Opponent\nRobot: {color_name} | Nav: {idle_nav}"
         if state in (
@@ -413,7 +414,12 @@ class HealthSupervisor:
             self.nav_ready = bool(msg.data)
 
             if self.nav_ready and (
-                not previous or state == MacroMissionState.WAITING_FOR_TF_READY
+                not previous
+                or state
+                in (
+                    MacroMissionState.WAITING_FOR_TF_READY,
+                    MacroMissionState.RELOCALIZE,
+                )
             ):
                 self._node.get_logger().info(
                     ">>> [ORCHESTRATOR] Navigation Ready confirmed! Base odometry/TF active."
@@ -653,7 +659,7 @@ class HealthSupervisor:
         success = self._on_reset_recovery_system_cb("operator service request")
         response.success = success
         response.message = (
-            "System recovered to WAITING_FOR_TF_READY"
+            "System recovered to RELOCALIZE"
             if success
             else f"Recovery failed from state: {MISSION_STATE_NAMES.get(state, 'UNKNOWN')}"
         )

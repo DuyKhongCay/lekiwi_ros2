@@ -28,7 +28,7 @@ class MacroMissionState(IntEnum):
 
     BOOT_INITIALIZING = 0
     WAITING_FOR_TF_READY = 1
-    WAITING_FOR_PLAYER_MOVE = 2
+    WAITING_FOR_NEXT_MOVE = 2
     EVALUATING_BEST_MOVE = 3
     CHECKING_REACHABILITY = 4
     EXECUTING_MOVE_PIPELINE = 5
@@ -37,12 +37,13 @@ class MacroMissionState(IntEnum):
     GAME_OVER = 8
     ERROR_FALLBACK = 9
     AWAITING_BOARD_SYNC = 10
+    RELOCALIZE = 11
 
 
 MISSION_STATE_NAMES: dict[MacroMissionState, str] = {
     MacroMissionState.BOOT_INITIALIZING: "BOOT_INITIALIZING",
     MacroMissionState.WAITING_FOR_TF_READY: "WAITING_FOR_TF_READY",
-    MacroMissionState.WAITING_FOR_PLAYER_MOVE: "WAITING_FOR_PLAYER_MOVE",
+    MacroMissionState.WAITING_FOR_NEXT_MOVE: "WAITING_FOR_NEXT_MOVE",
     MacroMissionState.EVALUATING_BEST_MOVE: "EVALUATING_BEST_MOVE",
     MacroMissionState.CHECKING_REACHABILITY: "CHECKING_REACHABILITY",
     MacroMissionState.EXECUTING_MOVE_PIPELINE: "EXECUTING_MOVE_PIPELINE",
@@ -51,17 +52,19 @@ MISSION_STATE_NAMES: dict[MacroMissionState, str] = {
     MacroMissionState.GAME_OVER: "GAME_OVER",
     MacroMissionState.ERROR_FALLBACK: "ERROR_FALLBACK",
     MacroMissionState.AWAITING_BOARD_SYNC: "AWAITING_BOARD_SYNC",
+    MacroMissionState.RELOCALIZE: "RELOCALIZE",
 }
 
 IMPORT_FEN_ALLOWED_STATES: frozenset[MacroMissionState] = frozenset(
     {
         MacroMissionState.WAITING_FOR_TF_READY,
-        MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+        MacroMissionState.WAITING_FOR_NEXT_MOVE,
         MacroMissionState.EVALUATING_BEST_MOVE,
         MacroMissionState.TURN_COMPLETED,
         MacroMissionState.GAME_OVER,
         MacroMissionState.ERROR_FALLBACK,
         MacroMissionState.AWAITING_BOARD_SYNC,
+        MacroMissionState.RELOCALIZE,
     }
 )
 
@@ -74,17 +77,17 @@ ALLOWED_MISSION_TRANSITIONS: dict[MacroMissionState, set[MacroMissionState]] = {
     },
     MacroMissionState.WAITING_FOR_TF_READY: {
         MacroMissionState.WAITING_FOR_TF_READY,
-        MacroMissionState.WAITING_FOR_PLAYER_MOVE,
-        MacroMissionState.EVALUATING_BEST_MOVE,  # Robot White plays first or recovering move
-        MacroMissionState.CHECKING_REACHABILITY,  # Direct move dispatch upon recovery
+        MacroMissionState.AWAITING_BOARD_SYNC,
+        MacroMissionState.RELOCALIZE,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
-    MacroMissionState.WAITING_FOR_PLAYER_MOVE: {
-        MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+    MacroMissionState.WAITING_FOR_NEXT_MOVE: {
+        MacroMissionState.WAITING_FOR_NEXT_MOVE,
         MacroMissionState.EVALUATING_BEST_MOVE,
+        MacroMissionState.CHECKING_REACHABILITY,
         MacroMissionState.AWAITING_BOARD_SYNC,
         MacroMissionState.GAME_OVER,
-        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
+        MacroMissionState.RELOCALIZE,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.EVALUATING_BEST_MOVE: {
@@ -92,54 +95,60 @@ ALLOWED_MISSION_TRANSITIONS: dict[MacroMissionState, set[MacroMissionState]] = {
         MacroMissionState.CHECKING_REACHABILITY,
         MacroMissionState.AWAITING_BOARD_SYNC,
         MacroMissionState.GAME_OVER,
-        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
+        MacroMissionState.RELOCALIZE,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.CHECKING_REACHABILITY: {
         MacroMissionState.CHECKING_REACHABILITY,
         MacroMissionState.EXECUTING_MOVE_PIPELINE,
-        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
+        MacroMissionState.RELOCALIZE,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.EXECUTING_MOVE_PIPELINE: {
         MacroMissionState.EXECUTING_MOVE_PIPELINE,
         MacroMissionState.POST_MOVE_VERIFYING,
         MacroMissionState.TURN_COMPLETED,
-        MacroMissionState.WAITING_FOR_TF_READY,
+        MacroMissionState.RELOCALIZE,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.POST_MOVE_VERIFYING: {
         MacroMissionState.POST_MOVE_VERIFYING,
         MacroMissionState.TURN_COMPLETED,
-        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
+        MacroMissionState.RELOCALIZE,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.TURN_COMPLETED: {
         MacroMissionState.TURN_COMPLETED,
-        MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+        MacroMissionState.WAITING_FOR_NEXT_MOVE,
         MacroMissionState.AWAITING_BOARD_SYNC,
         MacroMissionState.GAME_OVER,
-        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
+        MacroMissionState.RELOCALIZE,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.GAME_OVER: {
         MacroMissionState.GAME_OVER,
         MacroMissionState.BOOT_INITIALIZING,  # Reset game upon new match
         MacroMissionState.AWAITING_BOARD_SYNC,
-        MacroMissionState.WAITING_FOR_TF_READY,  # Operator manual recovery
+        MacroMissionState.RELOCALIZE,  # Operator manual recovery
     },
     MacroMissionState.ERROR_FALLBACK: {
         MacroMissionState.ERROR_FALLBACK,
         MacroMissionState.BOOT_INITIALIZING,
         MacroMissionState.AWAITING_BOARD_SYNC,
-        MacroMissionState.WAITING_FOR_TF_READY,
+        MacroMissionState.RELOCALIZE,
+    },
+    MacroMissionState.RELOCALIZE: {
+        MacroMissionState.RELOCALIZE,
+        MacroMissionState.AWAITING_BOARD_SYNC,
+        MacroMissionState.WAITING_FOR_NEXT_MOVE,
+        MacroMissionState.ERROR_FALLBACK,
     },
     MacroMissionState.AWAITING_BOARD_SYNC: {
         MacroMissionState.AWAITING_BOARD_SYNC,
-        MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+        MacroMissionState.WAITING_FOR_NEXT_MOVE,
         MacroMissionState.EVALUATING_BEST_MOVE,
         MacroMissionState.GAME_OVER,
-        MacroMissionState.WAITING_FOR_TF_READY,
+        MacroMissionState.RELOCALIZE,  # Operator manual recovery
         MacroMissionState.ERROR_FALLBACK,
     },
 }

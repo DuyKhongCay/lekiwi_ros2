@@ -929,7 +929,7 @@ def test_castling_workflow_two_feasibility_checks(ros_context):
 
     host_mock = MagicMock()
     host_mock.is_nav_ready = True
-    host_mock.mission_state = MacroMissionState.WAITING_FOR_PLAYER_MOVE
+    host_mock.mission_state = MacroMissionState.WAITING_FOR_NEXT_MOVE
     host_mock.transition_to.return_value = True
 
     obs_nav = ObsNavigator(
@@ -1129,5 +1129,168 @@ def test_explicit_branch_to_observation_api(ros_context):
         perception.destroy()
         dispatcher.destroy()
         node.destroy_node()
+
+
+def test_active_relocalization_on_manipulation_failure_success(ros_context):
+    """Verify that when manipulation fails (e.g. IK unsolvable), active relocalization is triggered and retried successfully."""
+    node = Node("test_manip_reloc_success_node")
+    nav_goals = []
+    manip_attempts = 0
+
+    class ManipFailOnceDispatcher(FakeMotionClient):
+        def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None) -> bool:
+            nav_goals.append(target_pose)
+            if on_completed:
+                on_completed(ActionResult(success=True, message="Nav ok"))
+            return True
+
+        def send_manipulation_goal(
+            self, goal, timeout_sec=60.0, on_feedback=None, on_completed=None
+        ) -> bool:
+            nonlocal manip_attempts
+            manip_attempts += 1
+            if manip_attempts == 1:
+                # First attempt fails (e.g. IK resolution failed due to mobile base docking drift)
+                if on_completed:
+                    on_completed(
+                        ActionResult(
+                            success=False,
+                            message="IK resolution failed for APPROACH_PICK in RECORD mode",
+                        )
+                    )
+                return True
+            # Second attempt (after relocalization and re-docking) succeeds
+            if on_completed:
+                on_completed(ActionResult(success=True, message="Episode saved"))
+            return True
+
+    dispatcher = ManipFailOnceDispatcher()
+    perception = PerceptionContextManager(
+        node=node,
+        perception_context_topic="/test/manip_reloc_succ/perception_context",
+        set_perception_service_name="/test/manip_reloc_succ/set_context",
+    )
+    obs_nav = ObsNavigator(
+        node=node,
+        dispatcher=dispatcher,
+        standoff_distance=0.65,
+    )
+    completed_events = []
+    failed_events = []
+
+    feedback_events = []
+    node.publish_collection_feedback = lambda stage, pct: feedback_events.append((stage, pct))
+
+    executor = MoveSequencer(
+        node=node,
+        dispatcher=dispatcher,
+        perception=perception,
+        chassis_settle_timeout_sec=0.01,
+        observation_navigator=obs_nav,
+        tf_buffer=create_mock_tf_buffer(),
+        max_recovery_attempts=2,
+        on_pipeline_completed=lambda: completed_events.append(True),
+        on_pipeline_failed=lambda err: failed_events.append(err),
+    )
+
+    try:
+        resp = CheckMoveFeasibility.Response()
+        resp.feasible = True
+        resp.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
+        resp.pick_base_pose.pose.position.x = 1.0
+        resp.pick_base_pose.header.frame_id = "map"
+        goal = ChessMoveGoal(uci="e2e4")
+        stages = MovePlanBuilder.build_steps(resp, goal)
+
+        executor.start_pipeline(stages)
+
+        assert len(failed_events) == 0, f"Expected zero failed events, got {failed_events}"
+        assert len(completed_events) == 1
+        assert manip_attempts == 2
+        assert len(feedback_events) >= 1
+        assert any("SELF_HEALING_RELOCALIZE" in fb[0] for fb in feedback_events)
+        # Nav goals sequence: [pick_standoff(1.0), relocalize_viewpoint(0.65), resume_pick_standoff(1.0)]
+        assert len(nav_goals) == 3
+        assert executor.stage_recovery_attempts == 0
+        assert executor.motion_state == MotionExecutionState.IDLE
+    finally:
+        perception.destroy()
+        dispatcher.destroy()
+        node.destroy_node()
+
+
+def test_active_relocalization_on_manipulation_failure_exhaustion(ros_context):
+    """Verify that when manipulation continuously fails, it exhausts max_recovery_attempts and fails safely."""
+    node = Node("test_manip_reloc_exhaust_node")
+    manip_attempts = 0
+
+    class ManipAlwaysFailDispatcher(FakeMotionClient):
+        def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None) -> bool:
+            if on_completed:
+                on_completed(ActionResult(success=True, message="Nav ok"))
+            return True
+
+        def send_manipulation_goal(
+            self, goal, timeout_sec=60.0, on_feedback=None, on_completed=None
+        ) -> bool:
+            nonlocal manip_attempts
+            manip_attempts += 1
+            if on_completed:
+                on_completed(
+                    ActionResult(
+                        success=False,
+                        message="JIT IK unsolvable for target in frame base_footprint",
+                    )
+                )
+            return True
+
+    dispatcher = ManipAlwaysFailDispatcher()
+    perception = PerceptionContextManager(
+        node=node,
+        perception_context_topic="/test/manip_reloc_exhaust/perception_context",
+        set_perception_service_name="/test/manip_reloc_exhaust/set_context",
+    )
+    obs_nav = ObsNavigator(
+        node=node,
+        dispatcher=dispatcher,
+        standoff_distance=0.65,
+    )
+    completed_events = []
+    failed_events = []
+
+    executor = MoveSequencer(
+        node=node,
+        dispatcher=dispatcher,
+        perception=perception,
+        chassis_settle_timeout_sec=0.01,
+        observation_navigator=obs_nav,
+        tf_buffer=create_mock_tf_buffer(),
+        max_recovery_attempts=2,
+        on_pipeline_completed=lambda: completed_events.append(True),
+        on_pipeline_failed=lambda err: failed_events.append(err),
+    )
+
+    try:
+        resp = CheckMoveFeasibility.Response()
+        resp.feasible = True
+        resp.plan_type = CheckMoveFeasibility.Response.PLAN_SINGLE_BASE
+        resp.pick_base_pose.pose.position.x = 1.0
+        resp.pick_base_pose.header.frame_id = "map"
+        goal = ChessMoveGoal(uci="e2e4")
+        stages = MovePlanBuilder.build_steps(resp, goal)
+
+        executor.start_pipeline(stages)
+
+        assert len(completed_events) == 0
+        assert len(failed_events) == 1
+        assert "Manipulation execution failed" in failed_events[0]
+        # Initial attempt + 2 recovery attempts = 3 total manipulation attempts
+        assert manip_attempts == 3
+        assert executor.motion_state == MotionExecutionState.IDLE
+    finally:
+        perception.destroy()
+        dispatcher.destroy()
+        node.destroy_node()
+
 
 

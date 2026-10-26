@@ -181,7 +181,12 @@ class ChessMoveGoal:
             return None
 
         norm_bypass = tuple(bypass_steps)
-        norm_bin = clear_bin_side.lower() if clear_bin_side else "right"
+        if isinstance(clear_bin_side, int):
+            norm_bin = "left" if clear_bin_side == 0 else "right"
+        elif isinstance(clear_bin_side, str) and clear_bin_side:
+            norm_bin = clear_bin_side.lower()
+        else:
+            norm_bin = "right"
 
         p_type = "pawn"
         p_color = "w"

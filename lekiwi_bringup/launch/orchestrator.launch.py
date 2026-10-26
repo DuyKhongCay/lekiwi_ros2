@@ -4,16 +4,16 @@
 """Launch file for LeKiwi mission orchestration and readiness management.
 
 Starts system readiness monitoring, workspace kinematics feasibility checks,
-and arm manipulation action server inside a multi-threaded composable container,
-alongside the central autonomous chess mission conductor node.
+arm manipulation action server, and episode recorder inside a unified
+multi-threaded composable container, alongside the central autonomous chess
+mission conductor node and policy inference client.
 """
 
-from launch.conditions import UnlessCondition
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
-from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
+from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
 
@@ -32,12 +32,20 @@ def generate_launch_description():
     inference_client_params_file = PathJoinSubstitution(
         [bringup_share, "config", "control", "async_inference_cilent.yaml"]
     )
+    default_recorder_params_file = PathJoinSubstitution(
+        [bringup_share, "config", "control", "episode_recorder.yaml"]
+    )
 
     # 2. Declare launch arguments
     params_file_arg = DeclareLaunchArgument(
         "params_file",
         default_value=default_params_file,
         description="Path to orchestrator configuration parameters YAML file",
+    )
+    recorder_params_file_arg = DeclareLaunchArgument(
+        "recorder_params_file",
+        default_value=default_recorder_params_file,
+        description="Path to episode recorder configuration parameters YAML file",
     )
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
@@ -49,7 +57,6 @@ def generate_launch_description():
         default_value="true",
         description="Whether mobile base navigation (Nav2) is active",
     )
-
     manipulation_arg = DeclareLaunchArgument(
         "manipulation",
         default_value="policy",
@@ -61,54 +68,41 @@ def generate_launch_description():
     record_arg = DeclareLaunchArgument(
         "record",
         default_value="false",
-        description="Trigger record mode of manipulation action server.",
+        description="Trigger record mode of manipulation action server and episode recorder.",
     )
 
     params_file = LaunchConfiguration("params_file")
     use_sim_time = LaunchConfiguration("use_sim_time")
 
-    # 3. Define multi-threaded composable container for C++ motion/supervision nodes
-    orchestrator_container = ComposableNodeContainer(
-        name="lekiwi_orchestrator_container",
-        namespace="",
-        package="rclcpp_components",
-        executable="component_container_mt",
-        composable_node_descriptions=[
-            ComposableNode(
-                package="lekiwi_motion",
-                plugin="lekiwi_motion::SystemReadinessNode",
-                name="system_readiness_node",
-                parameters=[params_file, {"use_sim_time": use_sim_time}],
-                extra_arguments=[{"use_intra_process_comms": True}],
-            ),
-            ComposableNode(
-                package="lekiwi_motion",
-                plugin="lekiwi_motion::WorkspaceCheckerNode",
-                name="workspace_checker",
-                parameters=[params_file, {"use_sim_time": use_sim_time}],
-                extra_arguments=[{"use_intra_process_comms": True}],
-            ),
-        ],
-        output="screen",
+    # 3. Configure composable motion, supervision, and recorder components
+    system_readiness_component = ComposableNode(
+        package="lekiwi_motion",
+        plugin="lekiwi_motion::SystemReadinessNode",
+        name="system_readiness_node",
+        parameters=[params_file, {"use_sim_time": use_sim_time}],
+        extra_arguments=[{"use_intra_process_comms": True}],
     )
 
-    # 4. Conditionally load manipulation action server component
-    load_manipulation_action = LoadComposableNodes(
-        target_container=orchestrator_container,
-        composable_node_descriptions=[
-            ComposableNode(
-                package="lekiwi_motion",
-                plugin="lekiwi_motion::ManipulationActionServer",
-                name="manipulation_action_server",
-                parameters=[
-                    params_file,
-                    {
-                        "use_sim_time": use_sim_time,
-                        "record": LaunchConfiguration("record"),
-                     }],
-                extra_arguments=[{"use_intra_process_comms": True}],
-            )
+    workspace_checker_component = ComposableNode(
+        package="lekiwi_motion",
+        plugin="lekiwi_motion::WorkspaceCheckerNode",
+        name="workspace_checker",
+        parameters=[params_file, {"use_sim_time": use_sim_time}],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
+    manipulation_action_component = ComposableNode(
+        package="lekiwi_motion",
+        plugin="lekiwi_motion::ManipulationActionServer",
+        name="manipulation_action_server",
+        parameters=[
+            params_file,
+            {
+                "use_sim_time": use_sim_time,
+                "record": LaunchConfiguration("record"),
+            },
         ],
+        extra_arguments=[{"use_intra_process_comms": True}],
         condition=IfCondition(
             PythonExpression(
                 [
@@ -116,6 +110,43 @@ def generate_launch_description():
                 ]
             )
         ),
+    )
+
+    episode_recorder_component = ComposableNode(
+        package="chess_episode_recorder",
+        plugin="chess_episode_recorder::EpisodeRecorderNode",
+        name="episode_recorder_node",
+        parameters=[
+            LaunchConfiguration("recorder_params_file"),
+            {
+                "use_sim_time": use_sim_time,
+            },
+        ],
+        extra_arguments=[{"use_intra_process_comms": True}],
+        condition=IfCondition(
+            PythonExpression(
+                [
+                    "'", LaunchConfiguration("record"), "'.lower() in ['true', '1']"
+                ]
+            )
+        ),
+    )
+
+    all_orchestrator_components = [
+        system_readiness_component,
+        workspace_checker_component,
+        manipulation_action_component,
+        episode_recorder_component,
+    ]
+
+    # 4. Assemble multi-threaded composable component container
+    orchestrator_container = ComposableNodeContainer(
+        name="lekiwi_orchestrator_container",
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_mt",
+        composable_node_descriptions=all_orchestrator_components,
+        output="screen",
     )
 
     # 5. Conditionally start async policy inference client node (Phase 1: Async ZeroMQ)
@@ -160,12 +191,12 @@ def generate_launch_description():
     return LaunchDescription(
         [
             params_file_arg,
+            recorder_params_file_arg,
             use_sim_time_arg,
             navigation_arg,
             manipulation_arg,
             record_arg,
             orchestrator_container,
-            load_manipulation_action,
             async_inference_client_node,
             chess_mission_node,
         ]

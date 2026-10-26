@@ -23,6 +23,7 @@ from typing import Any
 import rclpy
 import tf2_ros
 from geometry_msgs.msg import PoseStamped
+from lekiwi_interfaces.action import ExecuteCollectionTask
 from lekiwi_interfaces.msg import (
     ChessGameStatus,
     ChessMoveDetails,
@@ -30,9 +31,10 @@ from lekiwi_interfaces.msg import (
 )
 from lekiwi_interfaces.srv import (
     CheckMoveFeasibility,
-    ExecuteCollectionTask,
     SetFen,
 )
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.action.server import ServerGoalHandle
 from rclpy.callback_groups import (
     MutuallyExclusiveCallbackGroup,
     ReentrantCallbackGroup,
@@ -128,6 +130,14 @@ class ChessMissionOrchestrator(Node):
         self._cb_group_sub = MutuallyExclusiveCallbackGroup()
         self._cb_group_client = ReentrantCallbackGroup()
 
+        # Collection Task Action Coordination
+        self._execute_collection_task_server: ActionServer | None = None
+        self._collection_server_lock = threading.Lock()
+        self._active_collection_goal_handle: ServerGoalHandle | None = None
+        self._collection_goal_lock = threading.Lock()
+        self._collection_completion_event = threading.Event()
+        self._collection_result: ExecuteCollectionTask.Result | None = None
+
         # Wire Subsystems via Dependency Injection
         self._subsystems = self._wire_subsystems(motion_client)
         self._perception = self._subsystems.perception
@@ -149,7 +159,7 @@ class ChessMissionOrchestrator(Node):
         game_status_qos = QoSProfile(
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self._nav_ready_sub = self.create_subscription(
             Bool,
@@ -189,28 +199,23 @@ class ChessMissionOrchestrator(Node):
             self._handle_import_fen_service,
             callback_group=self._cb_group_client,
         )
+        self._set_fen_service = self.create_service(
+            SetFen,
+            "~/set_fen",
+            self._handle_import_fen_service,
+            callback_group=self._cb_group_client,
+        )
         self._export_fen_service = self.create_service(
             Trigger,
             self.parameters.export_fen_srv,
             self._handle_export_fen_service,
             callback_group=self._cb_group_client,
         )
-        self._execute_collection_task_service = self.create_service(
-            ExecuteCollectionTask,
-            self.parameters.execute_collection_task_srv,
-            self._handle_execute_collection_task_service,
-            callback_group=self._cb_group_client,
-        )
 
-        # Service clients for system, EKF reset, and chess engine FEN configuration
+        # Service clients for system reset and chess engine FEN configuration
         self._system_reset_client = self.create_client(
             Trigger,
             self.parameters.system_reset_readiness_srv,
-            callback_group=self._cb_group_client,
-        )
-        self._ekf_reset_client = self.create_client(
-            Empty,
-            self.parameters.ekf_reset_srv,
             callback_group=self._cb_group_client,
         )
         self._chess_set_fen_client = self.create_client(
@@ -358,6 +363,7 @@ class ChessMissionOrchestrator(Node):
             callback_group=self._cb_group_client,
             observation_navigator=obs_navigator,
             tf_buffer=self._tf_buffer,
+            max_recovery_attempts=config.max_recovery_attempts,
         )
 
         # 5. Post-Move Verifier
@@ -432,12 +438,15 @@ class ChessMissionOrchestrator(Node):
         if self._system_reset_client is not None:
             self.destroy_client(self._system_reset_client)
             self._system_reset_client = None
-        if self._ekf_reset_client is not None:
-            self.destroy_client(self._ekf_reset_client)
-            self._ekf_reset_client = None
         if self._chess_set_fen_client is not None:
             self.destroy_client(self._chess_set_fen_client)
             self._chess_set_fen_client = None
+        if hasattr(self, "_set_fen_service") and self._set_fen_service is not None:
+            self.destroy_service(self._set_fen_service)
+            self._set_fen_service = None
+        if hasattr(self, "_import_fen_service") and self._import_fen_service is not None:
+            self.destroy_service(self._import_fen_service)
+            self._import_fen_service = None
         if self._candidate_move_pub is not None:
             self.destroy_publisher(self._candidate_move_pub)
             self._candidate_move_pub = None
@@ -605,7 +614,7 @@ class ChessMissionOrchestrator(Node):
                 self._post_move_verifier.stop()
 
             if target_state in (
-                MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+                MacroMissionState.WAITING_FOR_NEXT_MOVE,
                 MacroMissionState.TURN_COMPLETED,
             ):
                 self._health_supervisor.reset_recovery_attempts()
@@ -619,6 +628,12 @@ class ChessMissionOrchestrator(Node):
             self._move_sequencer.cancel()
         if schedule_recovery:
             self._health_supervisor.schedule_auto_recovery_if_enabled()
+
+        # Manage collection action server: activate once when ready, keep alive continuously across runtime state transitions
+        if target_state != MacroMissionState.WAITING_FOR_TF_READY:
+            self._activate_collection_action_server()
+        else:
+            self._deactivate_collection_action_server()
 
         return True
 
@@ -664,38 +679,18 @@ class ChessMissionOrchestrator(Node):
         self._move_sequencer.cancel()
         self.transition_to(MacroMissionState.ERROR_FALLBACK)
 
-    def _call_reset_services(self) -> None:
-        """Invoke /system/reset_readiness and /ekf_filter_node_map/reset asynchronously."""
-        if self._system_reset_client is not None:
-            if self._system_reset_client.service_is_ready():
-                req = Trigger.Request()
-                self._system_reset_client.call_async(req)
-            else:
-                self.get_logger().warn(
-                    f"[RECOVERY] Reset readiness service '{self.parameters.system_reset_readiness_srv}' not available yet"
-                )
-
-        if self._ekf_reset_client is not None:
-            if self._ekf_reset_client.service_is_ready():
-                req = Empty.Request()
-                self._ekf_reset_client.call_async(req)
-            else:
-                self.get_logger().warn(
-                    f"[RECOVERY] EKF reset service '{self.parameters.ekf_reset_srv}' not available yet"
-                )
-
     def trigger_recovery(self, reason: str = "manual") -> bool:
-        """Recover from any state safely to WAITING_FOR_TF_READY.
+        """Recover from any state safely to RELOCALIZE.
 
         Preserves any interrupted move goal for automatic resumption once navigation recovers.
         Resets motion client goals, pipeline sequencers, and camera context.
-        Calls system readiness and EKF filter reset services asynchronously.
+        Calls system readiness reset service asynchronously to clear uncommanded motion latches.
 
         Args:
             reason: Diagnostic string explaining why recovery was triggered.
 
         Returns:
-            True if system successfully transitioned to WAITING_FOR_TF_READY, False otherwise.
+            True if system successfully transitioned to RELOCALIZE, False otherwise.
         """
         with self._state_lock:
             self._preserve_interrupted_move_locked(
@@ -708,12 +703,39 @@ class ChessMissionOrchestrator(Node):
             self._motion_client.cancel_active_goal()
         self._move_sequencer.cancel()
 
+        # Abort active collection task goal handle cleanly if running
+        with self._collection_goal_lock:
+            if (
+                self._active_collection_goal_handle is not None
+                and self._active_collection_goal_handle.is_active
+            ):
+                res = ExecuteCollectionTask.Result()
+                res.success = False
+                res.final_fen = self._game_status_handler.latest_full_fen or ""
+                res.message = f"Interrupted by recovery ({reason})"
+                self._collection_result = res
+                try:
+                    self._active_collection_goal_handle.abort()
+                except Exception:
+                    pass
+                self._active_collection_goal_handle = None
+                self._collection_completion_event.set()
+
         self.get_logger().info(
-            f"[RECOVERY] Resetting system state ({reason}). Transitioning to WAITING_FOR_TF_READY."
+            f"[RECOVERY] Resetting system state ({reason}). Transitioning to RELOCALIZE."
         )
-        self._call_reset_services()
+
+        if self._system_reset_client is not None:
+            if self._system_reset_client.service_is_ready():
+                req = Trigger.Request()
+                self._system_reset_client.call_async(req)
+            else:
+                self.get_logger().warn(
+                    f"[RECOVERY] Reset readiness service '{self.parameters.system_reset_readiness_srv}' not available yet"
+                )
+
         self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
-        success = self.transition_to(MacroMissionState.WAITING_FOR_TF_READY)
+        success = self.transition_to(MacroMissionState.RELOCALIZE)
         return success
 
     def _handle_recover_service(
@@ -749,33 +771,155 @@ class ChessMissionOrchestrator(Node):
             msg = details
         self._candidate_move_pub.publish(msg)
 
-    def _handle_execute_collection_task_service(
-        self,
-        request: ExecuteCollectionTask.Request,
-        response: ExecuteCollectionTask.Response,
-    ) -> ExecuteCollectionTask.Response:
-        """Handle collection task dispatch from episode recorder."""
-        mv = request.move
+    def _activate_collection_action_server(self) -> None:
+        """Instantiate and activate ExecuteCollectionTask action server once TF and navigation are confirmed ready."""
+        with self._collection_server_lock:
+            if self._execute_collection_task_server is not None:
+                return
+            self._execute_collection_task_server = ActionServer(
+                self,
+                ExecuteCollectionTask,
+                self.parameters.execute_collection_task_action,
+                execute_callback=self._execute_collection_task_callback,
+                goal_callback=self._collection_task_goal_callback,
+                cancel_callback=self._collection_task_cancel_callback,
+                callback_group=self._cb_group_client,
+            )
+            self.get_logger().info(
+                f"Activated collection task action server on '{self.parameters.execute_collection_task_action}'"
+            )
+
+    def _deactivate_collection_action_server(self) -> None:
+        """Destroy collection task action server when reverting to WAITING_FOR_TF_READY or shutting down."""
+        with self._collection_server_lock:
+            if self._execute_collection_task_server is None:
+                return
+            self._execute_collection_task_server.destroy()
+            self._execute_collection_task_server = None
+            self.get_logger().info(
+                f"Deactivated collection task action server on '{self.parameters.execute_collection_task_action}'"
+            )
+
+    def _collection_task_goal_callback(
+        self, goal_request: ExecuteCollectionTask.Goal
+    ) -> GoalResponse:
+        """Evaluate incoming collection task goal for acceptance or rejection based on FSM safety policy."""
+        with self._state_lock:
+            cur_state = self.mission_state
+            is_ready = self.is_nav_ready
+
+        if (
+            cur_state in (
+                MacroMissionState.BOOT_INITIALIZING,
+                MacroMissionState.WAITING_FOR_TF_READY,
+                MacroMissionState.AWAITING_BOARD_SYNC,
+                MacroMissionState.RELOCALIZE,
+                MacroMissionState.ERROR_FALLBACK,
+                MacroMissionState.GAME_OVER,
+            )
+            or not is_ready
+        ):
+            self.get_logger().warn(
+                f"Rejected collection task goal: Robot in {cur_state.name} (nav_ready={is_ready})"
+            )
+            return GoalResponse.REJECT
+
+        with self._collection_goal_lock:
+            if self._active_collection_goal_handle is not None and self._active_collection_goal_handle.is_active:
+                self.get_logger().warn(
+                    "Rejected collection task goal: Another collection task is currently active"
+                )
+                return GoalResponse.REJECT
+
+        return GoalResponse.ACCEPT
+
+    def _collection_task_cancel_callback(
+        self, goal_handle: ServerGoalHandle
+    ) -> CancelResponse:
+        """Handle goal cancellation request from action client."""
+        self.get_logger().info("Received cancellation request for active collection task.")
+        if self._motion_client is not None:
+            self._motion_client.cancel_active_goal()
+        self._move_sequencer.cancel()
+        return CancelResponse.ACCEPT
+
+    def publish_collection_feedback(self, stage: str, percent: float) -> None:
+        """Publish feedback progress to active collection task client."""
+        with self._collection_goal_lock:
+            if self._active_collection_goal_handle is not None and self._active_collection_goal_handle.is_active:
+                fb = ExecuteCollectionTask.Feedback()
+                fb.current_stage = stage
+                fb.progress_percent = percent
+                self._active_collection_goal_handle.publish_feedback(fb)
+
+    def _execute_collection_task_callback(
+        self, goal_handle: ServerGoalHandle
+    ) -> ExecuteCollectionTask.Result:
+        """Execute the collection task asynchronously while publishing feedback and awaiting turn completion."""
+        self._collection_completion_event.clear()
+        self._collection_result = None
+
+        with self._collection_goal_lock:
+            self._active_collection_goal_handle = goal_handle
+
+        mv = goal_handle.request.move
         details = ChessMoveGoal.from_uci_or_details(
             uci_move=mv.uci,
             move_details=mv,
-            force_pick_place=request.force_pick_place,
-            clear_bin_side=request.clear_bin_side,
-            bypass_steps=request.bypass_steps,
+            force_pick_place=goal_handle.request.force_pick_place,
+            clear_bin_side=goal_handle.request.clear_bin_side,
+            bypass_steps=goal_handle.request.bypass_steps,
         )
         if details is None:
-            response.success = False
-            response.message = f"Invalid move details: uci='{mv.uci}'"
-            self.get_logger().error(response.message)
-            return response
+            goal_handle.abort()
+            with self._collection_goal_lock:
+                self._active_collection_goal_handle = None
+            res = ExecuteCollectionTask.Result()
+            res.success = False
+            res.message = f"Invalid move details: uci='{mv.uci}'"
+            self.get_logger().error(res.message)
+            return res
 
         # Mark current FEN as processed to prevent re-dispatching from referee latched state
         self._game_status_handler.last_processed_fen = self._game_status_handler.latest_full_fen
 
+        # Initial feedback
+        self.publish_collection_feedback("CHECKING_REACHABILITY", 10.0)
+
         success, msg = self._move_workflow.dispatch_collection_task(details)
-        response.success = success
-        response.message = msg
-        return response
+        if not success:
+            goal_handle.abort()
+            with self._collection_goal_lock:
+                self._active_collection_goal_handle = None
+            res = ExecuteCollectionTask.Result()
+            res.success = False
+            res.message = msg
+            self.get_logger().error(f"Failed to dispatch collection task: {msg}")
+            return res
+
+        # Wait for move pipeline and verification to finish or abort
+        while rclpy.ok() and not self._collection_completion_event.wait(timeout=0.2):
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                with self._collection_goal_lock:
+                    self._active_collection_goal_handle = None
+                res = ExecuteCollectionTask.Result()
+                res.success = False
+                res.final_fen = self._game_status_handler.latest_full_fen or ""
+                res.message = "Collection task was canceled"
+                return res
+
+        res = self._collection_result or ExecuteCollectionTask.Result(
+            success=False, message="Pipeline terminated with unknown result"
+        )
+        with self._collection_goal_lock:
+            if res.success:
+                goal_handle.succeed()
+            else:
+                goal_handle.abort()
+            self._active_collection_goal_handle = None
+
+        return res
 
     def _handle_import_fen_service(
         self, request: SetFen.Request, response: SetFen.Response
@@ -846,7 +990,7 @@ class ChessMissionOrchestrator(Node):
                 done_event.set()
 
         future.add_done_callback(_on_done)
-        timeout_sec = self.parameters.action_timeout_sec
+        timeout_sec = self.parameters.service_timeout_sec
         if not done_event.wait(timeout=timeout_sec):
             response.success = False
             response.message = f"Timed out waiting for chess set_fen service after {timeout_sec:.1f}s"
@@ -883,7 +1027,7 @@ class ChessMissionOrchestrator(Node):
         else:
             self.get_logger().info(
                 f"[IMPORT FEN] FEN '{res.canonical_fen}' imported during WAITING_FOR_TF_READY. "
-                "Will transition to WAITING_FOR_PLAYER_MOVE once Navigation is confirmed ready."
+                "Will transition to AWAITING_BOARD_SYNC once Navigation is confirmed ready."
             )
 
         response.success = True
@@ -899,12 +1043,22 @@ class ChessMissionOrchestrator(Node):
 
     def _finalize_turn_completed(self) -> None:
         """Reset verification state and transition FSM to await opponent move."""
+        # Complete active collection task action goal if in progress
+        with self._collection_goal_lock:
+            if self._active_collection_goal_handle is not None and self._active_collection_goal_handle.is_active:
+                res = ExecuteCollectionTask.Result()
+                res.success = True
+                res.final_fen = self._game_status_handler.latest_full_fen or ""
+                res.message = "Move successfully executed and verified"
+                self._collection_result = res
+                self._collection_completion_event.set()
+
         self._post_move_verifier.reset()
         self._last_interaction_pose = None
         self.clear_move_goals()
         self.transition_to(MacroMissionState.TURN_COMPLETED)
         self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
-        self.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+        self.transition_to(MacroMissionState.WAITING_FOR_NEXT_MOVE)
         self.get_logger().info(
             ">>> Turn finalized successfully. Waiting for opponent move."
         )
@@ -920,8 +1074,8 @@ class ChessMissionOrchestrator(Node):
     def _on_nav_ready_confirmed(self, is_ready: bool = True) -> None:
         """Handle confirmed navigation readiness transition.
 
-        Resumes pending interrupted move if recovering from fault, otherwise transitions
-        to initial game state based on assigned robot color.
+        Transitions to AWAITING_BOARD_SYNC to verify the physical chessboard
+        matches the active FEN before opening player move or robot evaluation.
 
         Args:
             is_ready: Readiness status flag confirmed by HealthSupervisor.
@@ -930,26 +1084,13 @@ class ChessMissionOrchestrator(Node):
             return
 
         with self._state_lock:
-            if self._mission_state != MacroMissionState.WAITING_FOR_TF_READY:
+            if self._mission_state not in (
+                MacroMissionState.WAITING_FOR_TF_READY,
+                MacroMissionState.RELOCALIZE,
+            ):
                 return
-            pending_goal = self._pending_recovery_move
 
-        if pending_goal is not None:
-            self.get_logger().info(
-                f"[RECOVERY RESUME] Resuming interrupted move '{pending_goal.uci}' "
-                "after navigation/TF confirmed ready."
-            )
-            self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
-            if self.transition_to(MacroMissionState.EVALUATING_BEST_MOVE):
-                with self._state_lock:
-                    self._pending_recovery_move = None
-                self._dispatch_move_workflow(
-                    pending_goal.uci, move_details=pending_goal
-                )
-            return
-
-        initial_state = MacroMissionState.WAITING_FOR_PLAYER_MOVE
-        self.transition_to(initial_state)
+        self.transition_to(MacroMissionState.AWAITING_BOARD_SYNC)
         self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
 
     def _on_game_status(self, msg: ChessGameStatus) -> None:
@@ -985,6 +1126,11 @@ class ChessMissionOrchestrator(Node):
             self._current_move_details = None
         self.publish_candidate_move(None)
 
+    def clear_recovery_move(self) -> None:
+        """Clear pending recovery move goal under state lock."""
+        with self._state_lock:
+            self._pending_recovery_move = None
+
     def set_last_interaction_pose(self, pose: PoseStamped | None) -> None:
         """Record base pose where last board manipulation occurred."""
         self._last_interaction_pose = pose
@@ -1017,12 +1163,25 @@ class ChessMissionOrchestrator(Node):
 
     def _on_move_pipeline_failed(self, error_msg: str) -> None:
         """Handle failure in move execution pipeline."""
+        with self._collection_goal_lock:
+            if self._active_collection_goal_handle is not None and self._active_collection_goal_handle.is_active:
+                res = ExecuteCollectionTask.Result()
+                res.success = False
+                res.final_fen = self._game_status_handler.latest_full_fen or ""
+                res.message = error_msg
+                self._collection_result = res
+                self._collection_completion_event.set()
         self._move_workflow.on_move_pipeline_failed(error_msg)
 
     def publish_diagnostics_snapshot(self) -> None:
         """Delegate diagnostic snapshot to health supervisor."""
         snapshot = self._get_orchestrator_snapshot()
         self._health_supervisor.publish_diagnostics(snapshot)
+
+    def destroy_node(self) -> bool:
+        """Clean up action server and ROS interfaces."""
+        self._deactivate_collection_action_server()
+        return super().destroy_node()
 
 
 def main(args: Any = None) -> None:

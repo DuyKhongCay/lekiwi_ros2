@@ -149,7 +149,7 @@ class GameStatusHandler:
             if self._get_mission_state() != MacroMissionState.AWAITING_BOARD_SYNC:
                 return False
 
-        if not msg.is_board_synced or not msg.is_board_stable:
+        if not msg.is_board_synced:
             return True
 
         # Physical board layout confirmed stable and matches imported FEN!
@@ -160,10 +160,29 @@ class GameStatusHandler:
         if self.handle_game_over_if_ended(msg):
             return True
 
+        # Check if there is an interrupted recovery move pending execution
+        pending_move = getattr(self._node, "pending_recovery_move", None)
+        if pending_move is not None:
+            if self._config.record:
+                # In record mode, external action client drives all moves and episode tracking.
+                # Clear pending move and transition to WAITING_FOR_NEXT_MOVE so client can dispatch.
+                if hasattr(self._node, "clear_recovery_move"):
+                    self._node.clear_recovery_move()
+            else:
+                self._node.get_logger().info(
+                    f"[RECOVERY RESUME] Board verified synced. Resuming interrupted move '{pending_move.uci}'."
+                )
+                self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
+                if self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE):
+                    if hasattr(self._node, "clear_recovery_move"):
+                        self._node.clear_recovery_move()
+                    self._dispatch_workflow_fn(pending_move.uci, pending_move)
+                    return True
+
         self._node.get_logger().info(
-            ">>> [BOARD SYNC] Board layout stable. Transitioning to WAITING_FOR_PLAYER_MOVE."
+            ">>> [BOARD SYNC] Board layout stable. Transitioning to WAITING_FOR_NEXT_MOVE."
         )
-        self._transition_to_fn(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+        self._transition_to_fn(MacroMissionState.WAITING_FOR_NEXT_MOVE)
         return False
 
     def handle_game_over_if_ended(self, msg: ChessGameStatus) -> bool:
@@ -192,10 +211,12 @@ class GameStatusHandler:
             if msg.full_fen == self._last_processed_fen:
                 return True
 
-        if msg.is_board_stable and msg.is_legal_move:
+        if msg.is_legal_move:
             self._node.get_logger().info(
                 f">>> [POST-MOVE VERIFICATION] Board state confirmed stable & legal (FEN: {msg.full_fen}). Finalizing turn."
             )
+            with self._state_lock:
+                self._last_processed_fen = msg.full_fen
             self._finalize_turn_fn()
         return True
 
@@ -231,7 +252,7 @@ class GameStatusHandler:
         if self.verify_post_move_board(msg):
             return
 
-        if not msg.is_board_stable or not msg.is_board_synced:
+        if not msg.is_board_synced:
             return
 
         with self._state_lock:
@@ -242,18 +263,18 @@ class GameStatusHandler:
 
         if not is_robot_turn:
             if current_state == MacroMissionState.TURN_COMPLETED:
-                self._transition_to_fn(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+                self._transition_to_fn(MacroMissionState.WAITING_FOR_NEXT_MOVE)
             return
 
         if self._config.record:
             if current_state == MacroMissionState.TURN_COMPLETED:
-                self._transition_to_fn(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+                self._transition_to_fn(MacroMissionState.WAITING_FOR_NEXT_MOVE)
             return
 
         # Autonomous mode: compute best move via Stockfish engine
         with self._state_lock:
             eligible_state = self._get_mission_state() in (
-                MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+                MacroMissionState.WAITING_FOR_NEXT_MOVE,
                 MacroMissionState.TURN_COMPLETED,
             )
             if not eligible_state or msg.full_fen == self._last_processed_fen:
@@ -386,15 +407,24 @@ class MoveWorkflow:
             self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
             return (False, msg)
 
-        if cur_state in (
-            MacroMissionState.WAITING_FOR_PLAYER_MOVE,
-            MacroMissionState.TURN_COMPLETED,
-            MacroMissionState.WAITING_FOR_TF_READY,
-        ) and not self._host.transition_to(MacroMissionState.EVALUATING_BEST_MOVE):
-            return (False, f"Cannot transition to EVALUATING_BEST_MOVE from {cur_state.name}")
+        if self._config.record and cur_state == MacroMissionState.EVALUATING_BEST_MOVE:
+            msg = "Illegal state: Orchestrator must never enter EVALUATING_BEST_MOVE in record mode."
+            self._node.get_logger().error(msg)
+            self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
+            return (False, msg)
 
-        if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
-            return (False, f"Cannot transition to CHECKING_REACHABILITY from {self._host.mission_state.name}")
+        if cur_state in (
+            MacroMissionState.WAITING_FOR_NEXT_MOVE,
+            MacroMissionState.TURN_COMPLETED,
+        ):
+            if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
+                return (False, f"Cannot transition to CHECKING_REACHABILITY from {cur_state.name}")
+        elif cur_state == MacroMissionState.EVALUATING_BEST_MOVE:
+            if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
+                return (False, f"Cannot transition to CHECKING_REACHABILITY from {cur_state.name}")
+        elif cur_state != MacroMissionState.CHECKING_REACHABILITY:
+            if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
+                return (False, f"Cannot transition to CHECKING_REACHABILITY from {cur_state.name}")
 
         self._host.set_current_move(details)
         self._host.publish_candidate_move(details)
@@ -408,7 +438,7 @@ class MoveWorkflow:
             dispatcher = self._dispatcher_provider()
             dispatched = dispatcher.check_feasibility(
                 goal=details,
-                timeout_sec=self._config.feasibility_timeout_sec,
+                timeout_sec=self._config.service_timeout_sec,
                 on_success=lambda resp: self.on_feasibility_response(resp, details),
                 on_error=self.on_feasibility_error,
             )
@@ -459,7 +489,7 @@ class MoveWorkflow:
         dispatcher = self._dispatcher_provider()
         dispatched = dispatcher.check_feasibility(
             goal=king_goal,
-            timeout_sec=self._config.feasibility_timeout_sec,
+            timeout_sec=self._config.service_timeout_sec,
             on_success=lambda resp_king: self._on_castling_king_feasibility_response(resp_king, details),
             on_error=self.on_feasibility_error,
         )
@@ -493,7 +523,7 @@ class MoveWorkflow:
         dispatcher = self._dispatcher_provider()
         dispatched = dispatcher.check_feasibility(
             goal=rook_goal,
-            timeout_sec=self._config.feasibility_timeout_sec,
+            timeout_sec=self._config.service_timeout_sec,
             on_success=lambda resp_rook: self._on_castling_rook_feasibility_response(
                 resp_king, resp_rook, details, rook_goal
             ),
@@ -546,6 +576,9 @@ class MoveWorkflow:
         if not self._host.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE):
             return
 
+        if hasattr(self._host, "publish_collection_feedback"):
+            self._host.publish_collection_feedback("EXECUTING_MOVE_PIPELINE", 30.0)
+
         self._pipeline_executor.start_pipeline(all_stages)
 
     def on_feasibility_error(self, error_msg: str) -> None:
@@ -587,12 +620,17 @@ class MoveWorkflow:
         if not self._host.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE):
             return
 
+        if hasattr(self._host, "publish_collection_feedback"):
+            self._host.publish_collection_feedback("EXECUTING_MOVE_PIPELINE", 30.0)
+
         self._pipeline_executor.start_pipeline(stages)
 
     def on_move_pipeline_completed(self) -> None:
         """Physical move pipeline completed: transition to POST_MOVE_VERIFYING and start active verification."""
         self._host.transition_to(MacroMissionState.POST_MOVE_VERIFYING)
         self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
+        if hasattr(self._host, "publish_collection_feedback"):
+            self._host.publish_collection_feedback("POST_MOVE_VERIFYING", 75.0)
         self._host.start_post_move_watchdog()
 
     def on_move_pipeline_failed(self, error_msg: str) -> None:

@@ -68,6 +68,7 @@ class MoveSequencer:
         tf_buffer: tf2_ros.Buffer | None = None,
         landmarks: ArmLandmarks | None = None,
         bypass_pause_sec: float = 3.0,
+        max_recovery_attempts: int = 3,
     ) -> None:
         self._node = node
         self._dispatcher = dispatcher
@@ -94,6 +95,8 @@ class MoveSequencer:
         self._navigation_enabled = navigation_enabled
         self._chassis_settle_timeout_sec = max(0.0, float(chassis_settle_timeout_sec))
         self._bypass_pause_sec = max(0.0, float(bypass_pause_sec))
+        self._max_recovery_attempts = max(1, int(max_recovery_attempts))
+        self._stage_recovery_attempts = 0
         self._grasp_readiness_provider = grasp_readiness_provider or (lambda: True)
         self._chassis_settle_provider = chassis_settle_provider or (lambda: True)
         self._pending_stage: MoveStep | None = None
@@ -116,6 +119,15 @@ class MoveSequencer:
     @property
     def chassis_settle_timeout_sec(self) -> float:
         return self._chassis_settle_timeout_sec
+
+    @property
+    def max_recovery_attempts(self) -> int:
+        return self._max_recovery_attempts
+
+    @property
+    def stage_recovery_attempts(self) -> int:
+        with self._lock:
+            return self._stage_recovery_attempts
 
     def transition_motion_to(self, target_state: MotionExecutionState) -> bool:
         """Safely transition Level 2 MotionExecutionState validating legal transition matrix."""
@@ -166,6 +178,7 @@ class MoveSequencer:
             return
 
         with self._lock:
+            self._stage_recovery_attempts = 0
             if not self._stages:
                 self._current_stage = None
                 self.transition_motion_to(MotionExecutionState.IDLE)
@@ -223,6 +236,7 @@ class MoveSequencer:
     def _reset_recovery_state(self) -> None:
         with self._lock:
             self._pending_stage = None
+            self._stage_recovery_attempts = 0
             if self._obs_nav is not None:
                 self._obs_nav.reset_tour(ObservationIntent.RELOCALIZE)
 
@@ -632,8 +646,37 @@ class MoveSequencer:
 
     def _on_manip_completed(self, result: ActionResult, stage: MoveStep) -> None:
         if not result.success:
+            can_recover = False
+            current_attempt = 0
+            with self._lock:
+                if (
+                    not self._cancel_event.is_set()
+                    and self._obs_nav is not None
+                    and self._navigation_enabled
+                    and self._stage_recovery_attempts < self._max_recovery_attempts
+                    and not self._obs_nav.has_exhausted_viewpoints(ObservationIntent.RELOCALIZE)
+                ):
+                    self._stage_recovery_attempts += 1
+                    current_attempt = self._stage_recovery_attempts
+                    can_recover = True
+
+            if can_recover:
+                self._node.get_logger().warn(
+                    f"[SELF-HEALING] Manipulation failed for stage '{stage.name}': {result.message}. "
+                    f"Triggering active relocalization recovery attempt {current_attempt}/{self._max_recovery_attempts}..."
+                )
+                if hasattr(self._node, "publish_collection_feedback"):
+                    self._node.publish_collection_feedback(
+                        f"SELF_HEALING_RELOCALIZE_{stage.name}", 20.0
+                    )
+                self._branch_to_observation(stage, reason=f"manip_failure: {result.message}")
+                return
+
             self._handle_failure(f"Manipulation execution failed: {result.message}")
             return
+
+        with self._lock:
+            self._stage_recovery_attempts = 0
 
         self._node.get_logger().info(
             f"Manipulation execution successful in {result.execution_time_sec:.2f}s: {result.message}"
