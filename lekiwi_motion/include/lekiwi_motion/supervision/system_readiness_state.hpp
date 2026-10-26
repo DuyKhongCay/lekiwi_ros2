@@ -131,6 +131,16 @@ namespace lekiwi_motion
   };
 
   /**
+   * @struct Nav2LifecycleSnapshot
+   * @brief Cached status of Nav2 lifecycle manager state.
+   */
+  struct Nav2LifecycleSnapshot
+  {
+    bool active{false};                   ///< True if Nav2 lifecycle manager reports ACTIVE.
+    double stamp_sec{0.0};                ///< Epoch timestamp of last successful lifecycle status check.
+  };
+
+  /**
    * @struct EvaluatorConfig
    * @brief Operational parameters and tolerance bounds for readiness evaluation.
    */
@@ -173,8 +183,10 @@ namespace lekiwi_motion
     double current_speed{0.0};                                            ///< Current planar ground speed (m/s).
     double current_pos_variance{std::numeric_limits<double>::infinity()}; ///< Current EKF position variance (m^2).
     std::string grasp_blocker_reason;                                     ///< Human-readable explanation if grasp inhibited.
+    std::string nav_blocker_reason;                                       ///< Human-readable explanation if navigation inhibited.
     DriftType drift_type{DriftType::NONE};                                ///< Diagnostic drift classification.
     bool stationary_latched{false};                                       ///< True if stationary state maintains grasp validity.
+    bool nav2_lifecycle_active{false};                                    ///< True if Nav2 managed nodes are active.
   };
 
   /**
@@ -195,7 +207,7 @@ namespace lekiwi_motion
      *
      * @details Executes a two-tier evaluation policy:
      * - Tier 1 (Navigation Readiness): Requires fresh local odometry, valid odom-to-base TF,
-     *   and historical EKF initialization (if configured).
+     *   historical EKF initialization (if configured), and active Nav2 lifecycle state.
      * - Tier 2 (Grasp Readiness): Requires stationary chassis, complete arm joint states,
      *   converged or stationary-latched global EKF, and valid end-effector/board TF chains.
      *
@@ -204,6 +216,7 @@ namespace lekiwi_motion
      * @param[in] global_odom Fused global odometry snapshot with covariance.
      * @param[in] joints Published joint state snapshot.
      * @param[in] tf_chains Status of prerequisite TF tree transforms.
+     * @param[in] nav2_lifecycle Cached Nav2 lifecycle manager state snapshot.
      * @return Detailed SystemReadinessReport with boolean gates and diagnostic blocker reason.
      * @pre now_sec must be non-negative and finite.
      * @post Evaluator state updates stationary latching and EKF seeding status.
@@ -214,7 +227,8 @@ namespace lekiwi_motion
         const LocalOdomSnapshot &local_odom,
         const GlobalOdomSnapshot &global_odom,
         const JointsSnapshot &joints,
-        const TfChainSnapshot &tf_chains);
+        const TfChainSnapshot &tf_chains,
+        const Nav2LifecycleSnapshot &nav2_lifecycle);
 
     /**
      * @brief Records whether global EKF has reached convergence at least once.
@@ -240,6 +254,46 @@ namespace lekiwi_motion
     [[nodiscard]] const EvaluatorConfig &config() const noexcept { return config_; }
 
   private:
+    [[nodiscard]] bool evaluate_stationary_state(
+        double now_sec,
+        const LocalOdomSnapshot &local_odom,
+        bool local_odom_fresh,
+        double &out_speed) noexcept;
+
+    void update_stationary_latch(bool is_stationary) noexcept;
+
+    [[nodiscard]] bool evaluate_ekf_convergence(
+        double now_sec,
+        const GlobalOdomSnapshot &global_odom,
+        bool is_stationary,
+        double &out_pos_variance,
+        bool &out_ekf_fresh) noexcept;
+
+    [[nodiscard]] DriftType classify_drift(
+        bool global_ekf_converged,
+        bool is_stationary) const noexcept;
+
+    [[nodiscard]] bool validate_joints(
+        double now_sec,
+        const JointsSnapshot &joints) const noexcept;
+
+    [[nodiscard]] static std::string build_nav_blocker_reason(
+        bool nav2_active,
+        bool local_odom_fresh,
+        bool odom_to_base_fresh,
+        bool seeded_ok);
+
+    [[nodiscard]] static std::string build_grasp_blocker_reason(
+        bool is_stationary,
+        double speed,
+        bool joints_complete,
+        bool ekf_precision_ready,
+        DriftType drift_type,
+        bool global_ekf_fresh,
+        double pos_variance,
+        bool map_to_board_fresh,
+        bool base_to_gripper_fresh);
+
     EvaluatorConfig config_;          ///< Active configuration thresholds.
     bool global_ekf_seeded_{false};   ///< Latched status indicating initial EKF convergence.
     bool stationary_latched_{false};  ///< Latch preserving grasp readiness while robot stays motionless.

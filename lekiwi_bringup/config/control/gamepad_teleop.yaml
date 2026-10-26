@@ -26,7 +26,7 @@
 #
 # 4. Episode Recorder Services: Deadman = Start / Menu (Button 7 + D-Pad)
 #    - Start + D-Pad Up (Axis 7 > 0): Start Episode (/episode_recorder_node/start_episode)
-#    - Start + D-Pad Down (Axis 7 < 0): Abort Move & Episode (/arm/abort_episode)
+#    - Start + D-Pad Down (Axis 7 < 0): Skip Move & Episode (/arm/skip_episode)
 #    - Start + D-Pad Left (Axis 6 > 0): Discard Episode (/episode_recorder_node/discard_episode)
 #    - Start + D-Pad Right (Axis 6 < 0): Save Episode (/arm/save_episode)
 
@@ -108,10 +108,10 @@ joy_teleop:
       buttons: [7, 3]
       # axes: [7] # D-Pad Up (+1.0)
 
-    lekiwi_episode_abort:
+    lekiwi_episode_skip:
       type: service
       interface_type: std_srvs/srv/Trigger
-      service_name: /arm/abort_episode
+      service_name: /arm/skip_episode
       buttons: [7, 0]
       # axes_negative: [7] # D-Pad Down (-1.0)
 

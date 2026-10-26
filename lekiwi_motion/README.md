@@ -172,7 +172,7 @@ flowchart TD
 - **`arm_trajectory_executor.hpp` / `arm_trajectory_executor.cpp`**: Shared execution engine managing analytical kinematics solving, pre-calibrated landmark poses, joint telemetry ingestion, trajectory interpolation, and action client execution for both autonomous manipulation and interactive jogging.
 - **`cartesian_jogger.hpp` / `cartesian_jogger.cpp`**: Pure POCO domain controller for Cartesian jogging with bumpless transfer, orientation holding, and joint velocity damping.
 - **`cartesian_jog_server_node.hpp` / `cartesian_jog_server_node.cpp`**: Standalone interactive ROS 2 node executing analytical IK Cartesian velocity jogging with bumpless transfer, joint velocity rate limiting (`max_joint_vel_rad_s`), landmark named pose transitions (`~/go_to_named_pose`), and reversible gripper actuation (`~/toggle_gripper`) protected by internal RAII execution guards.
-- **`manipulation_action_server.hpp` / `manipulation_action_server.cpp`**: Unified autonomous ROS 2 node executing chess manipulation trajectories (`ExecuteChessMove`) with live JIT inverse kinematics (`SO101AnalyticalSolver`), pure vertical Cartesian descent, capture bin sorting, and episode recording lifecycle coordination (`/arm/save_episode`, `/arm/abort_episode`). Directly delegates controller trajectory execution and joint state telemetry to `ArmTrajectoryExecutor`.
+- **`manipulation_action_server.hpp` / `manipulation_action_server.cpp`**: Unified autonomous ROS 2 node executing chess manipulation trajectories (`ExecuteChessMove`) with live JIT inverse kinematics (`SO101AnalyticalSolver`), pure vertical Cartesian descent, capture bin sorting, and episode recording lifecycle coordination (`/arm/save_episode`, `/arm/skip_episode`). Directly delegates controller trajectory execution and joint state telemetry to `ArmTrajectoryExecutor`.
 
 ### 3. `supervision`
 - **`system_readiness_state.hpp` / `system_readiness_state.cpp`**: Pure C++ state evaluator gating navigation and manipulation actions based on dual-odometry covariance and joint velocities.
@@ -197,7 +197,7 @@ flowchart TD
 | `~/go_to_named_pose` | `lekiwi_interfaces/srv/GoToNamedPose` | `CartesianJogServerNode` | Synchronously executes landmark joint trajectories (`approach`, `stow`, `clear_left`, `clear_right`) with internal execution locking. |
 | `~/toggle_gripper` | `std_srvs/srv/Trigger` | `CartesianJogServerNode` | Safely toggles gripper open/closed state with active trajectory locking. |
 | `/arm/save_episode` | `std_srvs/srv/Trigger` | `ManipulationActionServer` | Triggers `/episode_recorder_node/save_episode` upon successful manipulation in `record_mode`. |
-| `/arm/abort_episode` | `std_srvs/srv/Trigger` | `ManipulationActionServer` | Triggers `/episode_recorder_node/discard_episode` upon canceled/failed manipulation in `record_mode`. |
+| `/arm/skip_episode` | `std_srvs/srv/Trigger` | `ManipulationActionServer` | Triggers `/episode_recorder_node/discard_episode` and succeeds action goal to skip forward to next task without error fallback. |
 | `/workspace/check_move_feasibility` | `lekiwi_interfaces/srv/CheckMoveFeasibility` | `WorkspaceCheckerNode` | Evaluates inverse kinematics, reachability, and mobile standoff tiers for piece actions. |
 | `/set_torque_enabled` | `lekiwi_interfaces/srv/SetTorqueEnabled` | `TorqueManagerNode` | Atomically transitions servo bus torque and toggles joint trajectory controllers. |
 | `/system/query_nav_ready` | `std_srvs/srv/Trigger` | `SystemReadinessNode` | Synchronously queries if localization and TF chains are valid for navigation. |

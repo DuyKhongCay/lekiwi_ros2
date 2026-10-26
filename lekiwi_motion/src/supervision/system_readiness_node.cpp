@@ -57,6 +57,10 @@ namespace lekiwi_motion
     declare("stationary_unlatch_debounce_sec", 0.25, "Minimum sustained motion duration to break stationary latch (sec)");
     declare("check_frequency_hz", 10.0, "Frequency of readiness evaluation loop (Hz)");
     declare("require_global_ekf_seed", true, "Require global EKF to converge at least once before nav ready");
+    declare("nav2_lifecycle_service", std::string("/lifecycle_manager_navigation/is_active"),
+            "Service name to query Nav2 lifecycle active status");
+    declare("nav2_check_frequency_hz", 2.0, "Frequency to poll Nav2 lifecycle state (Hz)");
+    declare("nav2_timeout_sec", 0.5, "Timeout for Nav2 lifecycle query response (sec)");
 
     declare("map_frame", std::string("map"), "Global map frame");
     declare("odom_frame", std::string("odom"), "Odometry frame");
@@ -92,15 +96,19 @@ namespace lekiwi_motion
     local_odom_topic_ = get_parameter("local_odom_topic").as_string();
     global_odom_topic_ = get_parameter("global_odom_topic").as_string();
     joint_states_topic_ = get_parameter("joint_states_topic").as_string();
+    nav2_lifecycle_service_ = get_parameter("nav2_lifecycle_service").as_string();
+    nav2_check_frequency_hz_ = get_parameter("nav2_check_frequency_hz").as_double();
+    nav2_timeout_sec_ = get_parameter("nav2_timeout_sec").as_double();
 
     evaluator_ = SystemReadinessEvaluator(config);
 
     // Validate numeric parameters
     if (check_frequency_hz_ <= 0.0 || check_frequency_hz_ > 1000.0 ||
+        nav2_check_frequency_hz_ <= 0.0 || nav2_timeout_sec_ <= 0.0 ||
         max_transform_age_sec_ <= 0.0 || nav_odom_max_age_sec_ <= 0.0 ||
         map_frame_.empty() || odom_frame_.empty() ||
         base_frame_.empty() || local_odom_topic_.empty() || global_odom_topic_.empty() ||
-        joint_states_topic_.empty())
+        joint_states_topic_.empty() || nav2_lifecycle_service_.empty())
     {
       throw std::invalid_argument("Invalid parameter values configured in SystemReadinessNode");
     }
@@ -108,6 +116,11 @@ namespace lekiwi_motion
     // TF2 Buffer & Listener
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_, this);
+
+    // Nav2 Lifecycle Client
+    nav2_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    nav2_lifecycle_client_ = create_client<std_srvs::srv::Trigger>(
+        nav2_lifecycle_service_, rmw_qos_profile_services_default, nav2_cb_group_);
 
     // Subscriptions (Sensor QoS: depth 10, best effort)
     auto sensor_qos = rclcpp::QoS(10).best_effort();
@@ -224,6 +237,79 @@ namespace lekiwi_motion
     }
   }
 
+  void SystemReadinessNode::poll_nav2_lifecycle(double now_sec)
+  {
+    if (nav2_check_frequency_hz_ <= 0.0)
+    {
+      return;
+    }
+
+    const double poll_interval = 1.0 / nav2_check_frequency_hz_;
+
+    // Handle in-flight timeout
+    if (nav2_request_in_flight_.load())
+    {
+      if ((now_sec - last_nav2_request_time_sec_) > nav2_timeout_sec_)
+      {
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "[System Readiness] Nav2 lifecycle query timed out after %.2fs. Marking Nav2 inactive.",
+            nav2_timeout_sec_);
+        nav2_request_in_flight_.store(false);
+        nav2_snapshot_.active = false;
+        nav2_snapshot_.stamp_sec = now_sec;
+      }
+      return;
+    }
+
+    // Rate-limit polling
+    if (last_nav2_request_time_sec_ > 0.0 && (now_sec - last_nav2_request_time_sec_) < poll_interval)
+    {
+      return;
+    }
+
+    // Ensure service is reachable
+    if (!nav2_lifecycle_client_->service_is_ready())
+    {
+      nav2_snapshot_.active = false;
+      nav2_snapshot_.stamp_sec = now_sec;
+      return;
+    }
+
+    nav2_request_in_flight_.store(true);
+    last_nav2_request_time_sec_ = now_sec;
+
+    auto req = std::make_shared<std_srvs::srv::Trigger::Request>();
+    nav2_lifecycle_client_->async_send_request(
+        req,
+        [this](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future)
+        {
+          on_nav2_lifecycle_response(future);
+        });
+  }
+
+  void SystemReadinessNode::on_nav2_lifecycle_response(
+      rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future)
+  {
+    nav2_request_in_flight_.store(false);
+    const double now_sec = get_clock()->now().seconds();
+
+    try
+    {
+      const auto response = future.get();
+      nav2_snapshot_.active = response->success;
+      nav2_snapshot_.stamp_sec = now_sec;
+    }
+    catch (const std::exception &e)
+    {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "[System Readiness] Exception querying Nav2 lifecycle: %s", e.what());
+      nav2_snapshot_.active = false;
+      nav2_snapshot_.stamp_sec = now_sec;
+    }
+  }
+
   void SystemReadinessNode::evaluate_readiness()
   {
     const double now_sec = get_clock()->now().seconds();
@@ -243,11 +329,15 @@ namespace lekiwi_motion
     tf_chains.map_to_board_fresh = is_transform_fresh(
         map_frame_, board_frame_, now_sec, max_transform_age_sec_, true);
 
-    // 2. Evaluate Pure Domain Logic
-    last_report_ = evaluator_.evaluate(
-        now_sec, local_odom_snapshot_, global_odom_snapshot_, joints_snapshot_, tf_chains);
+    // 2. Poll Nav2 Lifecycle
+    poll_nav2_lifecycle(now_sec);
 
-    // 3. Publish Heartbeat & Log Transitions
+    // 3. Evaluate Pure Domain Logic
+    last_report_ = evaluator_.evaluate(
+        now_sec, local_odom_snapshot_, global_odom_snapshot_, joints_snapshot_,
+        tf_chains, nav2_snapshot_);
+
+    // 4. Publish Heartbeat & Log Transitions
     if (last_report_.nav_ready != last_published_nav_ready_)
     {
       last_published_nav_ready_ = last_report_.nav_ready;
@@ -278,7 +368,7 @@ namespace lekiwi_motion
     stationary_msg.data = last_report_.is_stationary;
     is_stationary_pub_->publish(stationary_msg);
 
-    // 4. Diagnostics
+    // 5. Diagnostics
     diagnostic_updater_.force_update();
   }
 
@@ -298,6 +388,8 @@ namespace lekiwi_motion
     }
 
     stat.add("Nav Ready", last_report_.nav_ready ? "true" : "false");
+    stat.add("Nav Status Detail", last_report_.nav_blocker_reason);
+    stat.add("Nav2 Lifecycle Active", last_report_.nav2_lifecycle_active ? "true" : "false");
     stat.add("Grasp Ready", last_report_.grasp_ready ? "true" : "false");
     stat.add("Grasp Status Detail", last_report_.grasp_blocker_reason);
     stat.add("Robot Stationary", last_report_.is_stationary ? "true" : "false");
@@ -326,7 +418,7 @@ namespace lekiwi_motion
       std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
     res->success = last_report_.nav_ready;
-    res->message = last_report_.nav_ready ? "Navigation is ready" : "Navigation not ready";
+    res->message = last_report_.nav_ready ? "Navigation is ready" : ("Navigation not ready: " + last_report_.nav_blocker_reason);
   }
 
   void SystemReadinessNode::handle_grasp_query(
@@ -346,6 +438,9 @@ namespace lekiwi_motion
     tf_buffer_->clear();
     evaluator_.reset_global_ekf_seed();
     global_odom_snapshot_ = GlobalOdomSnapshot{};
+    nav2_snapshot_ = Nav2LifecycleSnapshot{};
+    nav2_request_in_flight_.store(false);
+    last_nav2_request_time_sec_ = 0.0;
 
     last_published_nav_ready_ = false;
     last_published_grasp_ready_ = false;

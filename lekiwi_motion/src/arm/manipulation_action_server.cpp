@@ -56,9 +56,9 @@ ManipulationActionServer::ManipulationActionServer(const rclcpp::NodeOptions & o
     rclcpp::ServicesQoS(),
     cb_group_recorder_coordination_);
 
-  abort_episode_srv_ = create_service<Trigger>(
-    "/arm/abort_episode",
-    std::bind(&ManipulationActionServer::handle_abort_episode, this, std::placeholders::_1, std::placeholders::_2),
+  skip_episode_srv_ = create_service<Trigger>(
+    "/arm/skip_episode",
+    std::bind(&ManipulationActionServer::handle_skip_episode, this, std::placeholders::_1, std::placeholders::_2),
     rclcpp::ServicesQoS(),
     cb_group_recorder_coordination_);
 
@@ -95,7 +95,7 @@ ManipulationActionServer::~ManipulationActionServer()
   }
   {
     std::lock_guard<std::mutex> lock(record_mutex_);
-    record_signal_ = RecordCoordinationSignal::ABORT;
+    record_signal_ = RecordCoordinationSignal::CANCEL;
   }
   record_cv_.notify_all();
   if (execution_thread_.joinable()) {
@@ -194,19 +194,19 @@ void ManipulationActionServer::handle_save_episode(
   }
 }
 
-void ManipulationActionServer::handle_abort_episode(
+void ManipulationActionServer::handle_skip_episode(
   const std::shared_ptr<Trigger::Request> /*request*/,
   std::shared_ptr<Trigger::Response> response)
 {
   if (!is_waiting_record_.load(std::memory_order_acquire)) {
     response->success = false;
     response->message = "No active manipulation goal in RECORDING_WAIT state";
-    RCLCPP_WARN(get_logger(), "Rejecting /arm/abort_episode: %s", response->message.c_str());
+    RCLCPP_WARN(get_logger(), "Rejecting /arm/skip_episode: %s", response->message.c_str());
     return;
   }
-  RCLCPP_WARN(get_logger(), "Received service request: /arm/abort_episode");
+  RCLCPP_INFO(get_logger(), "Received service request: /arm/skip_episode");
   if (forward_trigger_request(discard_client_, "/episode_recorder_node/discard_episode", response)) {
-    notify_record_signal(RecordCoordinationSignal::ABORT);
+    notify_record_signal(RecordCoordinationSignal::SKIP);
   }
 }
 
@@ -284,7 +284,6 @@ rclcpp_action::CancelResponse ManipulationActionServer::handle_cancel(
   const std::shared_ptr<GoalHandleChessMove> /*goal_handle*/)
 {
   RCLCPP_INFO(get_logger(), "Cancel requested for active manipulation goal");
-  notify_record_signal(RecordCoordinationSignal::CANCEL);
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
@@ -322,43 +321,61 @@ std::string ManipulationActionServer::resolve_instruction_label(
 void ManipulationActionServer::execute_move(
   const std::shared_ptr<GoalHandleChessMove> goal_handle)
 {
-  is_goal_active_.store(true, std::memory_order_release);
-  struct GoalActiveScopeGuard
-  {
-    std::atomic<bool> & flag;
-    ~GoalActiveScopeGuard() { flag.store(false, std::memory_order_release); }
-  } scope_guard{is_goal_active_};
-
-  MoveExecutionContext ctx{
-    goal_handle,
-    goal_handle->get_goal(),
-    std::make_shared<ExecuteChessMove::Feedback>(),
-    std::make_shared<ExecuteChessMove::Result>(),
-    std::chrono::steady_clock::now()
-  };
-
-  const std::string instruction_label = resolve_instruction_label(*ctx.goal);
-
-  if (record_) {
-    execute_record_mode(ctx, instruction_label);
-    return;
-  }
-
-  const auto waypoints_opt = resolve_move_waypoints(ctx);
-  if (!waypoints_opt.has_value()) {
-    return;
-  }
-
-  std::pair<std::vector<std::string>, std::unordered_map<std::string, std::vector<double>>> plan;
   try {
-    plan = build_active_phase_plan(ctx.goal, waypoints_opt->pick, waypoints_opt->place);
-  } catch (const std::exception & exc) {
-    abort_move(ctx, std::string("Phase plan generation failed: ") + exc.what(), 0.0);
-    return;
-  }
+    is_goal_active_.store(true, std::memory_order_release);
+    struct GoalActiveScopeGuard
+    {
+      std::atomic<bool> & flag;
+      ~GoalActiveScopeGuard() { flag.store(false, std::memory_order_release); }
+    } scope_guard{is_goal_active_};
 
-  if (execute_phase_pipeline(ctx, plan.first, plan.second, instruction_label)) {
-    succeed_move(ctx, "Chess move completed successfully: " + instruction_label);
+    MoveExecutionContext ctx{
+      goal_handle,
+      goal_handle->get_goal(),
+      std::make_shared<ExecuteChessMove::Feedback>(),
+      std::make_shared<ExecuteChessMove::Result>(),
+      std::chrono::steady_clock::now()
+    };
+
+    const std::string instruction_label = resolve_instruction_label(*ctx.goal);
+
+    if (record_) {
+      execute_record_mode(ctx, instruction_label);
+      return;
+    }
+
+    const auto waypoints_opt = resolve_move_waypoints(ctx);
+    if (!waypoints_opt.has_value()) {
+      return;
+    }
+
+    std::pair<std::vector<std::string>, std::unordered_map<std::string, std::vector<double>>> plan;
+    try {
+      plan = build_active_phase_plan(ctx.goal, waypoints_opt->pick, waypoints_opt->place);
+    } catch (const std::exception & exc) {
+      abort_move(ctx, std::string("Phase plan generation failed: ") + exc.what(), 0.0);
+      return;
+    }
+
+    if (execute_phase_pipeline(ctx, plan.first, plan.second, instruction_label)) {
+      succeed_move(ctx, "Chess move completed successfully: " + instruction_label);
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Unhandled exception in execute_move: %s", e.what());
+    if (goal_handle && goal_handle->is_active()) {
+      auto res = std::make_shared<ExecuteChessMove::Result>();
+      res->success = false;
+      res->message = std::string("Internal error: ") + e.what();
+      goal_handle->abort(res);
+    }
+  } catch (...) {
+    RCLCPP_ERROR(get_logger(), "Unknown unhandled exception in execute_move");
+    if (goal_handle && goal_handle->is_active()) {
+      auto res = std::make_shared<ExecuteChessMove::Result>();
+      res->success = false;
+      res->message = "Unknown internal error";
+      goal_handle->abort(res);
+    }
   }
 }
 
@@ -420,10 +437,10 @@ void ManipulationActionServer::execute_record_mode(
   RCLCPP_INFO(
     get_logger(),
     "RECORD mode: Dynamic approach pose calculated and registered to ~/go_to_named_pose ('approach'). "
-    "Arm stationary. Waiting for operator trigger (/arm/save_episode or /arm/abort_episode)...");
+    "Arm stationary. Waiting for operator trigger (/arm/save_episode or /arm/skip_episode)...");
 
   is_waiting_record_.store(true, std::memory_order_release);
-  const auto signal = wait_for_record_signal(ctx.goal_handle);
+  const auto signal = wait_for_record_signal(ctx);
   is_waiting_record_.store(false, std::memory_order_release);
 
   process_record_signal(ctx, signal);
@@ -437,8 +454,8 @@ void ManipulationActionServer::process_record_signal(
     case RecordCoordinationSignal::SAVE:
       succeed_move(ctx, "Episode saved: " + resolve_instruction_label(*ctx.goal));
       break;
-    case RecordCoordinationSignal::ABORT:
-      abort_move(ctx, "Episode aborted: " + resolve_instruction_label(*ctx.goal), 25.0);
+    case RecordCoordinationSignal::SKIP:
+      succeed_move(ctx, "Episode skipped: " + resolve_instruction_label(*ctx.goal));
       break;
     case RecordCoordinationSignal::CANCEL:
       cancel_move(ctx, "Record move canceled by client request", 25.0);
@@ -451,13 +468,13 @@ void ManipulationActionServer::process_record_signal(
 }
 
 ManipulationActionServer::RecordCoordinationSignal ManipulationActionServer::wait_for_record_signal(
-  const std::shared_ptr<GoalHandleChessMove> & goal_handle)
+  const MoveExecutionContext & ctx)
 {
   std::unique_lock<std::mutex> lock(record_mutex_);
   record_signal_ = RecordCoordinationSignal::NONE;
 
   while (!is_shutting_down_.load(std::memory_order_acquire)) {
-    if (goal_handle->is_canceling()) {
+    if (ctx.goal_handle->is_canceling()) {
       discard_active_recording_async();
       return RecordCoordinationSignal::CANCEL;
     }
@@ -466,7 +483,7 @@ ManipulationActionServer::RecordCoordinationSignal ManipulationActionServer::wai
     }
     record_cv_.wait_for(lock, std::chrono::milliseconds(50));
   }
-  return RecordCoordinationSignal::ABORT;
+  return RecordCoordinationSignal::CANCEL;
 }
 
 std::optional<ManipulationActionServer::MoveWaypoints>
@@ -661,6 +678,7 @@ void ManipulationActionServer::succeed_move(
   ctx.result->success = true;
   ctx.result->message = message;
   ctx.result->execution_time_sec = static_cast<float>(duration);
+  is_goal_active_.store(false, std::memory_order_release);
   ctx.goal_handle->succeed(ctx.result);
   RCLCPP_INFO(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
 }
@@ -677,7 +695,12 @@ void ManipulationActionServer::cancel_move(
   ctx.result->success = false;
   ctx.result->message = message;
   ctx.result->execution_time_sec = static_cast<float>(duration);
-  ctx.goal_handle->canceled(ctx.result);
+  is_goal_active_.store(false, std::memory_order_release);
+  if (ctx.goal_handle->is_canceling()) {
+    ctx.goal_handle->canceled(ctx.result);
+  } else {
+    ctx.goal_handle->abort(ctx.result);
+  }
   RCLCPP_WARN(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
 }
 
@@ -693,6 +716,7 @@ void ManipulationActionServer::abort_move(
   ctx.result->success = false;
   ctx.result->message = message;
   ctx.result->execution_time_sec = static_cast<float>(duration);
+  is_goal_active_.store(false, std::memory_order_release);
   ctx.goal_handle->abort(ctx.result);
   RCLCPP_ERROR(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
 }
