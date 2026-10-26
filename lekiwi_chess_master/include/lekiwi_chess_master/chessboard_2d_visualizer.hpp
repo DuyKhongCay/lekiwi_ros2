@@ -97,7 +97,7 @@ namespace lekiwi_chess_master
     std::string last_move;       ///< UCI string of last executed move (highlighted in green).
     std::string candidate_move;  ///< UCI string of robot planned/candidate move (highlighted in orange).
     std::string active_color{"w"}; ///< Current side to move ("w" or "b").
-    bool is_board_synced{true};  ///< True if physical board layout matches FEN.
+    bool is_board_synced{false};  ///< True if physical board layout matches FEN.
     bool is_check{false};        ///< True if active side is in check.
     bool is_checkmate{false};    ///< True if position is terminal checkmate.
     bool is_draw{false};         ///< True if position is terminal stalemate or draw.

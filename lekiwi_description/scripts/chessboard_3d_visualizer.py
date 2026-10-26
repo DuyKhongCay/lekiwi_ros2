@@ -159,7 +159,7 @@ class Chessboard3DVisualizer(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.status_sub = self.create_subscription(
             ChessGameStatus, game_status_topic, self.game_status_callback, sub_qos

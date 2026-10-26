@@ -37,10 +37,10 @@ namespace lekiwi_chess_master
         "Starting ChessGameStateTrackerComponent (Sub: %s, Pub: %s, Service: %s, Debounce: %d frames)",
         raw_fen_topic_.c_str(), game_status_topic_.c_str(), set_fen_service_name_.c_str(), debounce_frames_);
 
-    // Publish game status with reliable volatile QoS (Volatile, Depth 1)
+    // Publish game status with reliable transient local QoS (TransientLocal, Depth 1)
     rclcpp::QoS game_status_qos(1);
     game_status_qos.reliable();
-    game_status_qos.durability_volatile();
+    game_status_qos.transient_local();
     game_status_pub_ = create_publisher<ChessGameStatus>(
         game_status_topic_, game_status_qos);
 
@@ -62,7 +62,7 @@ namespace lekiwi_chess_master
                   std::placeholders::_1, std::placeholders::_2));
 
     // Broadcast standard starting position status
-    publish_game_status(true, true);
+    publish_game_status(true);
   }
 
   void ChessGameStateTrackerComponent::reset_game()
@@ -75,10 +75,10 @@ namespace lekiwi_chess_master
     pending_placement_.clear();
     consecutive_count_ = 0;
     last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
-    awaiting_physical_sync_ = false;
+    awaiting_physical_sync_ = true;
 
     RCLCPP_INFO(get_logger(), "Chess game board reset to starting position: %s", board_.getFen().c_str());
-    publish_game_status(true, true);
+    publish_game_status(true);
   }
 
   bool ChessGameStateTrackerComponent::set_fen(
@@ -120,7 +120,7 @@ namespace lekiwi_chess_master
         "FEN imported successfully: %s. Awaiting physical board synchronization.",
         canonical_fen.c_str());
 
-    publish_game_status(true, false);
+    publish_game_status(true);
     return true;
   }
 
@@ -175,7 +175,7 @@ namespace lekiwi_chess_master
     return false;
   }
 
-  void ChessGameStateTrackerComponent::publish_game_status(bool is_legal, bool is_stable)
+  void ChessGameStateTrackerComponent::publish_game_status(bool is_legal)
   {
     ChessGameStatus msg;
     msg.header.stamp = now();
@@ -183,7 +183,6 @@ namespace lekiwi_chess_master
     msg.last_move_details = last_move_details_;
     msg.active_color = (board_.sideToMove() == chess::Color::WHITE) ? "w" : "b";
     msg.is_board_synced = !awaiting_physical_sync_;
-    msg.is_board_stable = is_stable;
     msg.is_legal_move = is_legal;
     msg.is_check = board_.inCheck();
 
@@ -244,7 +243,7 @@ namespace lekiwi_chess_master
             get_logger(),
             "Physical board synchronization complete! Matched placement: %s",
             placement.c_str());
-        publish_game_status(true, true);
+        publish_game_status(true);
       }
       return;
     }
@@ -270,7 +269,7 @@ namespace lekiwi_chess_master
         last_accepted_placement_ = kDefaultStartingPlacement;
         last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
         RCLCPP_INFO(get_logger(), "Board reset to starting position detected from vision.");
-        publish_game_status(true, true);
+        publish_game_status(true);
       }
       return;
     }
@@ -287,7 +286,7 @@ namespace lekiwi_chess_master
       RCLCPP_INFO(get_logger(), "Confirmed Legal Move: %s | New Full FEN: %s",
                   move_uci.c_str(), board_.getFen().c_str());
 
-      publish_game_status(true, true);
+      publish_game_status(true);
     }
     else
     {
@@ -298,7 +297,7 @@ namespace lekiwi_chess_master
           placement.c_str(), board_.getFen().c_str());
 
       last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
-      publish_game_status(false, true);
+      publish_game_status(false);
     }
   }
 

@@ -130,9 +130,8 @@ namespace lekiwi_chess_master
      * @brief Constructs and publishes consolidated ChessGameStatus message.
      *
      * @param[in] is_legal True if board reflects a legal game state.
-     * @param[in] is_stable True if vision placement has satisfied debounce threshold.
      */
-    void publish_game_status(bool is_legal = true, bool is_stable = true);
+    void publish_game_status(bool is_legal = true);
 
     // Node Parameters
     std::string raw_fen_topic_{"/chess/raw_fen"};
@@ -152,7 +151,7 @@ namespace lekiwi_chess_master
     std::string last_accepted_placement_{kDefaultStartingPlacement};
     std::string pending_placement_;
     int consecutive_count_{0};
-    bool awaiting_physical_sync_{false};
+    bool awaiting_physical_sync_{true};
 
     // Match Status
     lekiwi_interfaces::msg::ChessMoveDetails last_move_details_;

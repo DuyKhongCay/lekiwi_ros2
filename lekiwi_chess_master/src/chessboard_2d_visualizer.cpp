@@ -99,7 +99,7 @@ namespace lekiwi_chess_master
 
     rclcpp::QoS game_status_qos(1);
     game_status_qos.reliable();
-    game_status_qos.durability_volatile();
+    game_status_qos.transient_local();
 
     game_status_sub_ = create_subscription<ChessGameStatus>(
         game_status_topic_, game_status_qos,

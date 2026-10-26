@@ -73,6 +73,12 @@ TEST_F(ChessGameStateTrackerTestFixture, LegalMoveProcessing)
   auto pub = node->create_publisher<std_msgs::msg::String>("/chess/raw_fen", rclcpp::SensorDataQoS());
 
   auto msg = std::make_shared<std_msgs::msg::String>();
+  // Synchronize initial physical board layout first
+  msg->data = kDefaultStartingPlacement;
+  pub->publish(*msg);
+  rclcpp::spin_some(node);
+  EXPECT_FALSE(node->is_awaiting_physical_sync());
+
   msg->data = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR"; // White e2e4
 
   pub->publish(*msg);
@@ -91,6 +97,12 @@ TEST_F(ChessGameStateTrackerTestFixture, RejectIllegalMove)
   auto pub = node->create_publisher<std_msgs::msg::String>("/chess/raw_fen", rclcpp::SensorDataQoS());
 
   auto msg = std::make_shared<std_msgs::msg::String>();
+  // Synchronize initial physical board layout first
+  msg->data = kDefaultStartingPlacement;
+  pub->publish(*msg);
+  rclcpp::spin_some(node);
+  EXPECT_FALSE(node->is_awaiting_physical_sync());
+
   msg->data = "rnbqkbnr/pppppppp/8/8/4K3/8/PPPPPPPP/RNBQ1BNR"; // King to e4 (illegal)
 
   pub->publish(*msg);
@@ -125,7 +137,7 @@ TEST_F(ChessGameStateTrackerTestFixture, InitialGameStatusProperties)
   rclcpp::NodeOptions options;
   auto node = std::make_shared<ChessGameStateTrackerComponent>(options);
 
-  EXPECT_FALSE(node->is_awaiting_physical_sync());
+  EXPECT_TRUE(node->is_awaiting_physical_sync());
   EXPECT_TRUE(node->get_last_move_details().uci.empty());
 }
 
@@ -136,7 +148,7 @@ TEST(BoardDisplayContextTest, DefaultInitialization)
   EXPECT_EQ(ctx.fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
   EXPECT_TRUE(ctx.last_move.empty());
   EXPECT_TRUE(ctx.candidate_move.empty());
-  EXPECT_TRUE(ctx.is_board_synced);
+  EXPECT_FALSE(ctx.is_board_synced);
   EXPECT_FALSE(ctx.is_check);
   EXPECT_FALSE(ctx.is_checkmate);
   EXPECT_FALSE(ctx.is_draw);
@@ -189,7 +201,7 @@ TEST_F(ChessGameStateTrackerTestFixture, SetFenRejectsMalformed)
   std::string canonical_fen, active_color, message;
   EXPECT_FALSE(node->set_fen("invalid/fen/string", canonical_fen, active_color, message));
   EXPECT_FALSE(message.empty());
-  EXPECT_FALSE(node->is_awaiting_physical_sync());
+  EXPECT_TRUE(node->is_awaiting_physical_sync());
   EXPECT_EQ(node->get_board().getFen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 }
 
