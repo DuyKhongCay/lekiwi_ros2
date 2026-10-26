@@ -84,7 +84,7 @@ flowchart TD
 
     subgraph ControlChannels ["2. Episode Triggering Channels"]
         GAMEPAD["Gamepad Teleoperation<br/>(joy_teleop / Start + Face Buttons)"]
-        ACTION["ManipulationActionServer<br/>(/arm/save_episode, /arm/abort_episode)"]
+        ACTION["ManipulationActionServer<br/>(/arm/save_episode, /arm/skip_episode)"]
         FEEDBACK["/manipulation/execute_chess_move/_action/feedback<br/>(Task Instruction e2e4, Phase, Progress)"]
     end
 
@@ -123,7 +123,7 @@ Data collection operates seamlessly via a physical game controller (Flydigi Vade
 | **Episode Recorder** | `Start + Y` (`[7, 3]` / D-Pad Up) | `/episode_recorder_node/start_episode` | **Start Episode**: Opens MCAP container, begins streaming. |
 | | `Start + B` (`[7, 1]` / D-Pad Right) | `/arm/save_episode` | **Save Episode**: Flushes bag, writes `episode_info.yaml`, increments index. |
 | | `Start + X` (`[7, 2]` / D-Pad Left) | `/episode_recorder_node/discard_episode` | **Discard Episode**: Deletes directory; preserves instruction for retry. |
-| | `Start + A` (`[7, 0]` / D-Pad Down) | `/arm/abort_episode` | **Emergency Abort**: Halts arm motion immediately and purges episode. |
+| | `Start + A` (`[7, 0]` / D-Pad Down) | `/arm/skip_episode` | **Skip Move & Episode**: Purges episode recording and returns success to advance orchestrator pipeline. |
 | **Arm Named Poses** | `LB + Y` (`[4, 3]`) | `/arm/go_to_named_pose` (`"approach"`) | Moves arm to hover over the board (initial observation vantage). |
 | | `LB + A` (`[4, 0]`) | `/arm/go_to_named_pose` (`"stow"`) | Folds arm into compact stow posture (clearing camera line of sight). |
 | | `LB + X` (`[4, 2]`) | `/arm/go_to_named_pose` (`"clear_left"`) | Moves captured piece to left discard container. |
@@ -339,7 +339,6 @@ The recorder integrates with `diagnostic_updater` to publish real-time health te
 * **Campaign State**: FSM state (`DISABLED`, `IDLE_AWAITING_BOARD`, `PLANNING_OR_SYNTHESIS`, `DISPATCHED_TO_ORCH`, `CAMPAIGN_FINISHED`).
 * **Total Progress**: Completed demonstration count against target (e.g. `120 / 600 (20.0%)`).
 * **Session Progress**: Progress within current 20-episode session (e.g. `Session 6: 14 / 20`).
-* **Board Stable**: Perception debounce verification state from `/chess/game_status`.
 * **Quotas Breakdown**: Real-time progress counters across all 4 manipulation primitives:
   * `MOVE Quotas`: e.g. `60 / 240`.
   * `CLEAR Quotas`: e.g. `30 / 120 (L: 15, R: 15)` (Round-Robin bin balance).

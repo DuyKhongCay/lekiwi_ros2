@@ -195,27 +195,16 @@ std::string MoveCandidate::move_signature(const chess::Board &board) const
 // QuotaTracker Implementation
 // ============================================================================
 
-QuotaTracker::QuotaTracker()
+QuotaTracker::QuotaTracker(const CampaignConfig &config)
 {
-  init_default_quotas();
+  configure(config);
 }
 
-QuotaTracker::QuotaTracker(const std::filesystem::path &config_path)
+void QuotaTracker::configure(const CampaignConfig &config)
 {
-  init_default_quotas();
-  load_config_file(config_path);
-}
-
-QuotaTracker::QuotaTracker(const YAML::Node &config_node)
-{
-  init_default_quotas();
-  load_config(config_node);
-}
-
-void QuotaTracker::init_default_quotas()
-{
-  total_target_ = 600;
-  episodes_per_session_ = 20;
+  config_ = config;
+  total_target_ = config.total_episodes;
+  episodes_per_session_ = config.episodes_per_session;
 
   const std::vector<chess::Color> colors = {chess::Color::WHITE, chess::Color::BLACK};
   const std::vector<chess::PieceType> all_pieces = {
@@ -223,92 +212,45 @@ void QuotaTracker::init_default_quotas()
     chess::PieceType::ROOK, chess::PieceType::QUEEN, chess::PieceType::KING
   };
 
-  // 1. MOVE: 20 per piece x 12 pieces = 240
+  // 1. MOVE: 12 piece classes (6 types x 2 colors)
+  uint32_t move_per_piece = config.move_total / 12;
   for (auto c : colors) {
     for (auto pt : all_pieces) {
-      targets_[StepKind::MOVE][PieceKey{c, pt}] = 20;
+      targets_[StepKind::MOVE][PieceKey{c, pt}] = move_per_piece;
       completed_[StepKind::MOVE][PieceKey{c, pt}] = 0;
     }
   }
 
-  // 2. CLEAR: 12 per piece x 10 capturable pieces (no king) = 120
+  // 2. CLEAR: 10 capturable piece classes (excluding King) and 50/50 bin balance
+  uint32_t clear_per_piece = config.clear_total / 10;
   for (auto c : colors) {
     for (auto pt : all_pieces) {
       if (pt == chess::PieceType::KING) continue;
-      targets_[StepKind::CLEAR][PieceKey{c, pt}] = 12;
+      targets_[StepKind::CLEAR][PieceKey{c, pt}] = clear_per_piece;
       completed_[StepKind::CLEAR][PieceKey{c, pt}] = 0;
     }
   }
-  clear_left_target_ = 60;
-  clear_right_target_ = 60;
+  clear_left_target_ = config.clear_total / 2;
+  clear_right_target_ = config.clear_total / 2;
   clear_left_completed_ = 0;
   clear_right_completed_ = 0;
 
-  // 3. PICK: 10 per piece x 12 pieces = 120
+  // 3. PICK: 12 piece classes
+  uint32_t pick_per_piece = config.pick_total / 12;
   for (auto c : colors) {
     for (auto pt : all_pieces) {
-      targets_[StepKind::PICK][PieceKey{c, pt}] = 10;
+      targets_[StepKind::PICK][PieceKey{c, pt}] = pick_per_piece;
       completed_[StepKind::PICK][PieceKey{c, pt}] = 0;
     }
   }
 
-  // 4. PLACE: 10 per piece x 12 pieces = 120
+  // 4. PLACE: 12 piece classes
+  uint32_t place_per_piece = config.place_total / 12;
   for (auto c : colors) {
     for (auto pt : all_pieces) {
-      targets_[StepKind::PLACE][PieceKey{c, pt}] = 10;
+      targets_[StepKind::PLACE][PieceKey{c, pt}] = place_per_piece;
       completed_[StepKind::PLACE][PieceKey{c, pt}] = 0;
     }
-  }
-}
-
-void QuotaTracker::load_config(const YAML::Node &config_node)
-{
-  if (!config_node || !config_node.IsMap()) {
-    return;
-  }
-
-  if (config_node["campaign"]) {
-    auto c = config_node["campaign"];
-    if (c["total_episodes"]) total_target_ = c["total_episodes"].as<uint32_t>();
-    if (c["episodes_per_session"]) episodes_per_session_ = c["episodes_per_session"].as<uint32_t>();
-  }
-
-  if (config_node["quotas"]) {
-    auto q = config_node["quotas"];
-    for (auto kind : {StepKind::MOVE, StepKind::CLEAR, StepKind::PICK, StepKind::PLACE}) {
-      std::string key = (kind == StepKind::MOVE) ? "move" :
-                        (kind == StepKind::CLEAR) ? "clear" :
-                        (kind == StepKind::PICK) ? "pick" : "place";
-      if (q[key]) {
-        auto sub = q[key];
-        uint32_t per_piece = sub["per_piece"] ? sub["per_piece"].as<uint32_t>() : 0;
-        if (sub["pieces"] && sub["pieces"].IsSequence()) {
-          for (const auto &item : sub["pieces"]) {
-            auto pk = PieceKey::from_string(item.as<std::string>());
-            if (pk) {
-              targets_[kind][*pk] = per_piece;
-            }
-          }
-        }
-        if (kind == StepKind::CLEAR && sub["bins"]) {
-          if (sub["bins"]["left"]) clear_left_target_ = sub["bins"]["left"].as<uint32_t>();
-          if (sub["bins"]["right"]) clear_right_target_ = sub["bins"]["right"].as<uint32_t>();
-        }
-      }
-    }
-  }
-}
-
-void QuotaTracker::load_config_file(const std::filesystem::path &config_path)
-{
-  if (!std::filesystem::exists(config_path)) {
-    return;
-  }
-  try {
-    YAML::Node config = YAML::LoadFile(config_path.string());
-    load_config(config);
-  } catch (const std::exception &e) {
-    std::cerr << "Warning: Failed to load collection config from " << config_path << ": " << e.what() << "\n";
   }
 }
 

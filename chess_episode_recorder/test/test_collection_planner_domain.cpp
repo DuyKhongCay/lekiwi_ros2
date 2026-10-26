@@ -362,5 +362,32 @@ TEST_F(CollectionPlannerDomainTest, MoveCandidateSelector_SequentialTurnsPrevent
   }
 }
 
+// 9. QuotaTracker: Custom CampaignConfig and mathematical auto-derivation
+TEST_F(CollectionPlannerDomainTest, QuotaTracker_CustomCampaignConfigAutoDerivation)
+{
+  CampaignConfig cfg;
+  cfg.total_episodes = 1200;
+  cfg.episodes_per_session = 30;
+  cfg.move_total = 480;
+  cfg.clear_total = 240;
+  cfg.pick_total = 240;
+  cfg.place_total = 240;
+
+  QuotaTracker tracker(cfg);
+  PieceKey wp{chess::Color::WHITE, chess::PieceType::PAWN};
+  // MOVE: 480 / 12 = 40 per piece
+  EXPECT_EQ(tracker.get_target(StepKind::MOVE, wp), 40u);
+
+  // CLEAR: 240 / 10 = 24 per piece
+  EXPECT_EQ(tracker.get_target(StepKind::CLEAR, wp), 24u);
+
+  // PICK & PLACE: 240 / 12 = 20 each
+  EXPECT_EQ(tracker.get_target(StepKind::PICK, wp), 20u);
+  EXPECT_EQ(tracker.get_target(StepKind::PLACE, wp), 20u);
+
+  auto summary = tracker.get_summary();
+  EXPECT_EQ(summary.total_target, 1200u);
+}
+
 } // namespace chess_episode_recorder::domain::test
 

@@ -132,17 +132,28 @@ struct SessionState
 };
 
 /**
+ * @brief Campaign target quotas configuration (pure C++ domain POCO).
+ */
+struct CampaignConfig
+{
+  uint32_t total_episodes{600};
+  uint32_t episodes_per_session{20};
+  uint32_t move_total{240};
+  uint32_t clear_total{120};
+  uint32_t pick_total{120};
+  uint32_t place_total{120};
+};
+
+/**
  * @brief Aggregate managing campaign targets, quotas, crash recovery, and session persistence.
  */
 class QuotaTracker
 {
 public:
-  QuotaTracker();
-  explicit QuotaTracker(const std::filesystem::path &config_path);
-  explicit QuotaTracker(const YAML::Node &config_node);
+  explicit QuotaTracker(const CampaignConfig &config = CampaignConfig{});
 
-  void load_config(const YAML::Node &config_node);
-  void load_config_file(const std::filesystem::path &config_path);
+  void configure(const CampaignConfig &config);
+  [[nodiscard]] const CampaignConfig &get_config() const { return config_; }
 
   // Crash/Restart recovery: scans base directory for episode_*/episode_info.yaml
   uint32_t scan_and_recover(const std::filesystem::path &base_output_dir);
@@ -200,6 +211,7 @@ private:
   std::map<std::string, uint32_t> repeat_counts_;
   SessionState session_state_;
   chess::Board active_board_;
+  CampaignConfig config_;
 };
 
 /**

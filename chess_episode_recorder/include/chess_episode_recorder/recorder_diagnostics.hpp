@@ -28,9 +28,9 @@ enum class EpisodeState
 enum class CampaignState
 {
   DISABLED,                   ///< Collection planner disabled (pure manual teleop mode).
-  WAITING_FOR_SYSTEM_READY,   ///< Waiting for /system/nav_ready signal (TF/localization convergence).
   IDLE_READY,                 ///< Campaign ready for next move dispatch or execution.
   PLANNING_OR_SYNTHESIS,      ///< Actively evaluating moves or synthesizing new FEN.
+  AWAITING_PHYSICAL_SYNC,     ///< Barrier: Waiting for Orchestrator FEN sync & physical board alignment.
   DISPATCHED_TO_ORCH,         ///< Collection task sent to Orchestrator, waiting execution.
   CAMPAIGN_FINISHED           ///< All 600 episodes target reached.
 };
@@ -59,12 +59,12 @@ enum class CampaignState
   switch (state) {
     case CampaignState::DISABLED:
       return "DISABLED";
-    case CampaignState::WAITING_FOR_SYSTEM_READY:
-      return "WAITING_FOR_SYSTEM_READY";
     case CampaignState::IDLE_READY:
       return "IDLE_READY";
     case CampaignState::PLANNING_OR_SYNTHESIS:
       return "PLANNING_OR_SYNTHESIS";
+    case CampaignState::AWAITING_PHYSICAL_SYNC:
+      return "AWAITING_PHYSICAL_SYNC";
     case CampaignState::DISPATCHED_TO_ORCH:
       return "DISPATCHED_TO_ORCH";
     case CampaignState::CAMPAIGN_FINISHED:
@@ -81,9 +81,9 @@ struct RecorderDiagnosticsSnapshot
   EpisodeState episode_state{EpisodeState::IDLE};
   CampaignState campaign_state{CampaignState::DISABLED};
   bool enable_collection_planner{false};
-  bool is_system_ready{false};
-  bool is_board_synced{false};
-  bool is_board_stable{false};
+  bool is_action_server_connected{false};
+  bool has_active_goal{false};
+  std::string active_goal_uci{""};
   uint32_t current_episode_index{0};
   std::string base_output_dir{""};
   std::string active_instruction{""};

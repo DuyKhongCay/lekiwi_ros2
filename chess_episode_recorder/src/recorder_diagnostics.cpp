@@ -64,9 +64,11 @@ void RecorderDiagnostics::evaluate_campaign_status(
 
   stat.add("Campaign Mode", "ENABLED");
   stat.add("Campaign State", std::string(to_string(snapshot.campaign_state)));
-  stat.add("System Nav Ready", snapshot.is_system_ready ? "true" : "false");
-  stat.add("Board Synced", snapshot.is_board_synced ? "true" : "false");
-  stat.add("Board Stable", snapshot.is_board_stable ? "true" : "false");
+  stat.add("Action Server Connected", snapshot.is_action_server_connected ? "true" : "false");
+  stat.add("Active Goal Dispatched", snapshot.has_active_goal ? "true" : "false");
+  if (snapshot.has_active_goal && !snapshot.active_goal_uci.empty()) {
+    stat.add("Active Goal UCI", snapshot.active_goal_uci);
+  }
 
   const double progress_pct = (snapshot.target_total_episodes > 0)
     ? (100.0 * static_cast<double>(snapshot.total_completed_episodes) /
@@ -94,14 +96,10 @@ void RecorderDiagnostics::evaluate_campaign_status(
       diagnostic_msgs::msg::DiagnosticStatus::OK,
       "Campaign complete: target %u episodes reached",
       snapshot.target_total_episodes);
-  } else if (snapshot.campaign_state == CampaignState::WAITING_FOR_SYSTEM_READY) {
+  } else if (!snapshot.is_action_server_connected) {
     stat.summary(
       diagnostic_msgs::msg::DiagnosticStatus::WARN,
-      "Waiting for system readiness (/system/nav_ready)");
-  } else if (!snapshot.is_board_synced) {
-    stat.summary(
-      diagnostic_msgs::msg::DiagnosticStatus::WARN,
-      "Waiting for physical board synchronization (/chess/game_status)");
+      "Waiting for Orchestrator ExecuteCollectionTask action server");
   } else {
     stat.summary(
       diagnostic_msgs::msg::DiagnosticStatus::OK,
