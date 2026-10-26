@@ -86,11 +86,8 @@ Overall game state, board evaluation, and match orchestration phase:
 | `header` | `std_msgs/Header` | Timestamp of latest board state update |
 | `full_fen` | `string` | Standard 6-field Forsyth-Edwards Notation (FEN) |
 | `last_move_details` | `ChessMoveDetails` | Semantic details of the latest executed move |
-| `best_move_details` | `ChessMoveDetails` | Engine recommendation for the active turn |
 | `active_color` | `string` | Color to move: `"w"` (White) or `"b"` (Black) |
-| `robot_color` | `string` | Robot player color: `"w"` or `"b"` |
-| `game_phase` | `uint8` | Phase (`WAITING_PLAYER=0`, `THINKING=1`, `READY=2`, `EXECUTING=3`, `GAME_OVER=4`, `AWAITING_BOARD_SYNC=5`) |
-| `is_board_stable` | `bool` | True if vision markers are clear without optical blur |
+| `is_board_synced` | `bool` | True when physical board layout matches active session FEN |
 | `is_legal_move` | `bool` | True if detected move conforms to FIDE chess rules |
 | `is_check` | `bool` | True if active player's King is in check |
 | `is_checkmate` | `bool` | True if active player has no legal moves and is in check |

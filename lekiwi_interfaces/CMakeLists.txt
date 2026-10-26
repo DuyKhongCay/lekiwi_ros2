@@ -24,9 +24,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/CheckMoveFeasibility.srv"
   "srv/GoToNamedPose.srv"
   "srv/SetFen.srv"
-  "srv/ExecuteCollectionTask.srv"
   "action/ComputeBestMove.action"
   "action/ExecuteChessMove.action"
+  "action/ExecuteCollectionTask.action"
   DEPENDENCIES std_msgs geometry_msgs sensor_msgs
 )
 
