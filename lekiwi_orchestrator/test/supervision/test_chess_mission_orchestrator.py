@@ -58,30 +58,29 @@ def test_orchestrator_initial_state(ros_context):
 @pytest.mark.parametrize(
     ("color", "expected_state"),
     [
-        ("b", MacroMissionState.WAITING_FOR_PLAYER_MOVE),
+        ("b", MacroMissionState.WAITING_FOR_NEXT_MOVE),
         ("w", MacroMissionState.EVALUATING_BEST_MOVE),
     ],
 )
 def test_game_start_by_player_color(ros_context, color, expected_state):
-    """Verify game startup behavior depending on dynamically broadcast robot color (White vs Black)."""
-    node = ChessMissionOrchestrator()
+    """Verify game startup behavior depending on configured robot color (White vs Black)."""
+    node = ChessMissionOrchestrator(
+        parameter_overrides=[
+            Parameter("robot_color", value="black" if color == "b" else "white"),
+        ]
+    )
     try:
+        node.engine_client.compute_best_move_async = lambda **kwargs: True
         node._on_nav_ready(Bool(data=True))
         assert node.is_nav_ready
-        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
         assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
 
         # Incoming first game status message from chess master: White to move
         status = ChessGameStatus()
         status.full_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
         status.active_color = "w"
-        status.robot_color = color
-        status.is_board_stable = True
-        if color == "w":
-            status.game_phase = ChessGameStatus.PHASE_ROBOT_THINKING
-            status.best_move_details.uci = ""
-        else:
-            status.game_phase = ChessGameStatus.PHASE_WAITING_PLAYER
+        status.is_board_synced = True
 
         node._on_game_status(status)
         assert node.mission_state == expected_state
@@ -95,8 +94,10 @@ def test_game_over_conditions(ros_context, condition):
     node = ChessMissionOrchestrator()
     try:
         node._on_nav_ready(Bool(data=True))
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
 
         status_msg = ChessGameStatus()
+        status_msg.is_board_synced = True
         if condition == "checkmate":
             status_msg.is_checkmate = True
         else:
@@ -116,11 +117,17 @@ def test_nav_readiness_gating_behavior(ros_context):
     try:
         assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
         node._on_nav_ready(Bool(data=True))
-        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+
+        # Synchronize board
+        sync_status = ChessGameStatus()
+        sync_status.is_board_synced = True
+        node._on_game_status(sync_status)
+        assert node.mission_state == MacroMissionState.WAITING_FOR_NEXT_MOVE
 
         # Non-critical state: losing nav ready doesn't crash player wait
         node._on_nav_ready(Bool(data=False))
-        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        assert node.mission_state == MacroMissionState.WAITING_FOR_NEXT_MOVE
 
         # Critical state: losing nav ready during reachability triggers ERROR_FALLBACK
         node._on_nav_ready(Bool(data=True))
@@ -131,9 +138,9 @@ def test_nav_readiness_gating_behavior(ros_context):
         node._on_nav_ready(Bool(data=False))
         assert node.mission_state == MacroMissionState.ERROR_FALLBACK
 
-        # Recovery from ERROR_FALLBACK back to WAITING_FOR_TF_READY
+        # Recovery from ERROR_FALLBACK back to RELOCALIZE
         node.trigger_recovery()
-        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+        assert node.mission_state == MacroMissionState.RELOCALIZE
     finally:
         node.destroy_node()
 
@@ -171,7 +178,7 @@ def test_action_timeout_watchdog_cancels_goal(ros_context):
 
         node.trigger_recovery()
         assert dispatcher.cancelled
-        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+        assert node.mission_state == MacroMissionState.RELOCALIZE
     finally:
         node.destroy_node()
 
@@ -191,7 +198,7 @@ def test_self_healing_recover_service(ros_context):
         result_resp = node._handle_recover_service(req, resp)
 
         assert result_resp.success
-        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+        assert node.mission_state == MacroMissionState.RELOCALIZE
         assert node.motion_state == MotionExecutionState.IDLE
         assert node.perception_context == PerceptionContext.TF_TRACKING_AND_NAV
     finally:
@@ -216,7 +223,7 @@ def test_workflow_dispatch_sequences(ros_context, plan_type, is_capture):
     try:
         node._on_nav_ready(Bool(data=True))
         node._on_grasp_ready(Bool(data=True))
-        node.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+        node.transition_to(MacroMissionState.WAITING_FOR_NEXT_MOVE)
 
         resp = CheckMoveFeasibility.Response()
         resp.feasible = True
@@ -247,7 +254,12 @@ def test_recovery_retains_and_resumes_interrupted_move(ros_context):
     try:
         node._on_nav_ready(Bool(data=True))
         node._on_grasp_ready(Bool(data=True))
-        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+
+        status = ChessGameStatus()
+        status.is_board_synced = True
+        node._on_game_status(status)
+        assert node.mission_state == MacroMissionState.WAITING_FOR_NEXT_MOVE
 
         node._dispatch_move_workflow("c7c5")
         assert node.current_move_details.uci == "c7c5"
@@ -258,12 +270,17 @@ def test_recovery_retains_and_resumes_interrupted_move(ros_context):
 
         recovered = node.trigger_recovery(reason="test_recovery")
         assert recovered
-        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+        assert node.mission_state == MacroMissionState.RELOCALIZE
         assert node.pending_recovery_move is not None
         assert node.pending_recovery_move.uci == "c7c5"
 
-        # On next nav ready tick, robot resumes interrupted move
+        # On next nav ready tick, robot transitions to AWAITING_BOARD_SYNC
         node._on_nav_ready(Bool(data=True))
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+        assert node.pending_recovery_move is not None
+
+        # Once board is synced, interrupted move is resumed
+        node._on_game_status(status)
         assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
         assert node.current_move_details.uci == "c7c5"
         assert node.pending_recovery_move is None
@@ -288,11 +305,8 @@ def test_recovery_discards_stale_move_if_fen_changes(ros_context):
         # New game status arrives with different FEN (board modified externally)
         status = ChessGameStatus()
         status.active_color = "b"
-        status.robot_color = "b"
         status.full_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
-        status.is_board_stable = True
-        status.game_phase = ChessGameStatus.PHASE_ROBOT_READY
-        status.best_move_details.uci = "d7d5"
+        status.is_board_synced = True
         node._on_game_status(status)
 
         # Stale recovery move e7e5 must be discarded
@@ -334,12 +348,11 @@ def test_post_move_verification_watchdog_timeout_repositions(ros_context):
 
         # Board stabilizes
         status = ChessGameStatus()
-        status.is_board_stable = True
         status.is_legal_move = True
         status.full_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
         node._on_game_status(status)
 
-        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        assert node.mission_state == MacroMissionState.WAITING_FOR_NEXT_MOVE
         assert not node.post_move_verifier.is_active
     finally:
         node.destroy_node()
@@ -411,7 +424,7 @@ def test_post_move_verification_repositioning_does_not_trip_disturbance(ros_cont
 
 
 def test_post_move_verification_ignores_illegal_vision(ros_context):
-    """Verify that is_board_stable=True with is_legal_move=False does NOT finalize turn."""
+    """Verify that is_legal_move=False does NOT finalize turn."""
     node = ChessMissionOrchestrator()
     try:
         node._on_nav_ready(Bool(data=True))
@@ -422,9 +435,8 @@ def test_post_move_verification_ignores_illegal_vision(ros_context):
         assert node.mission_state == MacroMissionState.POST_MOVE_VERIFYING
         assert node.post_move_verifier.is_active
 
-        # Occluded vision: stable board but move is illegal
+        # Occluded vision: move is illegal
         status = ChessGameStatus()
-        status.is_board_stable = True
         status.is_legal_move = False
         node._on_game_status(status)
 
@@ -440,7 +452,7 @@ def test_execute_chess_move_invalid_uci_fallback(ros_context):
     try:
         node._on_nav_ready(Bool(data=True))
         node._on_grasp_ready(Bool(data=True))
-        node.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+        node.transition_to(MacroMissionState.WAITING_FOR_NEXT_MOVE)
         node._dispatch_move_workflow("xyz")
         assert node.mission_state == MacroMissionState.ERROR_FALLBACK
     finally:
@@ -454,7 +466,7 @@ def test_disturbance_interrupt_and_one_button_recovery(ros_context):
     try:
         node._on_nav_ready(Bool(data=True))
         node._on_grasp_ready(Bool(data=True))
-        node.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
+        node.transition_to(MacroMissionState.WAITING_FOR_NEXT_MOVE)
 
         # Start a chess move
         node._dispatch_move_workflow("e7e5")
@@ -479,11 +491,17 @@ def test_disturbance_interrupt_and_one_button_recovery(ros_context):
         res = node._handle_recover_service(req, resp)
         assert res.success
         assert not node.health_supervisor.is_operator_latched
-        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+        assert node.mission_state == MacroMissionState.RELOCALIZE
         assert node.perception_context == PerceptionContext.TF_TRACKING_AND_NAV
 
-        # Upon camera relocalization and nav ready, pending move is resumed
+        # Upon camera relocalization and nav ready, enters AWAITING_BOARD_SYNC
         node._on_nav_ready(Bool(data=True))
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+
+        # Once board is verified synced, pending move is resumed
+        sync_status = ChessGameStatus()
+        sync_status.is_board_synced = True
+        node._on_game_status(sync_status)
         assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
         assert node.current_move_details.uci == "e7e5"
     finally:
@@ -495,15 +513,15 @@ def test_recovery_from_non_error_state(ros_context):
     node = ChessMissionOrchestrator()
     try:
         node._on_nav_ready(Bool(data=True))
-        node.transition_to(MacroMissionState.WAITING_FOR_PLAYER_MOVE)
-        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        node.transition_to(MacroMissionState.WAITING_FOR_NEXT_MOVE)
+        assert node.mission_state == MacroMissionState.WAITING_FOR_NEXT_MOVE
 
-        # Trigger recovery directly from WAITING_FOR_PLAYER_MOVE
+        # Trigger recovery directly from WAITING_FOR_NEXT_MOVE
         req = Trigger.Request()
         resp = Trigger.Response()
         res = node._handle_recover_service(req, resp)
         assert res.success
-        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+        assert node.mission_state == MacroMissionState.RELOCALIZE
     finally:
         node.destroy_node()
 
@@ -520,10 +538,10 @@ def test_export_fen_service(ros_context):
         res = node._handle_export_fen_service(req, resp)
         assert not res.success
 
-        # Receive game status with full FEN and robot color
+        # Receive game status with full FEN and set robot color
+        node.game_status_handler.set_robot_color("b")
         status = ChessGameStatus()
         status.full_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
-        status.robot_color = "b"
         node._on_game_status(status)
 
         res = node._handle_export_fen_service(req, resp)
@@ -569,7 +587,8 @@ def test_import_fen_service_accepted_and_sync_workflow(ros_context):
     node = ChessMissionOrchestrator()
     try:
         node._on_nav_ready(Bool(data=True))
-        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+        assert node._execute_collection_task_server is not None
 
         target_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
 
@@ -600,24 +619,24 @@ def test_import_fen_service_accepted_and_sync_workflow(ros_context):
         assert res.robot_color == "b"
         assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
         assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
+        assert node._execute_collection_task_server is not None
 
-        # Status reported as PHASE_AWAITING_BOARD_SYNC or unstable: remain in AWAITING_BOARD_SYNC
+        # Status reported as unsynced: remain in AWAITING_BOARD_SYNC
         status = ChessGameStatus()
         status.full_fen = target_fen
         status.active_color = "w"
-        status.robot_color = "b"
-        status.game_phase = ChessGameStatus.PHASE_AWAITING_BOARD_SYNC
-        status.is_board_stable = False
+        status.is_board_synced = False
         node._on_game_status(status)
         assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+        assert node._execute_collection_task_server is not None
 
-        # Status reports board synchronized and stable (White turn, robot is Black)
-        status.game_phase = ChessGameStatus.PHASE_WAITING_PLAYER
-        status.is_board_stable = True
+        # Status reports board synchronized (White turn, robot is Black)
+        status.is_board_synced = True
         node._on_game_status(status)
 
-        # Board synchronized and stable -> default transition is EVALUATING_BEST_MOVE
-        assert node.mission_state == MacroMissionState.EVALUATING_BEST_MOVE
+        # Board synchronized and stable -> transitions to WAITING_FOR_NEXT_MOVE
+        assert node.mission_state == MacroMissionState.WAITING_FOR_NEXT_MOVE
+        assert node._execute_collection_task_server is not None
     finally:
         node.destroy_node()
 
@@ -658,61 +677,330 @@ def test_import_fen_service_accepted_during_waiting_for_tf_ready(ros_context):
         # Must maintain WAITING_FOR_TF_READY until Navigation confirms ready
         assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
 
-        # Now confirm nav ready -> should transition to WAITING_FOR_PLAYER_MOVE
+        # Now confirm nav ready -> should transition to AWAITING_BOARD_SYNC
         node._on_nav_ready(Bool(data=True))
-        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
     finally:
         node.destroy_node()
 
 
-def test_execute_collection_task_service(ros_context):
-    """Verify /orchestrator/execute_collection_task service handler and state validation."""
-    from rclpy.task import Future
+def test_execute_collection_task_action(ros_context):
+    """Verify /orchestrator/execute_collection_task action server, goal callback, and execution lifecycle."""
+    import threading
+    from lekiwi_interfaces.action import ExecuteCollectionTask
     from lekiwi_interfaces.msg import ChessMoveDetails
-    from lekiwi_interfaces.srv import ExecuteCollectionTask, SetCandidateMove
+    from rclpy.action import CancelResponse, GoalResponse
+
+    class MockGoalHandle:
+        def __init__(self, request):
+            self.request = request
+            self.is_active = True
+            self.is_cancel_requested = False
+            self.succeeded = False
+            self.aborted = False
+            self.canceled_flag = False
+            self.feedback_list = []
+
+        def publish_feedback(self, fb):
+            self.feedback_list.append(fb)
+
+        def succeed(self):
+            self.succeeded = True
+            self.is_active = False
+
+        def abort(self):
+            self.aborted = True
+            self.is_active = False
+
+        def canceled(self):
+            self.canceled_flag = True
+            self.is_active = False
 
     dispatcher = FakeMotionClient()
     node = ChessMissionOrchestrator(motion_client=dispatcher)
     try:
+        # 1. Verify Action Server is NOT created while in WAITING_FOR_TF_READY (Deferred Activation)
+        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+        assert node._execute_collection_task_server is None
+
+        # 2. Confirm nav ready -> transitions to AWAITING_BOARD_SYNC and activates Action Server
         node._on_nav_ready(Bool(data=True))
-        assert node.mission_state == MacroMissionState.WAITING_FOR_PLAYER_MOVE
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+        assert node._execute_collection_task_server is not None
 
-        # Mock candidate move client to verify calls
+        # 3. Verify goal rejected while in AWAITING_BOARD_SYNC
+        goal_req = ExecuteCollectionTask.Goal()
+        goal_req.move = ChessMoveDetails(uci="e2e4", piece_type="pawn", piece_color="w")
+        goal_resp = node._collection_task_goal_callback(goal_req)
+        assert goal_resp == GoalResponse.REJECT
+
+        # Confirm physical board synchronization -> transitions to WAITING_FOR_NEXT_MOVE
+        sync_status = ChessGameStatus()
+        sync_status.is_board_synced = True
+        node._on_game_status(sync_status)
+        assert node.mission_state == MacroMissionState.WAITING_FOR_NEXT_MOVE
+
+        # Now goal is accepted
+        goal_resp = node._collection_task_goal_callback(goal_req)
+        assert goal_resp == GoalResponse.ACCEPT
+
+        # 4. Mock candidate move publisher to verify broadcasts
         candidate_calls = []
-        node._chess_set_candidate_move_client.service_is_ready = lambda: True
-        def mock_candidate_call(req):
-            candidate_calls.append(req.move)
-            fut = Future()
-            fut.set_result(SetCandidateMove.Response(success=True, message="OK"))
-            return fut
-        node._chess_set_candidate_move_client.call_async = mock_candidate_call
+        node._candidate_move_pub.publish = lambda msg: candidate_calls.append(msg)
 
-        req = ExecuteCollectionTask.Request()
-        req.move = ChessMoveDetails(
-            uci="e2e4",
-            piece_type="pawn",
-            piece_color="w",
-        )
-        req.force_pick_place = True
-        req.clear_bin_side = "left"
-        req.bypass_steps = ["MOVE"]
+        goal_req.force_pick_place = True
+        goal_req.clear_bin_side = 1
+        goal_req.bypass_steps = ["MOVE"]
 
-        resp = ExecuteCollectionTask.Response()
-        res = node._handle_execute_collection_task_service(req, resp)
+        mock_handle = MockGoalHandle(goal_req)
 
-        assert res.success
-        assert "Collection task dispatched" in res.message
+        # Run execute callback in background thread
+        exec_result = []
+
+        def run_execute():
+            res = node._execute_collection_task_callback(mock_handle)
+            exec_result.append(res)
+
+        th = threading.Thread(target=run_execute)
+        th.start()
+
+        # Wait briefly for execute callback to initialize and dispatch
+        import time
+        for _ in range(50):
+            if node._current_goal_move == "e2e4":
+                break
+            time.sleep(0.02)
+
         assert node._current_goal_move == "e2e4"
         assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
 
-        # Verify candidate move was set
+        # Verify feedback was published
+        assert len(mock_handle.feedback_list) >= 1
+        assert mock_handle.feedback_list[0].current_stage == "CHECKING_REACHABILITY"
+
+        # Verify candidate move was published
         assert len(candidate_calls) == 1
         assert candidate_calls[0].uci == "e2e4"
 
-        # Verify turn finalization clears candidate move
+        # Verify second goal rejected while current goal is active
+        assert node._collection_task_goal_callback(goal_req) == GoalResponse.REJECT
+
+        # 5. Finalize turn -> completes the action goal
+        node._game_status_handler._latest_full_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
         node._finalize_turn_completed()
+
+        th.join(timeout=2.0)
+        assert not th.is_alive()
+        assert len(exec_result) == 1
+        assert exec_result[0].success is True
+        assert exec_result[0].final_fen == "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+        assert mock_handle.succeeded is True
+
+        # Verify candidate move cleared on turn completion
         assert len(candidate_calls) == 2
         assert candidate_calls[1].uci == ""
+
+        # 6. Verify cancel callback
+        cancel_handle = MockGoalHandle(goal_req)
+        cancel_resp = node._collection_task_cancel_callback(cancel_handle)
+        assert cancel_resp == CancelResponse.ACCEPT
+
+        # 7. Verify Action Server is maintained alive during RELOCALIZE (no DDS churn), but rejects goals
+        node.trigger_recovery(reason="test_recovery")
+        assert node.mission_state == MacroMissionState.RELOCALIZE
+        assert node._execute_collection_task_server is not None
+        assert node._collection_task_goal_callback(goal_req) == GoalResponse.REJECT
+
+        # 8. Verify active goal is aborted cleanly on recovery
+        active_handle = MockGoalHandle(goal_req)
+        node._active_collection_goal_handle = active_handle
+        node.trigger_recovery(reason="abort_test")
+        assert active_handle.aborted is True
+        assert node._active_collection_goal_handle is None
     finally:
         node.destroy_node()
+
+
+def test_recovery_resume_preserves_black_move_instructions(ros_context):
+    """Regression test: Interrupted black move (e.g. f2h2) preserved and resumed with correct color."""
+    motion = FakeMotionClient()
+    node = ChessMissionOrchestrator(motion_client=motion)
+    try:
+        # Simulate an interrupted black move collection task (f2h2: black rook captures white pawn)
+        black_goal = ChessMoveGoal(
+            uci="f2h2",
+            piece_type="rook:pawn",
+            piece_color="b",
+            is_capture=True,
+            force_pick_place=False,
+            clear_bin_side="right",
+        )
+        assert black_goal.color_name == "black"
+        assert black_goal.opposing_color_name == "white"
+
+        node._current_move_details = black_goal
+        node._current_goal_move = black_goal.uci
+
+        # Simulate trigger recovery into RELOCALIZE
+        node.trigger_recovery(reason="nav_failure")
+        assert node.mission_state == MacroMissionState.RELOCALIZE
+        assert node.pending_recovery_move is not None
+        assert node.pending_recovery_move.uci == "f2h2"
+        assert node.pending_recovery_move.piece_color == "b"
+
+        # Simulate Nav2 ready confirmation -> Triggers resumption
+        node._health_supervisor._is_nav_ready = True
+        node._on_nav_ready_confirmed(is_ready=True)
+
+        # Confirm the resumed move remains black and retains all properties
+        assert node.current_move_details is not None
+        assert node.current_move_details.uci == "f2h2"
+        assert node.current_move_details.piece_color == "b"
+        assert node.current_move_details.color_name == "black"
+        assert node.current_move_details.opposing_color_name == "white"
+        assert node.current_move_details.is_capture is True
+    finally:
+        node.destroy_node()
+
+
+def test_autonomous_engine_trigger_and_record_mode(ros_context):
+    """Verify autonomous mode triggers EngineClient, while record mode waits for external task."""
+    # 1. Record mode = True: no engine call on robot's turn
+    node_rec = ChessMissionOrchestrator(
+        motion_client=FakeMotionClient(),
+        parameter_overrides=[
+            Parameter("record", value=True),
+            Parameter("robot_color", value="white"),
+        ],
+    )
+    try:
+        engine_called = []
+        node_rec.engine_client.compute_best_move_async = lambda **kwargs: engine_called.append(True)
+        node_rec._on_nav_ready(Bool(data=True))
+
+        status = ChessGameStatus()
+        status.full_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        status.active_color = "w"
+        status.is_board_synced = True
+        node_rec._on_game_status(status)
+
+        assert len(engine_called) == 0
+        assert node_rec.mission_state == MacroMissionState.WAITING_FOR_NEXT_MOVE
+
+        # In record mode, external collection task transitions directly to CHECKING_REACHABILITY
+        goal = ChessMoveGoal(uci="e2e4", piece_type="pawn", piece_color="w")
+        ok, msg = node_rec._move_workflow.dispatch_collection_task(goal)
+        assert ok, msg
+        assert node_rec.mission_state == MacroMissionState.CHECKING_REACHABILITY
+        assert node_rec.mission_state != MacroMissionState.EVALUATING_BEST_MOVE
+    finally:
+        node_rec.destroy_node()
+
+    # 2. Record mode = False: engine is invoked on robot's turn
+    dispatcher = FakeMotionClient()
+    node_auto = ChessMissionOrchestrator(
+        motion_client=dispatcher,
+        parameter_overrides=[
+            Parameter("record", value=False),
+            Parameter("robot_color", value="white"),
+        ],
+    )
+    try:
+        engine_calls = []
+
+        def mock_engine(fen, think_time_ms, on_complete):
+            engine_calls.append((fen, think_time_ms))
+            on_complete("e2e4", "OK")
+            return True
+
+        node_auto.engine_client.compute_best_move_async = mock_engine
+        node_auto._on_nav_ready(Bool(data=True))
+
+        status = ChessGameStatus()
+        status.full_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        status.active_color = "w"
+        status.is_board_synced = True
+        node_auto._on_game_status(status)
+
+        assert len(engine_calls) == 1
+        assert engine_calls[0][0] == status.full_fen
+        # After engine returns move, it transitions to reachability check
+        assert node_auto.mission_state == MacroMissionState.CHECKING_REACHABILITY
+        assert node_auto.current_move_details.uci == "e2e4"
+    finally:
+        node_auto.destroy_node()
+
+
+def test_action_server_lifecycle_and_service_timeout_board_sync(ros_context):
+    """Verify ExecuteCollectionTask action server is maintained in AWAITING_BOARD_SYNC and accepts in WAITING_FOR_NEXT_MOVE."""
+    from rclpy.task import Future
+    from lekiwi_interfaces.action import ExecuteCollectionTask
+    from lekiwi_interfaces.msg import ChessMoveDetails
+    from rclpy.action import GoalResponse
+
+    node = ChessMissionOrchestrator()
+    try:
+        # Check service_timeout_sec parameter loaded
+        assert hasattr(node.parameters, "service_timeout_sec")
+        assert node.parameters.service_timeout_sec == 5.0
+        assert not hasattr(node.parameters, "feasibility_timeout_sec")
+
+        # In WAITING_FOR_TF_READY, action server is not active
+        assert node.mission_state == MacroMissionState.WAITING_FOR_TF_READY
+        assert node._execute_collection_task_server is None
+
+        # Transition to WAITING_FOR_NEXT_MOVE path -> action server activated
+        node._on_nav_ready(Bool(data=True))
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+        assert node._execute_collection_task_server is not None
+
+        # Import FEN -> transitions to AWAITING_BOARD_SYNC
+        node._chess_set_fen_client.service_is_ready = lambda: True
+        target_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+
+        def mock_call_async(req):
+            fut = Future()
+            fut.set_result(
+                SetFen.Response(
+                    success=True,
+                    canonical_fen=target_fen,
+                    active_color="w",
+                    robot_color="b",
+                    message="OK",
+                )
+            )
+            return fut
+
+        node._chess_set_fen_client.call_async = mock_call_async
+        req = SetFen.Request(fen=target_fen, robot_color="black")
+        resp = SetFen.Response()
+        res = node._handle_import_fen_service(req, resp)
+        assert res.success
+
+        # State is AWAITING_BOARD_SYNC -> Action server maintained alive (no churn), but rejects goals
+        assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
+        assert node._execute_collection_task_server is not None
+
+        # Goal callback rejects any goal while in AWAITING_BOARD_SYNC
+        goal_req = ExecuteCollectionTask.Goal()
+        goal_req.move = ChessMoveDetails(uci="e2e4", piece_type="pawn", piece_color="w")
+        goal_resp = node._collection_task_goal_callback(goal_req)
+        assert goal_resp == GoalResponse.REJECT
+
+        # Board is confirmed synced -> transitions to WAITING_FOR_NEXT_MOVE
+        status = ChessGameStatus()
+        status.full_fen = target_fen
+        status.active_color = "w"
+        status.is_board_synced = True
+        node._on_game_status(status)
+
+        assert node.mission_state == MacroMissionState.WAITING_FOR_NEXT_MOVE
+        assert node._execute_collection_task_server is not None
+
+        # Now goal callback accepts goal
+        goal_resp_synced = node._collection_task_goal_callback(goal_req)
+        assert goal_resp_synced == GoalResponse.ACCEPT
+    finally:
+        node.destroy_node()
+
 

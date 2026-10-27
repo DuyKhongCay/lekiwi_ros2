@@ -26,7 +26,7 @@ def test_builder_deleteall_hygiene(dummy_stamp):
     """Verify that builder always prepends a DELETEALL marker for RViz telemetry hygiene."""
     builder = StatusMarkerBuilder(VisualizerConfig(robot_frame="test_base"))
     snapshot = OrchestratorStateSnapshot(
-        mission_state=MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+        mission_state=MacroMissionState.WAITING_FOR_NEXT_MOVE,
         perception_context=0,
     )
     markers = builder.build(
@@ -55,7 +55,7 @@ def test_builder_deleteall_hygiene(dummy_stamp):
             ["Waiting for Nav Ready", "White"],
         ),
         (
-            MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+            MacroMissionState.WAITING_FOR_NEXT_MOVE,
             True,
             "b",
             "",

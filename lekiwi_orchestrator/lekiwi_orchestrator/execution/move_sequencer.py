@@ -68,6 +68,7 @@ class MoveSequencer:
         tf_buffer: tf2_ros.Buffer | None = None,
         landmarks: ArmLandmarks | None = None,
         bypass_pause_sec: float = 3.0,
+        max_recovery_attempts: int = 3,
     ) -> None:
         self._node = node
         self._dispatcher = dispatcher
@@ -94,6 +95,8 @@ class MoveSequencer:
         self._navigation_enabled = navigation_enabled
         self._chassis_settle_timeout_sec = max(0.0, float(chassis_settle_timeout_sec))
         self._bypass_pause_sec = max(0.0, float(bypass_pause_sec))
+        self._max_recovery_attempts = max(1, int(max_recovery_attempts))
+        self._stage_recovery_attempts = 0
         self._grasp_readiness_provider = grasp_readiness_provider or (lambda: True)
         self._chassis_settle_provider = chassis_settle_provider or (lambda: True)
         self._pending_stage: MoveStep | None = None
@@ -116,6 +119,15 @@ class MoveSequencer:
     @property
     def chassis_settle_timeout_sec(self) -> float:
         return self._chassis_settle_timeout_sec
+
+    @property
+    def max_recovery_attempts(self) -> int:
+        return self._max_recovery_attempts
+
+    @property
+    def stage_recovery_attempts(self) -> int:
+        with self._lock:
+            return self._stage_recovery_attempts
 
     def transition_motion_to(self, target_state: MotionExecutionState) -> bool:
         """Safely transition Level 2 MotionExecutionState validating legal transition matrix."""
@@ -166,6 +178,7 @@ class MoveSequencer:
             return
 
         with self._lock:
+            self._stage_recovery_attempts = 0
             if not self._stages:
                 self._current_stage = None
                 self.transition_motion_to(MotionExecutionState.IDLE)
@@ -195,7 +208,7 @@ class MoveSequencer:
             return True
 
         if not self._cancel_event.is_set():
-            self._handle_grasp_unready(stage)
+            self._branch_to_observation(stage, reason="pre_grasp_unready")
         return False
 
     def _execute_stage(self, stage: MoveStep) -> None:
@@ -223,6 +236,7 @@ class MoveSequencer:
     def _reset_recovery_state(self) -> None:
         with self._lock:
             self._pending_stage = None
+            self._stage_recovery_attempts = 0
             if self._obs_nav is not None:
                 self._obs_nav.reset_tour(ObservationIntent.RELOCALIZE)
 
@@ -257,23 +271,41 @@ class MoveSequencer:
         """Wait until chassis has fully settled (velocity within stop thresholds) or timeout expires."""
         return self._wait_for_condition(self._chassis_settle_provider, timeout_sec)
 
-    def _handle_grasp_unready(self, stage: MoveStep) -> None:
-        """Handle unready grasp state by triggering active relocalization self-healing."""
+    def branch_to_observation(self, reason: str = "manual_preempt") -> bool:
+        """Explicitly branch active navigation stage (e.g. NAV_*) directly to NAV_TO_OBS for relocalization.
+
+        Returns:
+            True if branching was initiated, False if no active stage or relocalization unavailable.
+        """
+        with self._lock:
+            stage = self._current_stage or self._pending_stage
+            if stage is None or self._cancel_event.is_set():
+                return False
+
+        if self._obs_nav is None or not self._navigation_enabled:
+            return False
+
+        self._branch_to_observation(stage, reason=reason)
+        return True
+
+    def _branch_to_observation(
+        self, stage: MoveStep, reason: str = "readiness_timeout"
+    ) -> None:
+        """Branch directly from current motion state (e.g. NAV_*) to NAV_TO_OBS for active relocalization."""
         if self._cancel_event.is_set():
             return
 
         if self._obs_nav is None or not self._navigation_enabled:
             self._handle_failure(
-                f"Grasp readiness check failed before stage '{stage.name}' "
-                f"(settle timeout {self._chassis_settle_timeout_sec:.1f}s expired, active relocalization unavailable)"
+                f"Grasp readiness check failed for stage '{stage.name}' ({reason}), "
+                "active relocalization unavailable"
             )
             return
 
         if self._obs_nav.has_exhausted_viewpoints(ObservationIntent.RELOCALIZE):
             max_attempts = self._obs_nav.get_max_attempts(ObservationIntent.RELOCALIZE)
             self._handle_failure(
-                f"Grasp readiness failed before stage '{stage.name}' "
-                f"and exhausted all {max_attempts} relocalization viewpoints"
+                f"Stage '{stage.name}' failed ({reason}) and exhausted all {max_attempts} relocalization viewpoints"
             )
             return
 
@@ -285,8 +317,8 @@ class MoveSequencer:
         max_attempts = self._obs_nav.get_max_attempts(ObservationIntent.RELOCALIZE)
 
         self._node.get_logger().warn(
-            f"[SELF-HEALING] Grasp readiness false before stage '{stage.name}'. "
-            f"Initiating active relocalization (attempt {current_idx + 1}/{max_attempts})..."
+            f"[SELF-HEALING] Branching to NAV_TO_OBS from stage '{stage.name}' (reason: {reason}, "
+            f"attempt {current_idx + 1}/{max_attempts})..."
         )
         self.transition_motion_to(MotionExecutionState.NAV_TO_OBS)
         self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
@@ -360,7 +392,9 @@ class MoveSequencer:
             self._node.get_logger().warn(
                 f"[SELF-HEALING] Relocalization Nav2 goal failed: {result.message}. Retrying next viewpoint..."
             )
-            self._handle_grasp_unready(pending)
+            self._branch_to_observation(
+                pending, reason=f"relocalize_nav_failed: {result.message}"
+            )
             return
 
         self._node.get_logger().info(
@@ -372,7 +406,7 @@ class MoveSequencer:
                 self._node.get_logger().warn(
                     "[SELF-HEALING] Grasp readiness still false at current viewpoint. Retrying next viewpoint..."
                 )
-                self._handle_grasp_unready(pending)
+                self._branch_to_observation(pending, reason="relocalize_unready")
             return
 
         if not self._cancel_event.is_set():
@@ -408,6 +442,17 @@ class MoveSequencer:
             on_completed=lambda res: self._on_nav_completed(res, stage),
         )
         if not dispatched:
+            if (
+                stage.name != StepKind.OBSERVATION
+                and self._obs_nav is not None
+                and self._navigation_enabled
+            ):
+                self._node.get_logger().warn(
+                    f"Failed to dispatch Nav2 goal for stage '{stage.name}'. "
+                    "Branching directly to NAV_TO_OBS for active relocalization..."
+                )
+                self._branch_to_observation(stage, reason="nav2_dispatch_failed")
+                return
             self._handle_failure(
                 f"Failed to dispatch Nav2 goal for stage '{stage.name}'"
             )
@@ -417,6 +462,19 @@ class MoveSequencer:
             return
 
         if not result.success:
+            if (
+                stage.name != StepKind.OBSERVATION
+                and self._obs_nav is not None
+                and self._navigation_enabled
+            ):
+                self._node.get_logger().warn(
+                    f"Nav2 navigation failed for stage '{stage.name}': {result.message}. "
+                    "Branching directly to NAV_TO_OBS for active relocalization..."
+                )
+                self._branch_to_observation(
+                    stage, reason=f"nav2_failure: {result.message}"
+                )
+                return
             self._handle_failure(f"Nav2 navigation failed: {result.message}")
             return
 
@@ -438,7 +496,7 @@ class MoveSequencer:
         )
         if not self._wait_for_grasp_readiness(settle_sec):
             if not self._cancel_event.is_set():
-                self._handle_grasp_unready(stage)
+                self._branch_to_observation(stage, reason="grasp_unready")
             return
 
         if not self._cancel_event.is_set():
@@ -588,8 +646,37 @@ class MoveSequencer:
 
     def _on_manip_completed(self, result: ActionResult, stage: MoveStep) -> None:
         if not result.success:
+            can_recover = False
+            current_attempt = 0
+            with self._lock:
+                if (
+                    not self._cancel_event.is_set()
+                    and self._obs_nav is not None
+                    and self._navigation_enabled
+                    and self._stage_recovery_attempts < self._max_recovery_attempts
+                    and not self._obs_nav.has_exhausted_viewpoints(ObservationIntent.RELOCALIZE)
+                ):
+                    self._stage_recovery_attempts += 1
+                    current_attempt = self._stage_recovery_attempts
+                    can_recover = True
+
+            if can_recover:
+                self._node.get_logger().warn(
+                    f"[SELF-HEALING] Manipulation failed for stage '{stage.name}': {result.message}. "
+                    f"Triggering active relocalization recovery attempt {current_attempt}/{self._max_recovery_attempts}..."
+                )
+                if hasattr(self._node, "publish_collection_feedback"):
+                    self._node.publish_collection_feedback(
+                        f"SELF_HEALING_RELOCALIZE_{stage.name}", 20.0
+                    )
+                self._branch_to_observation(stage, reason=f"manip_failure: {result.message}")
+                return
+
             self._handle_failure(f"Manipulation execution failed: {result.message}")
             return
+
+        with self._lock:
+            self._stage_recovery_attempts = 0
 
         self._node.get_logger().info(
             f"Manipulation execution successful in {result.execution_time_sec:.2f}s: {result.message}"

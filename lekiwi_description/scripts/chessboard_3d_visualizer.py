@@ -32,7 +32,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
-from lekiwi_interfaces.msg import ChessGameStatus
+from lekiwi_interfaces.msg import ChessGameStatus, ChessMoveDetails
 
 PIECE_TYPE_MAP = {
     "p": "pawn",
@@ -42,6 +42,41 @@ PIECE_TYPE_MAP = {
     "q": "queen",
     "k": "king",
 }
+
+CASTLING_ROOK_MAP: dict[str, tuple[str, str]] = {
+    "e1g1": ("h1", "f1"),
+    "e1c1": ("a1", "d1"),
+    "e8g8": ("h8", "f8"),
+    "e8c8": ("a8", "d8"),
+}
+
+
+def move_from_square(move: ChessMoveDetails | None) -> str:
+    """Extract origin square from UCI string."""
+    return move.uci[:2] if (move and len(move.uci) >= 4) else ""
+
+
+def move_to_square(move: ChessMoveDetails | None) -> str:
+    """Extract target square from UCI string."""
+    return move.uci[2:4] if (move and len(move.uci) >= 4) else ""
+
+
+def move_captured_square(move: ChessMoveDetails | None) -> str:
+    """Extract square of captured piece, handling en-passant offset."""
+    if not move or not move.is_capture:
+        return ""
+    from_sq = move_from_square(move)
+    to_sq = move_to_square(move)
+    if move.is_en_passant and len(to_sq) == 2 and len(from_sq) == 2:
+        return f"{to_sq[0]}{from_sq[1]}"
+    return to_sq
+
+
+def move_castling_rook(move: ChessMoveDetails | None) -> tuple[str, str]:
+    """Return (from_square, to_square) for castling rook or ('', '')."""
+    if not move or not move.is_castling:
+        return ("", "")
+    return CASTLING_ROOK_MAP.get(move.uci, ("", ""))
 
 
 class Chessboard3DVisualizer(Node):
@@ -68,6 +103,14 @@ class Chessboard3DVisualizer(Node):
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
                 description="Input ChessGameStatus topic name.",
+            ),
+        )
+        self.declare_parameter(
+            "candidate_move_topic",
+            "/chess/candidate_move",
+            ParameterDescriptor(
+                type=ParameterType.PARAMETER_STRING,
+                description="Input ChessMoveDetails candidate move topic name.",
             ),
         )
         self.declare_parameter(
@@ -100,6 +143,7 @@ class Chessboard3DVisualizer(Node):
 
         self.frame_id = self.get_parameter("chessboard_frame").value
         game_status_topic = self.get_parameter("game_status_topic").value
+        candidate_move_topic = self.get_parameter("candidate_move_topic").value
         marker_topic = self.get_parameter("marker_topic").value
         self.square_size = float(self.get_parameter("square_size").value)
         self.board_z = float(self.get_parameter("board_z").value)
@@ -115,10 +159,23 @@ class Chessboard3DVisualizer(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.status_sub = self.create_subscription(
             ChessGameStatus, game_status_topic, self.game_status_callback, sub_qos
+        )
+
+        candidate_sub_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.candidate_sub = self.create_subscription(
+            ChessMoveDetails,
+            candidate_move_topic,
+            self.candidate_move_callback,
+            candidate_sub_qos,
         )
 
         pub_qos = QoSProfile(
@@ -129,11 +186,15 @@ class Chessboard3DVisualizer(Node):
         )
         self.marker_pub = self.create_publisher(MarkerArray, marker_topic, pub_qos)
 
+        # Track latest status and candidate move
+        self.candidate_move: ChessMoveDetails | None = None
+        self.latest_game_status: ChessGameStatus | None = None
+
         # Track previously occupied squares to dispatch Marker.DELETE for vacated squares
         self.previously_occupied_squares: set[int] = set()
 
         self.get_logger().info(
-            f"ChessRvizVisualizer started. Listening to '{game_status_topic}', "
+            f"ChessRvizVisualizer started. Listening to '{game_status_topic}' and '{candidate_move_topic}', "
             f"publishing 3D STL pieces & moves to '{marker_topic}' on '{self.frame_id}'."
         )
 
@@ -192,10 +253,21 @@ class Chessboard3DVisualizer(Node):
         return board
 
     # ---------------------------------------------------------------------
-    # Main Callback
+    # Main Callbacks
     # ---------------------------------------------------------------------
     def game_status_callback(self, msg: ChessGameStatus) -> None:
         """Process game status updates and publish aggregate visual markers."""
+        self.latest_game_status = msg
+        self.publish_visualization(msg)
+
+    def candidate_move_callback(self, msg: ChessMoveDetails) -> None:
+        """Process candidate move updates and publish aggregate visual markers."""
+        self.candidate_move = msg
+        if self.latest_game_status is not None:
+            self.publish_visualization(self.latest_game_status)
+
+    def publish_visualization(self, msg: ChessGameStatus) -> None:
+        """Publish aggregate visual markers for current game status and candidate move."""
         now = self.get_clock().now().to_msg()
         markers = MarkerArray()
 
@@ -311,9 +383,13 @@ class Chessboard3DVisualizer(Node):
         tile_thick = 0.001
         z_pos = self.board_z + 0.0005
 
+        from_sq = move_from_square(last_move)
+        to_sq = move_to_square(last_move)
+        cap_sq = move_captured_square(last_move)
+
         # 1. From-square highlight (semi-transparent amber)
-        if last_move.from_square:
-            pt = self.square_to_metric(last_move.from_square)
+        if from_sq:
+            pt = self.square_to_metric(from_sq)
             if pt:
                 m = self._create_cube_marker(
                     "chess/highlights",
@@ -332,8 +408,8 @@ class Chessboard3DVisualizer(Node):
             markers.append(self._create_delete_marker("chess/highlights", 101, stamp))
 
         # 2. To-square highlight (semi-transparent green)
-        if last_move.to_square:
-            pt = self.square_to_metric(last_move.to_square)
+        if to_sq:
+            pt = self.square_to_metric(to_sq)
             if pt:
                 m = self._create_cube_marker(
                     "chess/highlights",
@@ -352,8 +428,8 @@ class Chessboard3DVisualizer(Node):
             markers.append(self._create_delete_marker("chess/highlights", 102, stamp))
 
         # 3. Capture square alert (semi-transparent red cylinder)
-        if last_move.is_capture and last_move.captured_square:
-            cap_pt = self.square_to_metric(last_move.captured_square)
+        if last_move.is_capture and cap_sq:
+            cap_pt = self.square_to_metric(cap_sq)
             if cap_pt:
                 cap_marker = Marker()
                 cap_marker.header.frame_id = self.frame_id
@@ -406,7 +482,7 @@ class Chessboard3DVisualizer(Node):
         return markers
 
     def _build_arrow_markers(self, msg: ChessGameStatus, stamp: Any) -> list[Marker]:
-        """Build 3D trajectory arrow markers for executed moves and engine suggestions.
+        """Build 3D trajectory arrow markers for executed moves and candidate moves.
 
         Args:
             msg: Current ChessGameStatus message containing move details.
@@ -417,57 +493,59 @@ class Chessboard3DVisualizer(Node):
         """
         markers: list[Marker] = []
         last_move = msg.last_move_details
-        best_move = msg.best_move_details
+        candidate_move = self.candidate_move
 
-        # 1. Last executed move arrow (cyan)
-        if last_move.from_square and last_move.to_square:
-            p_from = self.square_to_metric(last_move.from_square)
-            p_to = self.square_to_metric(last_move.to_square)
+        last_from = move_from_square(last_move)
+        last_to = move_to_square(last_move)
+
+        # 1. Last executed move arrow (green)
+        if last_from and last_to:
+            p_from = self.square_to_metric(last_from)
+            p_to = self.square_to_metric(last_to)
             if p_from and p_to:
                 arrow = self._create_trajectory_arrow(
                     "chess/move_arrows",
                     201,
                     p_from,
                     p_to,
-                    ColorRGBA(r=0.0, g=0.8, b=1.0, a=0.9),
+                    ColorRGBA(r=0.1, g=0.9, b=0.2, a=0.85),
                     stamp,
                 )
                 markers.append(arrow)
         else:
             markers.append(self._create_delete_marker("chess/move_arrows", 201, stamp))
 
-        # 2. Engine recommended best move arrow (bright green)
-        if best_move.from_square and best_move.to_square:
-            bp_from = self.square_to_metric(best_move.from_square)
-            bp_to = self.square_to_metric(best_move.to_square)
+        # 2. Candidate move arrow (orange)
+        cand_from = move_from_square(candidate_move)
+        cand_to = move_to_square(candidate_move)
+        if cand_from and cand_to:
+            bp_from = self.square_to_metric(cand_from)
+            bp_to = self.square_to_metric(cand_to)
             if bp_from and bp_to:
-                arrow_best = self._create_trajectory_arrow(
+                arrow_cand = self._create_trajectory_arrow(
                     "chess/move_arrows",
                     202,
                     bp_from,
                     bp_to,
-                    ColorRGBA(r=0.1, g=1.0, b=0.2, a=0.85),
+                    ColorRGBA(r=1.0, g=0.55, b=0.0, a=0.85),
                     stamp,
                 )
-                markers.append(arrow_best)
+                markers.append(arrow_cand)
         else:
             markers.append(self._create_delete_marker("chess/move_arrows", 202, stamp))
 
-        # 3. Castling secondary rook move arrow (orange)
-        if (
-            last_move.is_castling
-            and last_move.castling_rook_from
-            and last_move.castling_rook_to
-        ):
-            rp_from = self.square_to_metric(last_move.castling_rook_from)
-            rp_to = self.square_to_metric(last_move.castling_rook_to)
+        # 3. Castling secondary rook move arrow (cyan)
+        rook_from, rook_to = move_castling_rook(last_move)
+        if rook_from and rook_to:
+            rp_from = self.square_to_metric(rook_from)
+            rp_to = self.square_to_metric(rook_to)
             if rp_from and rp_to:
                 arrow_rook = self._create_trajectory_arrow(
                     "chess/move_arrows",
                     203,
                     rp_from,
                     rp_to,
-                    ColorRGBA(r=1.0, g=0.55, b=0.0, a=0.85),
+                    ColorRGBA(r=0.0, g=0.8, b=1.0, a=0.85),
                     stamp,
                 )
                 markers.append(arrow_rook)

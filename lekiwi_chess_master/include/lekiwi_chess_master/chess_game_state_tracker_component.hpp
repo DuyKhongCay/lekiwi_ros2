@@ -4,8 +4,9 @@
  *
  * Maintains the canonical chess::Board state machine for the LeKiwi robot.
  * Subscribes to raw perception FEN placements, applies temporal debounce filtering,
- * verifies transitions against legal FIDE move generation, broadcasts game status,
- * and orchestrates autonomous robot move generation via Action Client.
+ * verifies transitions against legal FIDE move generation, and broadcasts game status.
+ *
+ * Implements clean Single Responsibility Principle (SRP) as a Player-Agnostic Referee.
  *
  * ROS 2 Interfaces:
  * - Subscription: `/chess/raw_fen` [std_msgs::msg::String, SensorDataQoS]
@@ -18,7 +19,6 @@
  * - `game_status_topic` (string, default: "/chess/game_status"): Status broadcast topic.
  * - `set_fen_service` (string, default: "/chess/set_fen"): Set FEN service topic.
  * - `debounce_frames` (int, default: 3): Consecutive identical frames needed for stability.
- * - `robot_color` (string, default: "black"): Designates robot's playing side ("white"/"black").
  *
  * Thread Safety:
  * - Guarded by `state_mutex_` across subscriptions and service calls.
@@ -35,12 +35,12 @@
 #include <lekiwi_interfaces/msg/chess_game_status.hpp>
 #include <lekiwi_interfaces/msg/chess_move_details.hpp>
 #include <lekiwi_interfaces/srv/set_fen.hpp>
-#include <lekiwi_interfaces/srv/set_candidate_move.hpp>
 
 #include <chess.hpp>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 namespace lekiwi_chess_master
 {
@@ -52,7 +52,7 @@ namespace lekiwi_chess_master
       "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 
   /**
-   * @brief Tracks game status, filters camera vision, and coordinates chess game loops.
+   * @brief Tracks game status, filters camera vision, and validates FIDE moves.
    */
   class ChessGameStateTrackerComponent : public rclcpp::Node
   {
@@ -70,18 +70,6 @@ namespace lekiwi_chess_master
     /** @brief Accesses internal board representation (for testing). */
     [[nodiscard]] const chess::Board &get_board() const { return board_; }
 
-    /** @brief Retrieves the configured robot player color ("white" or "black"). */
-    [[nodiscard]] const std::string &get_robot_color() const { return robot_color_; }
-
-    /** @brief Retrieves the current game lifecycle phase enum value. */
-    [[nodiscard]] uint8_t get_game_phase() const { return current_phase_; }
-
-    /** @brief Retrieves current best move UCI string. */
-    [[nodiscard]] const std::string &get_best_move() const { return best_move_details_.uci; }
-
-    /** @brief Retrieves rich best move details message. */
-    [[nodiscard]] const lekiwi_interfaces::msg::ChessMoveDetails &get_best_move_details() const { return best_move_details_; }
-
     /** @brief Retrieves rich last executed move details message. */
     [[nodiscard]] const lekiwi_interfaces::msg::ChessMoveDetails &get_last_move_details() const { return last_move_details_; }
 
@@ -93,42 +81,23 @@ namespace lekiwi_chess_master
     }
 
     /**
-     * @brief Imports and validates a FEN string and robot color, setting tracker into PHASE_AWAITING_BOARD_SYNC.
+     * @brief Imports and validates a FEN string, setting tracker into awaiting physical board sync.
      *
      * @param[in] fen_str FEN string to import.
-     * @param[in] new_robot_color Target robot color ("w", "b", "white", "black"). Must not be empty.
      * @param[out] canonical_fen Formatted canonical 6-field FEN.
      * @param[out] active_color Color whose turn it is ("w" or "b").
-     * @param[out] robot_color Normalized robot color ("w" or "b").
      * @param[out] message Diagnostic status message.
-     * @return True if FEN and robot_color were valid and imported, false otherwise.
+     * @return True if FEN was valid and imported, false otherwise.
      */
     bool set_fen(
         std::string_view fen_str,
-        std::string_view new_robot_color,
         std::string &canonical_fen,
         std::string &active_color,
-        std::string &robot_color,
-        std::string &message);
-
-    /**
-     * @brief Updates the recommended candidate move details and immediately publishes game status.
-     *
-     * @param[in] move Move details or UCI string to classify and display.
-     * @param[out] message Diagnostic status message.
-     * @return True if candidate move was valid and set.
-     */
-    bool set_candidate_move(
-        const lekiwi_interfaces::msg::ChessMoveDetails &move,
         std::string &message);
 
   private:
     /**
      * @brief Ingests vision detection FEN placement and runs temporal debounce filtering.
-     *
-     * @details Increments consecutive stability counter for matching incoming frames.
-     * When stable, evaluates if the new piece placement matches the starting board or
-     * a legal FIDE move. If valid, updates board state and triggers engine if needed.
      *
      * @param[in] msg Incoming raw FEN string message from camera pipeline.
      */
@@ -148,15 +117,8 @@ namespace lekiwi_chess_master
         const std::shared_ptr<lekiwi_interfaces::srv::SetFen::Request> request,
         std::shared_ptr<lekiwi_interfaces::srv::SetFen::Response> response);
 
-    void handle_set_candidate_move_service(
-        const std::shared_ptr<lekiwi_interfaces::srv::SetCandidateMove::Request> request,
-        std::shared_ptr<lekiwi_interfaces::srv::SetCandidateMove::Response> response);
-
     /**
      * @brief Matches a stable vision placement against all legal FIDE candidate moves.
-     *
-     * @details Generates all legal moves for current board state, simulates each move
-     * on a temporary sandbox, extracts piece placement, and compares with detected placement.
      *
      * @param[in] detected_placement Piece placement string token from camera vision.
      * @param[out] matched_move Populated chess::Move if a unique match is found.
@@ -168,24 +130,20 @@ namespace lekiwi_chess_master
      * @brief Constructs and publishes consolidated ChessGameStatus message.
      *
      * @param[in] is_legal True if board reflects a legal game state.
-     * @param[in] is_stable True if vision placement has satisfied debounce threshold.
      */
-    void publish_game_status(bool is_legal = true, bool is_stable = true);
+    void publish_game_status(bool is_legal = true);
 
     // Node Parameters
     std::string raw_fen_topic_{"/chess/raw_fen"};
     std::string game_status_topic_{"/chess/game_status"};
     std::string set_fen_service_name_{"/chess/set_fen"};
-    std::string set_candidate_move_service_name_{"/chess/set_candidate_move"};
     int debounce_frames_{3};
-    std::string robot_color_{"black"};
 
     // ROS 2 Communications
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr raw_fen_sub_;
     rclcpp::Publisher<ChessGameStatus>::SharedPtr game_status_pub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_srv_;
     rclcpp::Service<lekiwi_interfaces::srv::SetFen>::SharedPtr set_fen_srv_;
-    rclcpp::Service<lekiwi_interfaces::srv::SetCandidateMove>::SharedPtr set_candidate_move_srv_;
 
     // Game Engine & Debounce tracking
     mutable std::mutex state_mutex_;
@@ -193,12 +151,10 @@ namespace lekiwi_chess_master
     std::string last_accepted_placement_{kDefaultStartingPlacement};
     std::string pending_placement_;
     int consecutive_count_{0};
-    bool awaiting_physical_sync_{false};
+    bool awaiting_physical_sync_{true};
 
     // Match Status
     lekiwi_interfaces::msg::ChessMoveDetails last_move_details_;
-    lekiwi_interfaces::msg::ChessMoveDetails best_move_details_;
-    uint8_t current_phase_{ChessGameStatus::PHASE_WAITING_PLAYER};
   };
 
 } // namespace lekiwi_chess_master

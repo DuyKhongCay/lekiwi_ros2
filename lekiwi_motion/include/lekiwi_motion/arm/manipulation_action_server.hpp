@@ -100,7 +100,7 @@ private:
   {
     NONE,
     SAVE,
-    ABORT,
+    SKIP,
     CANCEL
   };
 
@@ -111,7 +111,7 @@ private:
     const std::shared_ptr<Trigger::Request> request,
     std::shared_ptr<Trigger::Response> response);
 
-  void handle_abort_episode(
+  void handle_skip_episode(
     const std::shared_ptr<Trigger::Request> request,
     std::shared_ptr<Trigger::Response> response);
 
@@ -155,7 +155,7 @@ private:
     RecordCoordinationSignal sig);
 
   [[nodiscard]] RecordCoordinationSignal wait_for_record_signal(
-    const std::shared_ptr<GoalHandleChessMove> & goal_handle);
+    const MoveExecutionContext & ctx);
 
   bool execute_phase_pipeline(
     const MoveExecutionContext & ctx,
@@ -228,7 +228,7 @@ private:
   rclcpp::CallbackGroup::SharedPtr cb_group_recorder_coordination_;
   rclcpp_action::Server<ExecuteChessMove>::SharedPtr action_server_;
   rclcpp::Service<Trigger>::SharedPtr save_episode_srv_;
-  rclcpp::Service<Trigger>::SharedPtr abort_episode_srv_;
+  rclcpp::Service<Trigger>::SharedPtr skip_episode_srv_;
   rclcpp::Service<GoToNamedPose>::SharedPtr named_pose_srv_;
   rclcpp::Client<Trigger>::SharedPtr save_client_;
   rclcpp::Client<Trigger>::SharedPtr discard_client_;

@@ -12,6 +12,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(diagnostic_updater REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -72,6 +73,7 @@ target_link_libraries(episode_recorder_component
 )
 ament_target_dependencies(episode_recorder_component
   rclcpp
+  rclcpp_action
   rclcpp_components
   diagnostic_updater
   sensor_msgs
@@ -102,10 +104,6 @@ install(TARGETS
 
 install(DIRECTORY include/
   DESTINATION include
-)
-
-install(DIRECTORY config launch
-  DESTINATION share/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)

@@ -125,9 +125,23 @@ struct SessionState
 {
   uint32_t session_id{1};
   uint32_t episodes_in_session{0};
+  std::string initial_fen;
   std::string active_fen;
   bool is_active{false};
   std::vector<std::string> executed_moves;
+};
+
+/**
+ * @brief Campaign target quotas configuration (pure C++ domain POCO).
+ */
+struct CampaignConfig
+{
+  uint32_t total_episodes{600};
+  uint32_t episodes_per_session{20};
+  uint32_t move_total{240};
+  uint32_t clear_total{120};
+  uint32_t pick_total{120};
+  uint32_t place_total{120};
 };
 
 /**
@@ -136,12 +150,10 @@ struct SessionState
 class QuotaTracker
 {
 public:
-  QuotaTracker();
-  explicit QuotaTracker(const std::filesystem::path &config_path);
-  explicit QuotaTracker(const YAML::Node &config_node);
+  explicit QuotaTracker(const CampaignConfig &config = CampaignConfig{});
 
-  void load_config(const YAML::Node &config_node);
-  void load_config_file(const std::filesystem::path &config_path);
+  void configure(const CampaignConfig &config);
+  [[nodiscard]] const CampaignConfig &get_config() const { return config_; }
 
   // Crash/Restart recovery: scans base directory for episode_*/episode_info.yaml
   uint32_t scan_and_recover(const std::filesystem::path &base_output_dir);
@@ -152,6 +164,13 @@ public:
   // Session state management
   bool load_session_state(const std::filesystem::path &file_path);
   bool save_session_state(const std::filesystem::path &file_path) const;
+  bool reconstruct_session_board();
+
+  // Sequential Board & Move Progression
+  [[nodiscard]] const chess::Board &get_active_board() const noexcept { return active_board_; }
+  [[nodiscard]] const std::string &get_active_fen() const noexcept { return session_state_.active_fen; }
+  void set_active_fen(const std::string &fen);
+  bool apply_move(const std::string &uci);
 
   // Quota queries
   [[nodiscard]] uint32_t get_completed(StepKind kind, const PieceKey &piece) const;
@@ -170,7 +189,7 @@ public:
   [[nodiscard]] QuotaSummary get_summary() const;
 
   [[nodiscard]] SessionState get_session_state() const { return session_state_; }
-  void set_session_state(const SessionState &state) { session_state_ = state; }
+  void set_session_state(const SessionState &state);
   void advance_session();
   void reset_session(const std::string &new_fen);
 
@@ -191,6 +210,8 @@ private:
 
   std::map<std::string, uint32_t> repeat_counts_;
   SessionState session_state_;
+  chess::Board active_board_;
+  CampaignConfig config_;
 };
 
 /**

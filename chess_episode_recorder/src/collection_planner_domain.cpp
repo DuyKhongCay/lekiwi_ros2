@@ -195,27 +195,16 @@ std::string MoveCandidate::move_signature(const chess::Board &board) const
 // QuotaTracker Implementation
 // ============================================================================
 
-QuotaTracker::QuotaTracker()
+QuotaTracker::QuotaTracker(const CampaignConfig &config)
 {
-  init_default_quotas();
+  configure(config);
 }
 
-QuotaTracker::QuotaTracker(const std::filesystem::path &config_path)
+void QuotaTracker::configure(const CampaignConfig &config)
 {
-  init_default_quotas();
-  load_config_file(config_path);
-}
-
-QuotaTracker::QuotaTracker(const YAML::Node &config_node)
-{
-  init_default_quotas();
-  load_config(config_node);
-}
-
-void QuotaTracker::init_default_quotas()
-{
-  total_target_ = 600;
-  episodes_per_session_ = 20;
+  config_ = config;
+  total_target_ = config.total_episodes;
+  episodes_per_session_ = config.episodes_per_session;
 
   const std::vector<chess::Color> colors = {chess::Color::WHITE, chess::Color::BLACK};
   const std::vector<chess::PieceType> all_pieces = {
@@ -223,92 +212,45 @@ void QuotaTracker::init_default_quotas()
     chess::PieceType::ROOK, chess::PieceType::QUEEN, chess::PieceType::KING
   };
 
-  // 1. MOVE: 20 per piece x 12 pieces = 240
+  // 1. MOVE: 12 piece classes (6 types x 2 colors)
+  uint32_t move_per_piece = config.move_total / 12;
   for (auto c : colors) {
     for (auto pt : all_pieces) {
-      targets_[StepKind::MOVE][PieceKey{c, pt}] = 20;
+      targets_[StepKind::MOVE][PieceKey{c, pt}] = move_per_piece;
       completed_[StepKind::MOVE][PieceKey{c, pt}] = 0;
     }
   }
 
-  // 2. CLEAR: 12 per piece x 10 capturable pieces (no king) = 120
+  // 2. CLEAR: 10 capturable piece classes (excluding King) and 50/50 bin balance
+  uint32_t clear_per_piece = config.clear_total / 10;
   for (auto c : colors) {
     for (auto pt : all_pieces) {
       if (pt == chess::PieceType::KING) continue;
-      targets_[StepKind::CLEAR][PieceKey{c, pt}] = 12;
+      targets_[StepKind::CLEAR][PieceKey{c, pt}] = clear_per_piece;
       completed_[StepKind::CLEAR][PieceKey{c, pt}] = 0;
     }
   }
-  clear_left_target_ = 60;
-  clear_right_target_ = 60;
+  clear_left_target_ = config.clear_total / 2;
+  clear_right_target_ = config.clear_total / 2;
   clear_left_completed_ = 0;
   clear_right_completed_ = 0;
 
-  // 3. PICK: 10 per piece x 12 pieces = 120
+  // 3. PICK: 12 piece classes
+  uint32_t pick_per_piece = config.pick_total / 12;
   for (auto c : colors) {
     for (auto pt : all_pieces) {
-      targets_[StepKind::PICK][PieceKey{c, pt}] = 10;
+      targets_[StepKind::PICK][PieceKey{c, pt}] = pick_per_piece;
       completed_[StepKind::PICK][PieceKey{c, pt}] = 0;
     }
   }
 
-  // 4. PLACE: 10 per piece x 12 pieces = 120
+  // 4. PLACE: 12 piece classes
+  uint32_t place_per_piece = config.place_total / 12;
   for (auto c : colors) {
     for (auto pt : all_pieces) {
-      targets_[StepKind::PLACE][PieceKey{c, pt}] = 10;
+      targets_[StepKind::PLACE][PieceKey{c, pt}] = place_per_piece;
       completed_[StepKind::PLACE][PieceKey{c, pt}] = 0;
     }
-  }
-}
-
-void QuotaTracker::load_config(const YAML::Node &config_node)
-{
-  if (!config_node || !config_node.IsMap()) {
-    return;
-  }
-
-  if (config_node["campaign"]) {
-    auto c = config_node["campaign"];
-    if (c["total_episodes"]) total_target_ = c["total_episodes"].as<uint32_t>();
-    if (c["episodes_per_session"]) episodes_per_session_ = c["episodes_per_session"].as<uint32_t>();
-  }
-
-  if (config_node["quotas"]) {
-    auto q = config_node["quotas"];
-    for (auto kind : {StepKind::MOVE, StepKind::CLEAR, StepKind::PICK, StepKind::PLACE}) {
-      std::string key = (kind == StepKind::MOVE) ? "move" :
-                        (kind == StepKind::CLEAR) ? "clear" :
-                        (kind == StepKind::PICK) ? "pick" : "place";
-      if (q[key]) {
-        auto sub = q[key];
-        uint32_t per_piece = sub["per_piece"] ? sub["per_piece"].as<uint32_t>() : 0;
-        if (sub["pieces"] && sub["pieces"].IsSequence()) {
-          for (const auto &item : sub["pieces"]) {
-            auto pk = PieceKey::from_string(item.as<std::string>());
-            if (pk) {
-              targets_[kind][*pk] = per_piece;
-            }
-          }
-        }
-        if (kind == StepKind::CLEAR && sub["bins"]) {
-          if (sub["bins"]["left"]) clear_left_target_ = sub["bins"]["left"].as<uint32_t>();
-          if (sub["bins"]["right"]) clear_right_target_ = sub["bins"]["right"].as<uint32_t>();
-        }
-      }
-    }
-  }
-}
-
-void QuotaTracker::load_config_file(const std::filesystem::path &config_path)
-{
-  if (!std::filesystem::exists(config_path)) {
-    return;
-  }
-  try {
-    YAML::Node config = YAML::LoadFile(config_path.string());
-    load_config(config);
-  } catch (const std::exception &e) {
-    std::cerr << "Warning: Failed to load collection config from " << config_path << ": " << e.what() << "\n";
   }
 }
 
@@ -428,14 +370,15 @@ bool QuotaTracker::load_session_state(const std::filesystem::path &file_path)
 {
   if (!std::filesystem::exists(file_path)) {
     session_state_ = SessionState{};
+    active_board_ = chess::Board();
     return false;
   }
   try {
     YAML::Node node = YAML::LoadFile(file_path.string());
     if (node["session_id"]) session_state_.session_id = node["session_id"].as<uint32_t>();
     if (node["episodes_in_session"]) session_state_.episodes_in_session = node["episodes_in_session"].as<uint32_t>();
+    if (node["initial_fen"]) session_state_.initial_fen = node["initial_fen"].as<std::string>();
     if (node["active_fen"]) session_state_.active_fen = node["active_fen"].as<std::string>();
-    session_state_.is_active = !session_state_.active_fen.empty();
 
     session_state_.executed_moves.clear();
     if (node["executed_moves"] && node["executed_moves"].IsSequence()) {
@@ -443,10 +386,48 @@ bool QuotaTracker::load_session_state(const std::filesystem::path &file_path)
         session_state_.executed_moves.push_back(item.as<std::string>());
       }
     }
-    return true;
+    return reconstruct_session_board();
   } catch (...) {
     return false;
   }
+}
+
+bool QuotaTracker::reconstruct_session_board()
+{
+  if (session_state_.initial_fen.empty()) {
+    session_state_.initial_fen = session_state_.active_fen;
+  }
+  if (session_state_.initial_fen.empty()) {
+    session_state_.is_active = false;
+    active_board_ = chess::Board();
+    return false;
+  }
+
+  chess::Board temp_board;
+  if (!temp_board.setFen(session_state_.initial_fen)) {
+    session_state_.is_active = false;
+    return false;
+  }
+
+  for (const auto &uci : session_state_.executed_moves) {
+    chess::Move m = chess::uci::uciToMove(temp_board, uci);
+    if (m == chess::Move::NO_MOVE) {
+      session_state_.is_active = false;
+      return false;
+    }
+    chess::Movelist legal_moves;
+    chess::movegen::legalmoves(legal_moves, temp_board);
+    if (std::find(legal_moves.begin(), legal_moves.end(), m) == legal_moves.end()) {
+      session_state_.is_active = false;
+      return false;
+    }
+    temp_board.makeMove(m);
+  }
+
+  active_board_ = std::move(temp_board);
+  session_state_.active_fen = active_board_.getFen();
+  session_state_.is_active = true;
+  return true;
 }
 
 bool QuotaTracker::save_session_state(const std::filesystem::path &file_path) const
@@ -456,6 +437,7 @@ bool QuotaTracker::save_session_state(const std::filesystem::path &file_path) co
     out << YAML::BeginMap;
     out << YAML::Key << "session_id" << YAML::Value << session_state_.session_id;
     out << YAML::Key << "episodes_in_session" << YAML::Value << session_state_.episodes_in_session;
+    out << YAML::Key << "initial_fen" << YAML::Value << session_state_.initial_fen;
     out << YAML::Key << "active_fen" << YAML::Value << session_state_.active_fen;
 
     out << YAML::Key << "executed_moves" << YAML::Value << YAML::BeginSeq;
@@ -581,21 +563,59 @@ bool QuotaTracker::has_executed_move(const std::string &uci) const
                    uci) != session_state_.executed_moves.end();
 }
 
+void QuotaTracker::set_active_fen(const std::string &fen)
+{
+  session_state_.active_fen = fen;
+  session_state_.is_active = !fen.empty();
+  if (session_state_.initial_fen.empty()) {
+    session_state_.initial_fen = fen;
+  }
+  active_board_.setFen(fen);
+}
+
+bool QuotaTracker::apply_move(const std::string &uci)
+{
+  chess::Move m = chess::uci::uciToMove(active_board_, uci);
+  if (m == chess::Move::NO_MOVE) {
+    return false;
+  }
+  chess::Movelist legal_moves;
+  chess::movegen::legalmoves(legal_moves, active_board_);
+  if (std::find(legal_moves.begin(), legal_moves.end(), m) == legal_moves.end()) {
+    return false;
+  }
+  active_board_.makeMove(m);
+  session_state_.active_fen = active_board_.getFen();
+  session_state_.is_active = true;
+  record_executed_move(uci);
+  return true;
+}
+
+void QuotaTracker::set_session_state(const SessionState &state)
+{
+  session_state_ = state;
+  reconstruct_session_board();
+}
+
 void QuotaTracker::advance_session()
 {
   session_state_.session_id++;
   session_state_.episodes_in_session = 0;
+  session_state_.initial_fen.clear();
   session_state_.active_fen.clear();
   session_state_.is_active = false;
   session_state_.executed_moves.clear();
+  active_board_ = chess::Board();
 }
 
 void QuotaTracker::reset_session(const std::string &new_fen)
 {
   session_state_.episodes_in_session = 0;
+  session_state_.initial_fen = new_fen;
   session_state_.active_fen = new_fen;
   session_state_.is_active = !new_fen.empty();
   session_state_.executed_moves.clear();
+  active_board_.setFen(new_fen);
 }
 
 // ============================================================================

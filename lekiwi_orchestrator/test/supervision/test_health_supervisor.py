@@ -29,7 +29,7 @@ from std_srvs.srv import Trigger
 @pytest.fixture
 def dummy_snapshot() -> OrchestratorStateSnapshot:
     return OrchestratorStateSnapshot(
-        mission_state=MacroMissionState.WAITING_FOR_PLAYER_MOVE,
+        mission_state=MacroMissionState.WAITING_FOR_NEXT_MOVE,
         perception_context=0,
         last_goal_move="e2e4",
         execution_stage=None,

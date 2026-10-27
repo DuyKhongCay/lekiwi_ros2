@@ -105,17 +105,20 @@ coupled with hardware-aware camera perception gating:
 flowchart TD
     BOOT(["<b>BOOT_INITIALIZING</b> (0)<br/>System bootstrap & ROS 2 interface init"])
     WAIT_TF["<b>WAITING_FOR_TF_READY</b> (1)<br/><i>Perception: TF_TRACKING_AND_NAV</i><br/>Dual-odometry covariance audit & TF chain stabilization"]
-    WAIT_PLAYER["<b>WAITING_FOR_PLAYER_MOVE</b> (2)<br/><i>Perception: BOARD_STATE_SCAN</i><br/>Awaiting referee signal or opponent move detection"]
-    EVAL["<b>EVALUATING_BEST_MOVE</b> (3)<br/><i>Perception: BOARD_STATE_SCAN</i><br/>Stockfish / LeRobot next move recommendation"]
-    CHK_REACH["<b>CHECKING_REACHABILITY</b> (4)<br/><i>Service: /workspace/check_move_feasibility</i><br/>5-DoF analytical IK reachability & standoff query"]
-    EXEC_PIPE["<b>EXECUTING_MOVE_PIPELINE</b> (5)<br/><i>Perception: MANIPULATION_ACTOR</i><br/>Sequencing Nav2 docking & arm trajectory phases"]
-    VERIFY["<b>POST_MOVE_VERIFYING</b> (6)<br/><i>Perception: POST_MOVE_VERIFY</i><br/>Overhead vision confirmation; triggers active observation if occluded"]
-    TURN_DONE["<b>TURN_COMPLETED</b> (7)<br/>Turn token handoff back to match arbiter"]
-    GAME_OVER(["<b>GAME_OVER</b> (8)<br/>Checkmate / Draw terminal state"])
-    ERR(["<b>ERROR_FALLBACK</b> (9)<br/>Preserves pending move; halts actuator motion"])
+    BOARD_SYNC["<b>AWAITING_BOARD_SYNC</b> (2)<br/><i>Perception: BOARD_STATE_SCAN</i><br/>Physical chessboard piece arrangement sync with digital twin FEN"]
+    WAIT_PLAYER["<b>WAITING_FOR_NEXT_MOVE</b> (2)<br/><i>Perception: BOARD_STATE_SCAN</i><br/>Awaiting referee signal or next move trigger"]
+    EVAL["<b>EVALUATING_BEST_MOVE</b> (4)<br/><i>Perception: BOARD_STATE_SCAN</i><br/>Stockfish / LeRobot next move recommendation"]
+    CHK_REACH["<b>CHECKING_REACHABILITY</b> (5)<br/><i>Service: /workspace/check_move_feasibility</i><br/>5-DoF analytical IK reachability & standoff query"]
+    EXEC_PIPE["<b>EXECUTING_MOVE_PIPELINE</b> (6)<br/><i>Perception: MANIPULATION_ACTOR</i><br/>Sequencing Nav2 docking & arm trajectory phases"]
+    VERIFY["<b>POST_MOVE_VERIFYING</b> (7)<br/><i>Perception: POST_MOVE_VERIFY</i><br/>Overhead vision confirmation; triggers active observation if occluded"]
+    TURN_DONE["<b>TURN_COMPLETED</b> (8)<br/>Turn token handoff back to match arbiter"]
+    GAME_OVER(["<b>GAME_OVER</b> (9)<br/>Checkmate / Draw terminal state"])
+    ERR(["<b>ERROR_FALLBACK</b> (10)<br/>Preserves pending move; halts actuator motion"])
 
     BOOT --> WAIT_TF
-    WAIT_TF --> WAIT_PLAYER
+    WAIT_TF --> BOARD_SYNC
+    BOARD_SYNC --> WAIT_PLAYER
+    BOARD_SYNC --> EVAL
     WAIT_PLAYER --> EVAL
     EVAL --> CHK_REACH
     CHK_REACH --> EXEC_PIPE
@@ -125,7 +128,7 @@ flowchart TD
     TURN_DONE --> GAME_OVER
 
     %% Failures and Auto-Recovery
-    WAIT_TF & WAIT_PLAYER & EVAL & CHK_REACH & EXEC_PIPE & VERIFY -.->|"Timeout / TF Drop / Grasp Loss"| ERR
+    WAIT_TF & BOARD_SYNC & WAIT_PLAYER & EVAL & CHK_REACH & EXEC_PIPE & VERIFY -.->|"Timeout / TF Drop / Grasp Loss"| ERR
     ERR -.->|"Auto-Recovery Retry (Attempts &le; 3)"| WAIT_TF
 ```
 
@@ -240,7 +243,7 @@ a **Direct Geodesic Viewpoint Scheduling Strategy** along the circular standoff 
 | :--- | :--- | :--- | :--- |
 | `/system/nav_ready` | `std_msgs/msg/Bool` | Transient Local, Depth 1 | Navigation readiness heartbeat lease from `lekiwi_navigation`. |
 | `/system/grasp_ready` | `std_msgs/msg/Bool` | Transient Local, Depth 1 | Arm IK and visual grasp readiness lease from `lekiwi_arm_plan`. |
-| `/chess/game_status` | `lekiwi_interfaces/msg/ChessGameStatus` | Volatile, Depth 10 | Referee match status, active turn, checkmate flags, and best move. |
+| `/chess/game_status` | `lekiwi_interfaces/msg/ChessGameStatus` | Transient Local, Depth 1 | Referee match status, active turn, checkmate flags, board sync, and best move. |
 
 ### Published Topics
 
@@ -272,7 +275,7 @@ Parameters can be overridden via YAML configuration files or launch arguments:
 | `board_frame` | `string` | `"chessboard_frame"` | Coordinate frame ID of the chessboard origin. |
 | `map_frame` | `string` | `"map"` | Global map coordinate frame ID. |
 | `navigation` | `bool` | `true` | Enables real Nav2 action dispatching (false activates mock). |
-| `feasibility_timeout_sec` | `double` | `5.0` | Timeout in seconds for reachability service response. |
+| `service_timeout_sec` | `double` | `5.0` | Timeout in seconds for ROS service responses (feasibility check and chess set_fen). |
 | `action_timeout_sec` | `double` | `60.0` | Watchdog timeout for Nav2 and manipulation action completion. |
 | `readiness_timeout_sec` | `double` | `1.0` | Heartbeat expiration threshold for navigation and grasp readiness. |
 | `chassis_settle_timeout_sec` | `double` | `2.0` | Stabilization pause duration between base docking/retreat and arm/vision operations. |

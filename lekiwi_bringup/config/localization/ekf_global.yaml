@@ -88,15 +88,17 @@ ekf_filter_node_map:
     ]
 
     # Process noise covariance Q (15x15) for flat arena surface
-    # Q(x,y)=2e-5 suppresses position variance inflation during brief camera occlusion
-    # Q(yaw)=1e-4, Q(vx,vy)=2e-3, Q(vyaw)=2e-3 matched to 50 Hz wheel telemetry
+    # Q(x,y)=1.8e-4 models omni-wheel slip/drift during blind navigation.
+    # Scaled by velocity when dynamic_process_noise_covariance is true (Q -> 0 at standstill).
+    # Short moves accumulate minimal variance; long drifts exceed max_pos_variance to trigger RELOCALIZE.
+    # Q(yaw)=5.0e-4, Q(vx,vy)=2e-3, Q(vyaw)=2e-3 matched to 50 Hz wheel telemetry
     process_noise_covariance: [
-      2.0e-5, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
-      0.0,    2.0e-5, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
+      1.8e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
+      0.0,    1.8e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
       0.0,    0.0,    1.0e-3, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
       0.0,    0.0,    0.0,    1.0e-3, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
       0.0,    0.0,    0.0,    0.0,    1.0e-3, 0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
-      0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-4, 0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
+      0.0,    0.0,    0.0,    0.0,    0.0,    5.0e-4, 0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
       0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    2.0e-3, 0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
       0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    2.0e-3, 0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    0.0,
       0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-2, 0.0,     0.0,     0.0,     0.0,    0.0,    0.0,

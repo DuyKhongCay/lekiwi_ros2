@@ -64,12 +64,12 @@ _CASTLING_ROOK_MAP: Final[dict[str, tuple[str, str]]] = {
 
 @dataclass(frozen=True)
 class ChessMoveGoal:
-    """Mission-level move domain entity for trajectory planning and SmolVLA instruction generation."""
+    """Mission-level move domain entity aligned 1:1 with ChessMoveDetails interface."""
 
     uci: str
     piece_type: str = "pawn"
-    color: str = "white"
-    promotion: str | None = None
+    piece_color: str = "w"
+    promotion_piece: str = ""
     is_capture: bool = False
     is_en_passant: bool = False
     is_castling: bool = False
@@ -125,15 +125,32 @@ class ChessMoveGoal:
         return _CASTLING_ROOK_MAP.get(self.uci, ("", ""))[1] if self.is_castling else ""
 
     @property
-    def opposing_color(self) -> str:
-        """Returns the opposing color for captured piece."""
-        return "black" if self.color.lower() in ("w", "white") else "white"
+    def color_name(self) -> str:
+        """Natural language color string ('white' or 'black') for instruction generation."""
+        return "black" if self.piece_color.strip().lower() in ("b", "black") else "white"
+
+    @property
+    def opposing_color_name(self) -> str:
+        """Natural language color string of the opposing side for capture instructions."""
+        return "white" if self.color_name == "black" else "black"
+
+    def to_ros_move_details(self) -> ChessMoveDetails:
+        """Convert ChessMoveGoal to ROS 2 ChessMoveDetails message."""
+        msg = ChessMoveDetails()
+        msg.uci = self.uci
+        msg.piece_type = self.piece_type
+        msg.piece_color = self.piece_color
+        msg.promotion_piece = self.promotion_piece
+        msg.is_capture = self.is_capture
+        msg.is_en_passant = self.is_en_passant
+        msg.is_castling = self.is_castling
+        return msg
 
     @classmethod
     def from_uci_or_details(
         cls,
         uci_move: str,
-        move_details: ChessMoveDetails | None = None,
+        move_details: ChessMoveDetails | ChessMoveGoal | None = None,
         force_pick_place: bool = False,
         clear_bin_side: str = "right",
         bypass_steps: tuple[str, ...] | list[str] = (),
@@ -144,7 +161,7 @@ class ChessMoveGoal:
 
         Args:
             uci_move: Standard UCI move string (e.g., 'e2e4', 'e7e8q').
-            move_details: Optional ROS 2 message providing explicit capture/castling info.
+            move_details: Optional ROS 2 message or existing ChessMoveGoal instance.
             force_pick_place: Whether to force 1-base move into atomic PICK and PLACE.
             clear_bin_side: Target discard bin side ("left" or "right").
             bypass_steps: Step kinds to bypass physical execution.
@@ -152,6 +169,9 @@ class ChessMoveGoal:
         Returns:
             Populated ChessMoveGoal instance, or None if UCI string length is invalid (< 4).
         """
+        if isinstance(move_details, ChessMoveGoal):
+            return move_details
+
         cleaned_move = (
             move_details.uci
             if (move_details is not None and getattr(move_details, "uci", ""))
@@ -161,29 +181,34 @@ class ChessMoveGoal:
             return None
 
         norm_bypass = tuple(bypass_steps)
-        norm_bin = clear_bin_side.lower() if clear_bin_side else "right"
+        if isinstance(clear_bin_side, int):
+            norm_bin = "left" if clear_bin_side == 0 else "right"
+        elif isinstance(clear_bin_side, str) and clear_bin_side:
+            norm_bin = clear_bin_side.lower()
+        else:
+            norm_bin = "right"
 
         p_type = "pawn"
-        norm_color = "white"
-        promo = cleaned_move[4:] if len(cleaned_move) > 4 else None
+        p_color = "w"
+        promo = cleaned_move[4:] if len(cleaned_move) > 4 else ""
         is_cap = False
         is_ep = False
         is_castle = False
 
         if move_details is not None:
-            raw_color = getattr(move_details, "piece_color", "")
-            norm_color = "black" if raw_color in ("b", "black") else "white"
-            p_type = getattr(move_details, "piece_type", "") or "pawn"
-            promo = getattr(move_details, "promotion_piece", "") or promo
-            is_cap = bool(getattr(move_details, "is_capture", False))
-            is_ep = bool(getattr(move_details, "is_en_passant", False))
-            is_castle = bool(getattr(move_details, "is_castling", False))
+            raw_c = move_details.piece_color.strip().lower()
+            p_color = "b" if raw_c in ("b", "black") else "w"
+            p_type = move_details.piece_type or "pawn"
+            promo = move_details.promotion_piece or promo
+            is_cap = bool(move_details.is_capture)
+            is_ep = bool(move_details.is_en_passant)
+            is_castle = bool(move_details.is_castling)
 
         return cls(
             uci=cleaned_move,
             piece_type=p_type,
-            color=norm_color,
-            promotion=promo,
+            piece_color=p_color,
+            promotion_piece=promo,
             is_capture=is_cap,
             is_en_passant=is_ep,
             is_castling=is_castle,

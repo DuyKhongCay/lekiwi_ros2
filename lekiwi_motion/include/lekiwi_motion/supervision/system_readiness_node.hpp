@@ -138,6 +138,19 @@ namespace lekiwi_motion
             const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
             std::shared_ptr<std_srvs::srv::Trigger::Response> res);
 
+        /**
+         * @brief Queries Nav2 lifecycle manager to verify if navigation nodes are active.
+         * @param[in] now_sec Current monotonic epoch time in seconds.
+         */
+        void poll_nav2_lifecycle(double now_sec);
+
+        /**
+         * @brief Asynchronous response handler for Nav2 lifecycle is_active service.
+         * @param[in] future Future holding Trigger service response.
+         */
+        void on_nav2_lifecycle_response(
+            rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future);
+
         /// TF2 buffer and listener for transform chain verification.
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -160,6 +173,12 @@ namespace lekiwi_motion
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr grasp_readiness_srv_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_readiness_srv_;
 
+        /// Service client and callback group for Nav2 lifecycle supervision.
+        rclcpp::CallbackGroup::SharedPtr nav2_cb_group_;
+        rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr nav2_lifecycle_client_;
+        std::atomic<bool> nav2_request_in_flight_{false};
+        double last_nav2_request_time_sec_{0.0};
+
         /// Periodic timer driving evaluation loop.
         rclcpp::TimerBase::SharedPtr eval_timer_;
 
@@ -171,6 +190,7 @@ namespace lekiwi_motion
         LocalOdomSnapshot local_odom_snapshot_;
         GlobalOdomSnapshot global_odom_snapshot_;
         JointsSnapshot joints_snapshot_;
+        Nav2LifecycleSnapshot nav2_snapshot_;
 
         /// Configuration parameters and coordinate frames.
         std::string map_frame_{"map"};
@@ -181,7 +201,10 @@ namespace lekiwi_motion
         std::string local_odom_topic_{"/odometry/local"};
         std::string global_odom_topic_{"/odometry/global"};
         std::string joint_states_topic_{"/joint_states"};
+        std::string nav2_lifecycle_service_{"/lifecycle_manager_navigation/is_active"};
         double check_frequency_hz_{10.0};
+        double nav2_check_frequency_hz_{2.0};
+        double nav2_timeout_sec_{0.5};
         double max_transform_age_sec_{0.30};
         double nav_odom_max_age_sec_{0.50};
 

@@ -389,7 +389,9 @@ TEST_F(ManipulationActionServerTest, RecordModeExecutionStopsAtApproachPickAndSu
   ASSERT_NE(goal_handle, nullptr);
 
   auto result_future = client->async_get_result(goal_handle);
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  for (int i = 0; i < 40 && received_feedback_instruction.empty(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  }
 
   auto save_req = std::make_shared<std_srvs::srv::Trigger::Request>();
   auto save_future = save_cli->async_send_request(save_req);
@@ -408,12 +410,12 @@ TEST_F(ManipulationActionServerTest, RecordModeExecutionStopsAtApproachPickAndSu
   spin_thread.join();
 }
 
-TEST_F(ManipulationActionServerTest, RecordModeExecutionPurePlaceStopsAtApproachPlaceAndAbortsOnAbort)
+TEST_F(ManipulationActionServerTest, RecordModeExecutionPurePlaceStopsAtApproachPlaceAndSucceedsOnSkip)
 {
   auto server_node = std::make_shared<ManipulationActionServer>(
     make_base_options("/test_manip/record_pure_place", true));
 
-  auto client_node = std::make_shared<rclcpp::Node>("test_record_abort_client");
+  auto client_node = std::make_shared<rclcpp::Node>("test_record_skip_client");
   auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
     client_node, "/test_manip/record_pure_place");
 
@@ -425,7 +427,7 @@ TEST_F(ManipulationActionServerTest, RecordModeExecutionPurePlaceStopsAtApproach
       res->message = "Mock episode discarded";
     });
 
-  auto abort_cli = client_node->create_client<std_srvs::srv::Trigger>("/arm/abort_episode");
+  auto skip_cli = client_node->create_client<std_srvs::srv::Trigger>("/arm/skip_episode");
 
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(server_node);
@@ -434,7 +436,7 @@ TEST_F(ManipulationActionServerTest, RecordModeExecutionPurePlaceStopsAtApproach
   std::thread spin_thread([&executor]() { executor.spin(); });
 
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
-  ASSERT_TRUE(abort_cli->wait_for_service(std::chrono::seconds(3)));
+  ASSERT_TRUE(skip_cli->wait_for_service(std::chrono::seconds(3)));
 
   ManipulationActionServer::ExecuteChessMove::Goal goal;
   goal.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_PLACE;
@@ -451,17 +453,17 @@ TEST_F(ManipulationActionServerTest, RecordModeExecutionPurePlaceStopsAtApproach
   auto result_future = client->async_get_result(goal_handle);
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  auto abort_req = std::make_shared<std_srvs::srv::Trigger::Request>();
-  auto abort_future = abort_cli->async_send_request(abort_req);
-  ASSERT_EQ(abort_future.wait_for(std::chrono::seconds(3)), std::future_status::ready);
-  EXPECT_TRUE(abort_future.get()->success);
+  auto skip_req = std::make_shared<std_srvs::srv::Trigger::Request>();
+  auto skip_future = skip_cli->async_send_request(skip_req);
+  ASSERT_EQ(skip_future.wait_for(std::chrono::seconds(3)), std::future_status::ready);
+  EXPECT_TRUE(skip_future.get()->success);
 
   ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
   auto wrapped_result = result_future.get();
 
-  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::ABORTED);
-  EXPECT_FALSE(wrapped_result.result->success);
-  EXPECT_NE(wrapped_result.result->message.find("Episode aborted"), std::string::npos);
+  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
+  EXPECT_TRUE(wrapped_result.result->success);
+  EXPECT_NE(wrapped_result.result->message.find("Episode skipped"), std::string::npos);
 
   executor.cancel();
   spin_thread.join();

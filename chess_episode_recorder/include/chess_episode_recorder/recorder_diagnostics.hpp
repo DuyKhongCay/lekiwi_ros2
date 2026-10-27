@@ -27,11 +27,12 @@ enum class EpisodeState
  */
 enum class CampaignState
 {
-  DISABLED,               ///< Collection planner disabled (pure manual teleop mode).
-  IDLE_AWAITING_BOARD,    ///< Waiting for stable chessboard state (/chess/game_status).
-  PLANNING_OR_SYNTHESIS,  ///< Actively evaluating moves or synthesizing new FEN.
-  DISPATCHED_TO_ORCH,     ///< Collection task sent to Orchestrator, waiting execution.
-  CAMPAIGN_FINISHED       ///< All 600 episodes target reached.
+  DISABLED,                   ///< Collection planner disabled (pure manual teleop mode).
+  IDLE_READY,                 ///< Campaign ready for next move dispatch or execution.
+  PLANNING_OR_SYNTHESIS,      ///< Actively evaluating moves or synthesizing new FEN.
+  AWAITING_PHYSICAL_SYNC,     ///< Barrier: Waiting for Orchestrator FEN sync & physical board alignment.
+  DISPATCHED_TO_ORCH,         ///< Collection task sent to Orchestrator, waiting execution.
+  CAMPAIGN_FINISHED           ///< All 600 episodes target reached.
 };
 
 /**
@@ -58,10 +59,12 @@ enum class CampaignState
   switch (state) {
     case CampaignState::DISABLED:
       return "DISABLED";
-    case CampaignState::IDLE_AWAITING_BOARD:
-      return "IDLE_AWAITING_BOARD";
+    case CampaignState::IDLE_READY:
+      return "IDLE_READY";
     case CampaignState::PLANNING_OR_SYNTHESIS:
       return "PLANNING_OR_SYNTHESIS";
+    case CampaignState::AWAITING_PHYSICAL_SYNC:
+      return "AWAITING_PHYSICAL_SYNC";
     case CampaignState::DISPATCHED_TO_ORCH:
       return "DISPATCHED_TO_ORCH";
     case CampaignState::CAMPAIGN_FINISHED:
@@ -78,6 +81,9 @@ struct RecorderDiagnosticsSnapshot
   EpisodeState episode_state{EpisodeState::IDLE};
   CampaignState campaign_state{CampaignState::DISABLED};
   bool enable_collection_planner{false};
+  bool is_action_server_connected{false};
+  bool has_active_goal{false};
+  std::string active_goal_uci{""};
   uint32_t current_episode_index{0};
   std::string base_output_dir{""};
   std::string active_instruction{""};
@@ -86,7 +92,6 @@ struct RecorderDiagnosticsSnapshot
   bool disk_query_success{true};
 
   // Campaign specific metrics
-  bool board_is_stable{false};
   uint32_t total_completed_episodes{0};
   uint32_t target_total_episodes{600};
   uint32_t session_id{0};

@@ -11,6 +11,7 @@
 
   <!-- ROS 2 core & messages -->
   <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
   <depend>rclcpp_components</depend>
   <depend>diagnostic_updater</depend>
   <depend>sensor_msgs</depend>

@@ -1,4 +1,7 @@
-episode_recorder_node:
+# Copyright 2026 LeKiwi Labs
+# Licensed under the Apache License, Version 2.0.
+
+/**:
   ros__parameters:
     # Storage settings
     root_dir: "/root/docker_ws/lekiwi_ros2/ros_bag"
@@ -11,14 +14,28 @@ episode_recorder_node:
 
     # Automated campaign collection planner
     enable_collection_planner: true
-    collection_config_path: ""
+    service_timeout_sec: 5.0
 
-    # Service & Topic interfaces
+    # Campaign configuration (auto-derived: per_piece = total / 12, clear per_piece = total / 10, bins = total / 2)
+    campaign:
+      total_episodes: 600
+      episodes_per_session: 20
+
+    quotas:
+      move:
+        total: 240
+      clear:
+        total: 120
+      pick:
+        total: 120
+      place:
+        total: 120
+
+    # Service, Action & Topic interfaces
     game_status_topic: "/chess/game_status"
     import_fen_service: "/orchestrator/import_fen"
-    export_fen_service: "/orchestrator/export_fen"
     check_feasibility_service: "/workspace/check_move_feasibility"
-    execute_collection_task_service: "/orchestrator/execute_collection_task"
+    execute_collection_task_action: "/orchestrator/execute_collection_task"
 
     # Topics to record into each episode MCAP (LeRobot Dataset 3.0 compatible)
     topics:
@@ -34,3 +51,4 @@ episode_recorder_node:
       # 3. Spatial TF transforms (for offline Cartesian/board reference)
       - "/tf"
       - "/tf_static"
+

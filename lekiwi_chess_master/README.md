@@ -302,7 +302,7 @@ ros2 topic pub --once /chess/raw_fen std_msgs/msg/String \
 | Topic Name | Message Type | QoS Profile | Description |
 | :--- | :---: | :---: | :--- |
 | `/chess/raw_fen` | `std_msgs/msg/String` | SensorData (Best Effort) | Raw piece placement string from vision detection pipeline. |
-| `/chess/game_status` | `lekiwi_interfaces/msg/ChessGameStatus` | SystemDefaults | Consumed by `Chessboard2DVisualizer` for graphic generation. |
+| `/chess/game_status` | `lekiwi_interfaces/msg/ChessGameStatus` | Reliable, Transient Local, Depth 1 | Consumed by `Chessboard2DVisualizer` for graphic generation. |
 
 ### Service Interfaces
 

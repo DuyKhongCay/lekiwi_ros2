@@ -120,7 +120,9 @@ TEST_F(RecorderDiagnosticsTest, CampaignStatusActiveAndFinished)
     RecorderDiagnosticsSnapshot snap;
     snap.enable_collection_planner = true;
     snap.campaign_state = CampaignState::DISPATCHED_TO_ORCH;
-    snap.board_is_stable = true;
+    snap.is_action_server_connected = true;
+    snap.has_active_goal = true;
+    snap.active_goal_uci = "e2e4";
     snap.total_completed_episodes = 120;
     snap.target_total_episodes = 600;
     snap.session_id = 6;
@@ -150,9 +152,11 @@ TEST_F(RecorderDiagnosticsTest, CampaignStatusActiveAndFinished)
     }
     EXPECT_EQ(values["Campaign Mode"], "ENABLED");
     EXPECT_EQ(values["Campaign State"], "DISPATCHED_TO_ORCH");
+    EXPECT_EQ(values["Action Server Connected"], "true");
+    EXPECT_EQ(values["Active Goal Dispatched"], "true");
+    EXPECT_EQ(values["Active Goal UCI"], "e2e4");
     EXPECT_EQ(values["Total Progress"], "120 / 600 (20.0%)");
     EXPECT_EQ(values["Session Progress"], "Session 6: 14 / 20");
-    EXPECT_EQ(values["Board Stable"], "true");
     EXPECT_EQ(values["MOVE Quotas"], "60 / 240");
     EXPECT_EQ(values["CLEAR Quotas"], "30 / 120 (L: 15, R: 15)");
     EXPECT_EQ(values["PICK Quotas"], "15 / 120");
@@ -176,6 +180,62 @@ TEST_F(RecorderDiagnosticsTest, CampaignStatusActiveAndFinished)
     EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::OK);
     EXPECT_TRUE(stat.message.find("target 600 episodes reached") != std::string::npos);
   }
+
+  // 3. Waiting for Orchestrator Action Server
+  {
+    RecorderDiagnosticsSnapshot snap;
+    snap.enable_collection_planner = true;
+    snap.campaign_state = CampaignState::IDLE_READY;
+    snap.is_action_server_connected = false;
+
+    diagnostic_updater::DiagnosticStatusWrapper stat;
+    RecorderDiagnostics::evaluate_campaign_status(snap, stat);
+
+    EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
+    EXPECT_TRUE(stat.message.find("Waiting for Orchestrator ExecuteCollectionTask action server") != std::string::npos);
+
+    std::map<std::string, std::string> values;
+    for (const auto &kv : stat.values) {
+      values[kv.key] = kv.value;
+    }
+    EXPECT_EQ(values["Campaign State"], "IDLE_READY");
+    EXPECT_EQ(values["Action Server Connected"], "false");
+  }
+
+  // 4. Action Server Connected with Active Goal
+  {
+    RecorderDiagnosticsSnapshot snap;
+    snap.enable_collection_planner = true;
+    snap.campaign_state = CampaignState::DISPATCHED_TO_ORCH;
+    snap.is_action_server_connected = true;
+    snap.has_active_goal = true;
+    snap.active_goal_uci = "g1f3";
+
+    diagnostic_updater::DiagnosticStatusWrapper stat;
+    RecorderDiagnostics::evaluate_campaign_status(snap, stat);
+
+    EXPECT_EQ(stat.level, diagnostic_msgs::msg::DiagnosticStatus::OK);
+    EXPECT_EQ(stat.message, "Collection campaign nominal");
+
+    std::map<std::string, std::string> values;
+    for (const auto &kv : stat.values) {
+      values[kv.key] = kv.value;
+    }
+    EXPECT_EQ(values["Campaign State"], "DISPATCHED_TO_ORCH");
+    EXPECT_EQ(values["Action Server Connected"], "true");
+    EXPECT_EQ(values["Active Goal Dispatched"], "true");
+    EXPECT_EQ(values["Active Goal UCI"], "g1f3");
+  }
+}
+
+TEST_F(RecorderDiagnosticsTest, CampaignStateToStringConversions)
+{
+  EXPECT_EQ(to_string(CampaignState::DISABLED), "DISABLED");
+  EXPECT_EQ(to_string(CampaignState::IDLE_READY), "IDLE_READY");
+  EXPECT_EQ(to_string(CampaignState::PLANNING_OR_SYNTHESIS), "PLANNING_OR_SYNTHESIS");
+  EXPECT_EQ(to_string(CampaignState::AWAITING_PHYSICAL_SYNC), "AWAITING_PHYSICAL_SYNC");
+  EXPECT_EQ(to_string(CampaignState::DISPATCHED_TO_ORCH), "DISPATCHED_TO_ORCH");
+  EXPECT_EQ(to_string(CampaignState::CAMPAIGN_FINISHED), "CAMPAIGN_FINISHED");
 }
 
 } // namespace test

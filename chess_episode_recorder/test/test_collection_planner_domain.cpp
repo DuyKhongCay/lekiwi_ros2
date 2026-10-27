@@ -121,7 +121,12 @@ TEST_F(CollectionPlannerDomainTest, QuotaTracker_ScanAndRecover)
 TEST_F(CollectionPlannerDomainTest, QuotaTracker_SessionStatePersistence)
 {
   QuotaTracker tracker;
-  SessionState state{3, 14, "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1", true};
+  SessionState state;
+  state.session_id = 3;
+  state.episodes_in_session = 14;
+  state.initial_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+  state.active_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+  state.is_active = true;
   tracker.set_session_state(state);
 
   auto state_file = temp_dir_ / "session_state.yaml";
@@ -133,7 +138,9 @@ TEST_F(CollectionPlannerDomainTest, QuotaTracker_SessionStatePersistence)
 
   EXPECT_EQ(loaded.session_id, 3u);
   EXPECT_EQ(loaded.episodes_in_session, 14u);
-  EXPECT_EQ(loaded.active_fen, "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1");
+  chess::Board canonical_board;
+  canonical_board.setFen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1");
+  EXPECT_EQ(loaded.active_fen, canonical_board.getFen());
   EXPECT_TRUE(loaded.is_active);
 }
 
@@ -277,6 +284,109 @@ TEST_F(CollectionPlannerDomainTest, MoveCandidateSelector_PreventsRepeatingExecu
     if (cand.uci == first_move_uci) found_first_move = true;
   }
   EXPECT_TRUE(found_first_move);
+}
+
+// 7. QuotaTracker: Sequential Move Progression & Board Reconstruction
+TEST_F(CollectionPlannerDomainTest, QuotaTracker_SequentialMoveProgressionAndBoardReconstruction)
+{
+  QuotaTracker tracker;
+  const std::string init_fen = "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 4";
+  tracker.reset_session(init_fen);
+
+  EXPECT_EQ(tracker.get_active_board().sideToMove(), chess::Color::WHITE);
+
+  // Move 1: White Bishop takes pawn on f7 with check (c4f7)
+  EXPECT_TRUE(tracker.apply_move("c4f7"));
+  EXPECT_EQ(tracker.get_active_board().sideToMove(), chess::Color::BLACK);
+  EXPECT_TRUE(tracker.has_executed_move("c4f7"));
+  EXPECT_NE(tracker.get_active_fen(), init_fen);
+
+  // Move 2: Black King takes Bishop on f7 (e8f7)
+  EXPECT_TRUE(tracker.apply_move("e8f7"));
+  EXPECT_EQ(tracker.get_active_board().sideToMove(), chess::Color::WHITE);
+  EXPECT_TRUE(tracker.has_executed_move("e8f7"));
+
+  // Persist session state
+  auto state_file = temp_dir_ / "session_state.yaml";
+  EXPECT_TRUE(tracker.save_session_state(state_file));
+
+  // Reconstruct in a new tracker
+  QuotaTracker tracker2;
+  EXPECT_TRUE(tracker2.load_session_state(state_file));
+  EXPECT_EQ(tracker2.get_active_fen(), tracker.get_active_fen());
+  EXPECT_EQ(tracker2.get_active_board().sideToMove(), chess::Color::WHITE);
+  EXPECT_EQ(tracker2.get_executed_moves().size(), 2u);
+  EXPECT_TRUE(tracker2.has_executed_move("c4f7"));
+  EXPECT_TRUE(tracker2.has_executed_move("e8f7"));
+}
+
+// 8. MoveCandidateSelector: Sequential turns prevent moved piece repetition (Bug 2 Fix Verification)
+TEST_F(CollectionPlannerDomainTest, MoveCandidateSelector_SequentialTurnsPreventsMovedPieceRepetition)
+{
+  QuotaTracker tracker;
+  MoveCandidateSelector selector;
+
+  // Exact FEN from Session 11 bug report
+  const std::string session11_fen = "2k5/P2RR3/2r5/3b4/1pP5/8/2p5/6K1 w - - 0 1";
+  tracker.reset_session(session11_fen);
+
+  // Initial turn is White
+  EXPECT_EQ(tracker.get_active_board().sideToMove(), chess::Color::WHITE);
+
+  // White Rook moves from e7 to e3 ("e7e3")
+  EXPECT_TRUE(tracker.apply_move("e7e3"));
+  EXPECT_TRUE(tracker.has_executed_move("e7e3"));
+
+  // After e7e3, turn must be Black!
+  EXPECT_EQ(tracker.get_active_board().sideToMove(), chess::Color::BLACK);
+
+  // Candidates generated for next turn must be for Black pieces
+  auto black_candidates = selector.evaluate_candidates(tracker.get_active_board(), tracker, nullptr);
+  ASSERT_FALSE(black_candidates.empty());
+  for (const auto &cand : black_candidates) {
+    EXPECT_EQ(cand.moving_piece(tracker.get_active_board()).color, chess::Color::BLACK);
+    // Square e7 is now empty; no move can start from e7!
+    EXPECT_NE(cand.from_sq(), "e7");
+  }
+
+  // Black moves King or piece, e.g. c6c4
+  EXPECT_TRUE(tracker.apply_move("c6c4"));
+  EXPECT_EQ(tracker.get_active_board().sideToMove(), chess::Color::WHITE);
+
+  // Now White's turn again. Square e7 is still empty, rook is at e3
+  auto white_candidates = selector.evaluate_candidates(tracker.get_active_board(), tracker, nullptr);
+  ASSERT_FALSE(white_candidates.empty());
+  for (const auto &cand : white_candidates) {
+    // Engine can NEVER suggest picking from e7 because e7 is empty!
+    EXPECT_NE(cand.from_sq(), "e7");
+  }
+}
+
+// 9. QuotaTracker: Custom CampaignConfig and mathematical auto-derivation
+TEST_F(CollectionPlannerDomainTest, QuotaTracker_CustomCampaignConfigAutoDerivation)
+{
+  CampaignConfig cfg;
+  cfg.total_episodes = 1200;
+  cfg.episodes_per_session = 30;
+  cfg.move_total = 480;
+  cfg.clear_total = 240;
+  cfg.pick_total = 240;
+  cfg.place_total = 240;
+
+  QuotaTracker tracker(cfg);
+  PieceKey wp{chess::Color::WHITE, chess::PieceType::PAWN};
+  // MOVE: 480 / 12 = 40 per piece
+  EXPECT_EQ(tracker.get_target(StepKind::MOVE, wp), 40u);
+
+  // CLEAR: 240 / 10 = 24 per piece
+  EXPECT_EQ(tracker.get_target(StepKind::CLEAR, wp), 24u);
+
+  // PICK & PLACE: 240 / 12 = 20 each
+  EXPECT_EQ(tracker.get_target(StepKind::PICK, wp), 20u);
+  EXPECT_EQ(tracker.get_target(StepKind::PLACE, wp), 20u);
+
+  auto summary = tracker.get_summary();
+  EXPECT_EQ(summary.total_target, 1200u);
 }
 
 } // namespace chess_episode_recorder::domain::test

@@ -26,9 +26,9 @@ lekiwi_interfaces::msg::ChessMoveDetails to_ros_move_details(
 {
   lekiwi_interfaces::msg::ChessMoveDetails details;
   details.uci = cand.uci;
-  details.piece_color = (board.sideToMove() == chess::Color::WHITE) ? "w" : "b";
 
   auto moving = cand.moving_piece(board);
+  details.piece_color = (moving.color == chess::Color::WHITE) ? "w" : "b";
   details.piece_type = moving.piece_name();
 
   details.is_capture = cand.is_capture(board);
@@ -68,6 +68,12 @@ EpisodeRecorderNode::EpisodeRecorderNode(const rclcpp::NodeOptions &options)
 
 EpisodeRecorderNode::~EpisodeRecorderNode()
 {
+  is_running_.store(false);
+
+  if (action_server_check_timer_) {
+    action_server_check_timer_->cancel();
+  }
+
   if (current_state_.load() == EpisodeState::RECORDING) {
     RCLCPP_WARN(get_logger(), "Shutting down while recording. Stopping active episode...");
     stop_episode();
@@ -96,14 +102,20 @@ void EpisodeRecorderNode::init_parameters()
 
   // Campaign Conductor Parameters
   this->declare_parameter<bool>("enable_collection_planner", false);
-  this->declare_parameter<std::string>("collection_config_path", "");
+  this->declare_parameter<int64_t>("campaign.total_episodes", 600);
+  this->declare_parameter<int64_t>("campaign.episodes_per_session", 20);
+  this->declare_parameter<int64_t>("quotas.move.total", 240);
+  this->declare_parameter<int64_t>("quotas.clear.total", 120);
+  this->declare_parameter<int64_t>("quotas.pick.total", 120);
+  this->declare_parameter<int64_t>("quotas.place.total", 120);
+
   this->declare_parameter<std::string>("game_status_topic", "/chess/game_status");
   this->declare_parameter<std::string>("import_fen_service", "/orchestrator/import_fen");
-  this->declare_parameter<std::string>("export_fen_service", "/orchestrator/export_fen");
   this->declare_parameter<std::string>(
     "check_feasibility_service", "/workspace/check_move_feasibility");
   this->declare_parameter<std::string>(
-    "execute_collection_task_service", "/orchestrator/execute_collection_task");
+    "execute_collection_task_action", "/orchestrator/execute_collection_task");
+  this->declare_parameter<double>("service_timeout_sec", 5.0);
 
   root_dir_ = this->get_parameter("root_dir").as_string();
   experiment_name_ = this->get_parameter("experiment_name").as_string();
@@ -113,12 +125,24 @@ void EpisodeRecorderNode::init_parameters()
   requested_topics_ = this->get_parameter("topics").as_string_array();
 
   enable_collection_planner_ = this->get_parameter("enable_collection_planner").as_bool();
-  collection_config_path_ = this->get_parameter("collection_config_path").as_string();
+  campaign_config_.total_episodes =
+    static_cast<uint32_t>(this->get_parameter("campaign.total_episodes").as_int());
+  campaign_config_.episodes_per_session =
+    static_cast<uint32_t>(this->get_parameter("campaign.episodes_per_session").as_int());
+  campaign_config_.move_total =
+    static_cast<uint32_t>(this->get_parameter("quotas.move.total").as_int());
+  campaign_config_.clear_total =
+    static_cast<uint32_t>(this->get_parameter("quotas.clear.total").as_int());
+  campaign_config_.pick_total =
+    static_cast<uint32_t>(this->get_parameter("quotas.pick.total").as_int());
+  campaign_config_.place_total =
+    static_cast<uint32_t>(this->get_parameter("quotas.place.total").as_int());
+
   game_status_topic_ = this->get_parameter("game_status_topic").as_string();
   import_fen_srv_name_ = this->get_parameter("import_fen_service").as_string();
-  export_fen_srv_name_ = this->get_parameter("export_fen_service").as_string();
   check_feasibility_srv_name_ = this->get_parameter("check_feasibility_service").as_string();
-  execute_collection_task_srv_name_ = this->get_parameter("execute_collection_task_service").as_string();
+  execute_collection_task_action_name_ = this->get_parameter("execute_collection_task_action").as_string();
+  service_timeout_sec_ = this->get_parameter("service_timeout_sec").as_double();
 
   base_output_dir_ = std::filesystem::path(root_dir_);
   if (!experiment_name_.empty()) {
@@ -172,11 +196,7 @@ void EpisodeRecorderNode::init_campaign_conductor()
 
   cb_group_clients_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
-  quota_tracker_ = std::make_unique<domain::QuotaTracker>();
-  if (!collection_config_path_.empty()) {
-    quota_tracker_->load_config_file(collection_config_path_);
-  }
-
+  quota_tracker_ = std::make_unique<domain::QuotaTracker>(campaign_config_);
   fen_synthesizer_ = std::make_unique<domain::FenSynthesizer>();
   move_selector_ = std::make_unique<domain::MoveCandidateSelector>();
 
@@ -194,66 +214,122 @@ void EpisodeRecorderNode::init_campaign_conductor()
 
   // Load session state if it exists
   const auto session_file = base_output_dir_ / "session_state.yaml";
-  if (quota_tracker_->load_session_state(session_file)) {
-    auto sess = quota_tracker_->get_session_state();
+  bool session_loaded = quota_tracker_->load_session_state(session_file);
+  auto sess = quota_tracker_->get_session_state();
+
+  if (session_loaded && sess.is_active) {
     RCLCPP_INFO(
       get_logger(),
-      "💾 [CAMPAIGN CONDUCTOR] Resumed active session #%u (FEN: %s, %u/20 eps)",
-      sess.session_id, sess.active_fen.c_str(), sess.episodes_in_session);
+      "💾 [CAMPAIGN CONDUCTOR] Resumed active session #%u (Active FEN: %s, %u/%u eps, Executed Moves: %zu)",
+      sess.session_id, sess.active_fen.c_str(), sess.episodes_in_session,
+      campaign_config_.episodes_per_session, sess.executed_moves.size());
   }
 
-  // Create ROS 2 service clients
+  // Create ROS 2 service, action clients, and game status subscription
   import_fen_client_ = this->create_client<lekiwi_interfaces::srv::SetFen>(
     import_fen_srv_name_, rclcpp::ServicesQoS(), cb_group_clients_);
-  export_fen_client_ = this->create_client<std_srvs::srv::Trigger>(
-    export_fen_srv_name_, rclcpp::ServicesQoS(), cb_group_clients_);
   check_feasibility_client_ = this->create_client<lekiwi_interfaces::srv::CheckMoveFeasibility>(
     check_feasibility_srv_name_, rclcpp::ServicesQoS(), cb_group_clients_);
-  execute_collection_task_client_ = this->create_client<lekiwi_interfaces::srv::ExecuteCollectionTask>(
-    execute_collection_task_srv_name_, rclcpp::ServicesQoS(), cb_group_clients_);
+  action_client_ = rclcpp_action::create_client<ExecuteCollectionTask>(
+    this, execute_collection_task_action_name_, cb_group_clients_);
 
-  // Subscribe to board game status with latched Reliable QoS (TransientLocal, Depth 1)
-  rclcpp::QoS game_status_qos(1);
-  game_status_qos.reliable();
-  game_status_qos.transient_local();
   game_status_sub_ = this->create_subscription<lekiwi_interfaces::msg::ChessGameStatus>(
     game_status_topic_,
-    game_status_qos,
+    rclcpp::QoS(1).reliable().transient_local(),
     std::bind(&EpisodeRecorderNode::on_game_status_received, this, std::placeholders::_1));
 
-  campaign_state_.store(CampaignState::IDLE_AWAITING_BOARD);
+  if (!sess.is_active || sess.episodes_in_session >= campaign_config_.episodes_per_session) {
+    advance_to_new_session();
+  } else {
+    sync_active_fen_to_orchestrator(sess.active_fen);
+  }
+
+  // Periodic check timer to dispatch task when action server is online
+  action_server_check_timer_ = this->create_wall_timer(
+    std::chrono::milliseconds(500),
+    std::bind(&EpisodeRecorderNode::check_action_server_and_dispatch, this));
+
+  RCLCPP_INFO(
+    get_logger(),
+    "⏳ [CAMPAIGN CONDUCTOR] Initialized Action Client on '%s'.",
+    execute_collection_task_action_name_.c_str());
+}
+
+bool EpisodeRecorderNode::is_action_server_connected() const
+{
+  return action_client_ && action_client_->action_server_is_ready();
+}
+
+bool EpisodeRecorderNode::has_active_goal() const
+{
+  std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(goal_mutex_));
+  return active_goal_handle_ != nullptr;
 }
 
 void EpisodeRecorderNode::on_game_status_received(
   const lekiwi_interfaces::msg::ChessGameStatus::ConstSharedPtr msg)
 {
-  if (!enable_collection_planner_ || !msg) {
+  if (!msg) {
+    return;
+  }
+  is_board_synced_.store(msg->is_board_synced);
+}
+
+void EpisodeRecorderNode::check_action_server_and_dispatch()
+{
+  if (!enable_collection_planner_ || !action_client_) {
     return;
   }
 
-  if (quota_tracker_->is_campaign_complete()) {
-    if (campaign_state_.load() != CampaignState::CAMPAIGN_FINISHED) {
-      campaign_state_.store(CampaignState::CAMPAIGN_FINISHED);
-      RCLCPP_INFO(get_logger(), "🎉 [CAMPAIGN COMPLETE] All 600 target episodes achieved successfully!");
+  // Handle State Barrier
+  if (campaign_state_.load() == CampaignState::AWAITING_PHYSICAL_SYNC) {
+    if (!fen_sync_acknowledged_.load()) {
+      if (!import_fen_client_ || !import_fen_client_->service_is_ready()) {
+        RCLCPP_DEBUG_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "⏳ [STATE BARRIER] Waiting for /orchestrator/import_fen service to become available...");
+        return;
+      }
+      if (!fen_sync_in_flight_.load()) {
+        send_fen_sync_request();
+      }
+      return; // Locked: Orchestrator has not acknowledged FEN yet
     }
+
+    // Orchestrator accepted FEN; now waiting for physical board sync from vision
+    std::string current_target_fen;
+    {
+      std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
+      current_target_fen = target_session_fen_;
+    }
+    if (!is_board_synced_.load()) {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "⏳ [STATE BARRIER] Awaiting physical chessboard arrangement for session FEN: %s",
+        current_target_fen.c_str());
+      return; // Locked: Physical board not yet synced
+    }
+
+    // Both Orchestrator acknowledged FEN AND physical board is synced!
+    RCLCPP_INFO(
+      get_logger(),
+      "✔ [STATE BARRIER CLEARED] Physical board and Orchestrator synced with FEN: %s. Campaign ready.",
+      current_target_fen.c_str());
+    campaign_state_.store(CampaignState::IDLE_READY);
+  }
+
+  if (campaign_state_.load() != CampaignState::IDLE_READY || has_active_goal()) {
     return;
   }
 
-  last_seen_fen_ = msg->full_fen;
-  board_is_stable_ = msg->is_board_stable;
-
-  // Trigger automated move selection or session synthesis only when board vision is fully settled
-  if (msg->is_board_stable &&
-      msg->game_phase == lekiwi_interfaces::msg::ChessGameStatus::PHASE_WAITING_PLAYER &&
-      campaign_state_.load() == CampaignState::IDLE_AWAITING_BOARD)
-  {
-    if (!is_planning_in_progress_.exchange(true)) {
-      std::thread([this, fen = msg->full_fen]() {
-        trigger_campaign_step_async(fen);
-        is_planning_in_progress_.store(false);
-      }).detach();
-    }
+  if (!action_client_->action_server_is_ready()) {
+    return;
   }
+  if (!is_board_synced_.load()) {
+    return;
+  }
+
+  dispatch_next_task();
 }
 
 bool EpisodeRecorderNode::query_move_feasibility_sync(
@@ -261,7 +337,12 @@ bool EpisodeRecorderNode::query_move_feasibility_sync(
   const chess::Board &board,
   uint8_t &out_plan_type)
 {
-  if (!check_feasibility_client_->service_is_ready()) {
+  if (!is_running_.load()) {
+    return false;
+  }
+
+  if (!check_feasibility_client_ || !check_feasibility_client_->service_is_ready()) {
+    last_feasibility_query_succeeded_.store(false);
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 5000,
       "Feasibility service '%s' is not ready yet.", check_feasibility_srv_name_.c_str());
@@ -272,33 +353,188 @@ bool EpisodeRecorderNode::query_move_feasibility_sync(
   req->move = to_ros_move_details(cand, board);
 
   auto future = check_feasibility_client_->async_send_request(req);
-  if (future.wait_for(std::chrono::milliseconds(200)) != std::future_status::ready) {
+  auto timeout = std::chrono::duration<double>(service_timeout_sec_);
+  if (future.wait_for(timeout) != std::future_status::ready) {
+    last_feasibility_query_succeeded_.store(false);
     return false;
   }
 
-  auto resp = future.get();
-  out_plan_type = resp->plan_type;
-  return resp->feasible;
+  try {
+    auto resp = future.get();
+    out_plan_type = resp->plan_type;
+    return resp->feasible;
+  } catch (const std::exception &e) {
+    last_feasibility_query_succeeded_.store(false);
+    RCLCPP_WARN(get_logger(), "Feasibility query failed with exception: %s", e.what());
+    return false;
+  }
 }
 
-void EpisodeRecorderNode::trigger_campaign_step_async(const std::string &fen)
+uint32_t EpisodeRecorderNode::calculate_expected_episodes(const domain::MoveCandidate &cand) const
 {
-  std::lock_guard<std::mutex> lock(domain_mutex_);
-  auto sess = quota_tracker_->get_session_state();
+  uint32_t expected = 0;
+  auto is_bypassed = [&](const std::string &step) {
+    return std::find(cand.bypass_steps.begin(), cand.bypass_steps.end(), step) != cand.bypass_steps.end();
+  };
 
-  // If no active session or 20 episodes completed, initialize new session FEN
-  if (!sess.is_active || sess.episodes_in_session >= 20) {
+  if (quota_tracker_) {
+    const auto &board = quota_tracker_->get_active_board();
+    if (cand.is_capture(board)) {
+      if (!is_bypassed("CLEAR")) {
+        expected++;
+      }
+    }
+  }
+
+  if (cand.force_pick_place) {
+    if (!is_bypassed("PICK")) {
+      expected++;
+    }
+    if (!is_bypassed("PLACE")) {
+      expected++;
+    }
+  } else {
+    if (!is_bypassed("MOVE")) {
+      expected++;
+    }
+  }
+
+  return expected;
+}
+
+bool EpisodeRecorderNode::sync_active_fen_to_orchestrator(const std::string &fen)
+{
+  {
+    std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
+    target_session_fen_ = fen;
+  }
+  fen_sync_acknowledged_.store(false);
+  fen_sync_in_flight_.store(false);
+  is_board_synced_.store(false);
+  campaign_state_.store(CampaignState::AWAITING_PHYSICAL_SYNC);
+
+  if (import_fen_client_ && import_fen_client_->service_is_ready()) {
+    return send_fen_sync_request();
+  }
+  return false;
+}
+
+bool EpisodeRecorderNode::send_fen_sync_request()
+{
+  if (!import_fen_client_ || !import_fen_client_->service_is_ready()) {
+    return false;
+  }
+  if (fen_sync_in_flight_.exchange(true)) {
+    return false;
+  }
+
+  std::string fen;
+  {
+    std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
+    fen = target_session_fen_;
+  }
+  if (fen.empty()) {
+    fen_sync_in_flight_.store(false);
+    return false;
+  }
+
+  auto req = std::make_shared<lekiwi_interfaces::srv::SetFen::Request>();
+  req->fen = fen;
+  req->robot_color = ""; // Deduce color automatically
+
+  import_fen_client_->async_send_request(
+    req,
+    [this, fen](rclcpp::Client<lekiwi_interfaces::srv::SetFen>::SharedFuture fut) {
+      try {
+        auto resp = fut.get();
+        if (resp->success) {
+          fen_sync_acknowledged_.store(true);
+          RCLCPP_INFO(
+            get_logger(),
+            "✔ [STATE BARRIER] Orchestrator acknowledged FEN: %s. Awaiting physical board sync.",
+            fen.c_str());
+        } else {
+          fen_sync_acknowledged_.store(false);
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "⚠ [STATE BARRIER] Orchestrator SetFen rejected: %s (Will retry)",
+            resp->message.c_str());
+        }
+      } catch (const std::exception &e) {
+        fen_sync_acknowledged_.store(false);
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "⚠ [STATE BARRIER] Exception in SetFen response: %s (Will retry)", e.what());
+      }
+      fen_sync_in_flight_.store(false);
+    });
+  return true;
+}
+
+void EpisodeRecorderNode::dispatch_next_task()
+{
+  if (!enable_collection_planner_ || !quota_tracker_ || !is_running_.load()) {
+    return;
+  }
+
+  if (campaign_state_.load() != CampaignState::IDLE_READY) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Cannot dispatch next task: Campaign state is %s",
+      to_string(campaign_state_.load()).data());
+    return;
+  }
+
+  if (!action_client_ || !action_client_->action_server_is_ready()) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "ExecuteCollectionTask action server '%s' is not ready yet.",
+      execute_collection_task_action_name_.c_str());
+    return;
+  }
+
+  if (!check_feasibility_client_ || !check_feasibility_client_->service_is_ready()) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Cannot dispatch next task: Feasibility service '%s' is not ready yet.",
+      check_feasibility_srv_name_.c_str());
+    return;
+  }
+
+  if (!is_board_synced_.load()) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Cannot dispatch next task: Waiting for physical chessboard synchronization with FEN.");
+    return;
+  }
+
+  if (has_active_goal()) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "Cannot dispatch next task: A task is already actively being executed by Orchestrator.");
+    return;
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
+
+  if (quota_tracker_->is_campaign_complete()) {
+    campaign_state_.store(CampaignState::CAMPAIGN_FINISHED);
+    RCLCPP_INFO(
+      get_logger(),
+      "🎉 [CAMPAIGN COMPLETE] All %u target episodes achieved successfully!",
+      campaign_config_.total_episodes);
+    return;
+  }
+
+  auto sess = quota_tracker_->get_session_state();
+  if (!sess.is_active || sess.episodes_in_session >= campaign_config_.episodes_per_session) {
     advance_to_new_session();
     return;
   }
 
-  chess::Board board;
-  if (!board.setFen(fen)) {
-    RCLCPP_ERROR(get_logger(), "Failed to parse board FEN: '%s'", fen.c_str());
-    return;
-  }
-
+  const auto &board = quota_tracker_->get_active_board();
   campaign_state_.store(CampaignState::PLANNING_OR_SYNTHESIS);
+  last_feasibility_query_succeeded_.store(true);
 
   domain::MoveCandidateSelector::FeasibilityChecker checker =
     [this, &board](const domain::MoveCandidate &cand) -> std::pair<bool, uint8_t> {
@@ -309,14 +545,41 @@ void EpisodeRecorderNode::trigger_campaign_step_async(const std::string &fen)
 
   auto best_move = move_selector_->select_best_move(board, *quota_tracker_, checker);
   if (best_move.has_value()) {
+    active_move_candidate_ = best_move;
+    active_move_expected_episodes_ = calculate_expected_episodes(*best_move);
+    active_move_recorded_episodes_ = 0;
+
     RCLCPP_INFO(
       get_logger(),
-      "🎯 [CANDIDATE SELECTED] Move: %s (Score: %.1f, Feasible: %s, Plan: %u, Bypass: %zu)",
+      "🎯 [CANDIDATE SELECTED] Move: %s (Score: %.1f, Feasible: %s, Plan: %u, Expected Episodes: %u)",
       best_move->uci.c_str(), best_move->score, best_move->is_feasible ? "YES" : "NO",
-      best_move->plan_type, best_move->bypass_steps.size());
+      best_move->plan_type, active_move_expected_episodes_);
 
-    dispatch_task_to_orchestrator(*best_move, board);
+    ExecuteCollectionTask::Goal goal;
+    goal.move = to_ros_move_details(*best_move, board);
+    goal.force_pick_place = best_move->force_pick_place;
+    goal.clear_bin_side = best_move->clear_bin_side;
+    goal.bypass_steps = best_move->bypass_steps;
+
+    campaign_state_.store(CampaignState::DISPATCHED_TO_ORCH);
+
+    rclcpp_action::Client<ExecuteCollectionTask>::SendGoalOptions options;
+    options.goal_response_callback =
+      std::bind(&EpisodeRecorderNode::on_goal_response, this, std::placeholders::_1);
+    options.feedback_callback =
+      std::bind(&EpisodeRecorderNode::on_feedback, this, std::placeholders::_1, std::placeholders::_2);
+    options.result_callback =
+      std::bind(&EpisodeRecorderNode::on_result, this, std::placeholders::_1);
+
+    action_client_->async_send_goal(goal, options);
   } else {
+    if (!last_feasibility_query_succeeded_.load()) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Feasibility service timed out or failed during candidate evaluation. Retrying later without advancing session.");
+      campaign_state_.store(CampaignState::IDLE_READY);
+      return;
+    }
     RCLCPP_WARN(
       get_logger(),
       "Board exhausted: No contributing feasible moves found on active turn (%s). Advancing session...",
@@ -325,35 +588,193 @@ void EpisodeRecorderNode::trigger_campaign_step_async(const std::string &fen)
   }
 }
 
+void EpisodeRecorderNode::on_goal_response(const GoalHandleCollectionTask::SharedPtr & goal_handle)
+{
+  if (!goal_handle) {
+    RCLCPP_WARN(get_logger(), "⚠ [COLLECTION TASK] Goal rejected by Orchestrator.");
+    {
+      std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
+      active_move_candidate_.reset();
+      active_move_expected_episodes_ = 0;
+      active_move_recorded_episodes_ = 0;
+    }
+    {
+      std::lock_guard<std::mutex> lock(goal_mutex_);
+      active_goal_handle_.reset();
+    }
+    campaign_state_.store(CampaignState::IDLE_READY);
+    return;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(goal_mutex_);
+    active_goal_handle_ = goal_handle;
+  }
+  RCLCPP_INFO(get_logger(), "✔ [COLLECTION TASK] Goal accepted by Orchestrator. Execution in progress...");
+}
+
+void EpisodeRecorderNode::on_feedback(
+  GoalHandleCollectionTask::SharedPtr /*goal_handle*/,
+  const std::shared_ptr<const ExecuteCollectionTask::Feedback> feedback)
+{
+  if (!feedback) {
+    return;
+  }
+  RCLCPP_INFO_THROTTLE(
+    get_logger(), *get_clock(), 2000,
+    "📊 [COLLECTION FEEDBACK] Stage: %s, Progress: %.1f%%",
+    feedback->current_stage.c_str(), feedback->progress_percent);
+}
+
+void EpisodeRecorderNode::on_result(const GoalHandleCollectionTask::WrappedResult & result)
+{
+  {
+    std::lock_guard<std::mutex> lock(goal_mutex_);
+    active_goal_handle_.reset();
+  }
+
+  switch (result.code) {
+    case rclcpp_action::ResultCode::SUCCEEDED: {
+      const std::string actual_fen =
+        (result.result && !result.result->final_fen.empty()) ? result.result->final_fen : "";
+
+      RCLCPP_INFO(
+        get_logger(),
+        "🎉 [COLLECTION TASK] Succeeded! Final FEN: %s",
+        actual_fen.empty() ? "(empty)" : actual_fen.c_str());
+
+      std::string finished_uci;
+      {
+        std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
+        if (active_move_candidate_.has_value()) {
+          finished_uci = active_move_candidate_->uci;
+
+          chess::Board expected_board = quota_tracker_->get_active_board();
+          chess::Move expected_move = chess::uci::uciToMove(expected_board, finished_uci);
+          bool move_valid = (expected_move != chess::Move::NO_MOVE);
+          std::string expected_fen;
+          if (move_valid) {
+            expected_board.makeMove(expected_move);
+            expected_fen = expected_board.getFen();
+          }
+
+          chess::Board actual_board;
+          bool actual_valid = !actual_fen.empty() && actual_board.setFen(actual_fen);
+
+          bool mismatch = !actual_valid || !move_valid || !(actual_board == expected_board);
+          if (mismatch) {
+            RCLCPP_WARN(
+              get_logger(),
+              "⚠ [STATE GATE] Teleop move divergence detected! Planned target: '%s' (Expected FEN: %s), "
+              "Action Server reported FEN: %s. Preserving recorded episodes for post-processing and adopting actual board state.",
+              finished_uci.c_str(), expected_fen.c_str(), actual_fen.c_str());
+
+            if (actual_valid) {
+              quota_tracker_->set_active_fen(actual_fen);
+              quota_tracker_->save_session_state(base_output_dir_ / "session_state.yaml");
+              RCLCPP_INFO(
+                get_logger(),
+                "♟ [STATE RE-SYNC] Synchronized domain board to action server FEN: %s",
+                actual_fen.c_str());
+            }
+          } else {
+            bool applied = quota_tracker_->apply_move(finished_uci);
+            if (applied) {
+              RCLCPP_INFO(
+                get_logger(),
+                "♟ [MOVE COMPLETED] Applied UCI: %s. New Sequential FEN: %s",
+                finished_uci.c_str(), quota_tracker_->get_active_fen().c_str());
+              quota_tracker_->save_session_state(base_output_dir_ / "session_state.yaml");
+            } else {
+              RCLCPP_ERROR(get_logger(), "❌ Failed to apply completed move '%s' to active board!", finished_uci.c_str());
+            }
+          }
+
+          active_move_candidate_.reset();
+          active_move_expected_episodes_ = 0;
+          active_move_recorded_episodes_ = 0;
+        }
+
+        if (quota_tracker_->is_campaign_complete()) {
+          campaign_state_.store(CampaignState::CAMPAIGN_FINISHED);
+          RCLCPP_INFO(
+            get_logger(),
+            "🏆 [CAMPAIGN COMPLETE] All %u target episodes achieved successfully!",
+            campaign_config_.total_episodes);
+          return;
+        }
+
+        auto sess = quota_tracker_->get_session_state();
+        if (sess.episodes_in_session >= campaign_config_.episodes_per_session) {
+          advance_to_new_session();
+          return;
+        }
+      }
+
+      campaign_state_.store(CampaignState::IDLE_READY);
+      trigger_deferred_dispatch();
+      break;
+    }
+    case rclcpp_action::ResultCode::ABORTED: {
+      RCLCPP_ERROR(
+        get_logger(),
+        "❌ [COLLECTION TASK] Aborted by Orchestrator: %s",
+        result.result ? result.result->message.c_str() : "No message");
+      {
+        std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
+        active_move_candidate_.reset();
+        active_move_expected_episodes_ = 0;
+        active_move_recorded_episodes_ = 0;
+      }
+      campaign_state_.store(CampaignState::IDLE_READY);
+      trigger_deferred_dispatch();
+      break;
+    }
+    case rclcpp_action::ResultCode::CANCELED: {
+      RCLCPP_WARN(get_logger(), "⚠ [COLLECTION TASK] Canceled by Orchestrator or client request.");
+      {
+        std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
+        active_move_candidate_.reset();
+        active_move_expected_episodes_ = 0;
+        active_move_recorded_episodes_ = 0;
+      }
+      campaign_state_.store(CampaignState::IDLE_READY);
+      trigger_deferred_dispatch();
+      break;
+    }
+    default:
+      RCLCPP_WARN(get_logger(), "Unknown action result code: %d", static_cast<int>(result.code));
+      campaign_state_.store(CampaignState::IDLE_READY);
+      break;
+  }
+}
+
+void EpisodeRecorderNode::trigger_deferred_dispatch()
+{
+  defer_dispatch_timer_ = this->create_wall_timer(
+    std::chrono::milliseconds(5),
+    [this]() {
+      if (defer_dispatch_timer_) {
+        defer_dispatch_timer_->cancel();
+      }
+      if (campaign_state_.load() == CampaignState::IDLE_READY && !has_active_goal()) {
+        dispatch_next_task();
+      }
+    });
+}
+
 void EpisodeRecorderNode::advance_to_new_session()
 {
+  std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
   std::string new_fen = fen_synthesizer_->synthesize_fen(*quota_tracker_);
-
-  if (import_fen_client_->wait_for_service(std::chrono::seconds(5))) {
-    auto req = std::make_shared<lekiwi_interfaces::srv::SetFen::Request>();
-    req->fen = new_fen;
-    req->robot_color = ""; // Deduce color automatically
-    auto future = import_fen_client_->async_send_request(req);
-    if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready) {
-      auto resp = future.get();
-      if (resp->success) {
-        RCLCPP_INFO(get_logger(), "✔ [IMPORT FEN] Successfully synchronized FEN with Orchestrator");
-      } else {
-        RCLCPP_WARN(get_logger(), "⚠ [IMPORT FEN] Orchestrator SetFen returned false: %s", resp->message.c_str());
-      }
-    } else {
-      RCLCPP_WARN(get_logger(), "⚠ [IMPORT FEN] Timed out waiting for SetFen service response");
-    }
-  } else {
-    RCLCPP_WARN(
-      get_logger(),
-      "⚠ [IMPORT FEN] SetFen service '%s' not available within 5s",
-      import_fen_srv_name_.c_str());
-  }
 
   quota_tracker_->advance_session();
   quota_tracker_->reset_session(new_fen);
   quota_tracker_->save_session_state(base_output_dir_ / "session_state.yaml");
+
+  active_move_candidate_.reset();
+  active_move_expected_episodes_ = 0;
+  active_move_recorded_episodes_ = 0;
 
   auto sess = quota_tracker_->get_session_state();
   RCLCPP_INFO(
@@ -366,45 +787,8 @@ void EpisodeRecorderNode::advance_to_new_session()
     "================================================================================",
     sess.session_id, new_fen.c_str());
 
-  campaign_state_.store(CampaignState::IDLE_AWAITING_BOARD);
-}
-
-void EpisodeRecorderNode::dispatch_task_to_orchestrator(
-  const domain::MoveCandidate &cand,
-  const chess::Board &board)
-{
-  if (!execute_collection_task_client_->service_is_ready()) {
-    RCLCPP_ERROR(get_logger(), "Execute collection task service '%s' is not available!",
-                 execute_collection_task_srv_name_.c_str());
-    campaign_state_.store(CampaignState::IDLE_AWAITING_BOARD);
-    return;
-  }
-
-  auto req = std::make_shared<lekiwi_interfaces::srv::ExecuteCollectionTask::Request>();
-  req->move = to_ros_move_details(cand, board);
-  req->force_pick_place = cand.force_pick_place;
-  req->clear_bin_side = cand.clear_bin_side;
-  req->bypass_steps = cand.bypass_steps;
-
-  // Record candidate move into session state so it is never re-selected in this session
-  if (quota_tracker_) {
-    quota_tracker_->record_executed_move(cand.uci);
-    quota_tracker_->save_session_state(base_output_dir_ / "session_state.yaml");
-  }
-
-  campaign_state_.store(CampaignState::DISPATCHED_TO_ORCH);
-
-  auto future = execute_collection_task_client_->async_send_request(
-    req,
-    [this](rclcpp::Client<lekiwi_interfaces::srv::ExecuteCollectionTask>::SharedFuture fut) {
-      auto resp = fut.get();
-      if (resp->success) {
-        RCLCPP_INFO(get_logger(), "🚀 [DISPATCH ACCEPTED] Orchestrator started collection move pipeline.");
-      } else {
-        RCLCPP_ERROR(get_logger(), "❌ [DISPATCH REJECTED] Orchestrator rejected task: %s", resp->message.c_str());
-        campaign_state_.store(CampaignState::IDLE_AWAITING_BOARD);
-      }
-    });
+  // Activate state barrier: Orchestrator SetFen sync & physical board alignment
+  sync_active_fen_to_orchestrator(new_fen);
 }
 
 void EpisodeRecorderNode::on_feedback_received(
@@ -605,29 +989,26 @@ bool EpisodeRecorderNode::save_episode()
     }
 
     if (enable_collection_planner_ && quota_tracker_) {
-      std::lock_guard<std::mutex> lock(domain_mutex_);
+      std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
       quota_tracker_->record_episode(task_saved);
       auto sess = quota_tracker_->get_session_state();
       sess.episodes_in_session++;
       quota_tracker_->set_session_state(sess);
       quota_tracker_->save_session_state(base_output_dir_ / "session_state.yaml");
 
+      active_move_recorded_episodes_++;
+
       auto sum = quota_tracker_->get_summary();
       RCLCPP_INFO(
         get_logger(),
-        "✔ [EPISODE SAVED] Episode %06u! Campaign: %u/%u (MOVE: %u, CLEAR: %u, PICK: %u, PLACE: %u). Session: %u/20",
+        "✔ [EPISODE SAVED] Episode %06u! Campaign: %u/%u (MOVE: %u, CLEAR: %u, PICK: %u, PLACE: %u). Session: %u/20. Move: %u/%u",
         current_episode_index_, sum.total_completed, sum.total_target,
         sum.completed_by_kind[domain::StepKind::MOVE],
         sum.completed_by_kind[domain::StepKind::CLEAR],
         sum.completed_by_kind[domain::StepKind::PICK],
         sum.completed_by_kind[domain::StepKind::PLACE],
-        sess.episodes_in_session);
-
-      if (sess.episodes_in_session >= 20) {
-        advance_to_new_session();
-      } else {
-        campaign_state_.store(CampaignState::IDLE_AWAITING_BOARD);
-      }
+        sess.episodes_in_session,
+        active_move_recorded_episodes_, active_move_expected_episodes_);
     } else {
       RCLCPP_INFO(get_logger(), "✔ [EPISODE RECORDER] Saved Episode %06u successfully!",
                   current_episode_index_);
@@ -680,9 +1061,6 @@ bool EpisodeRecorderNode::discard_episode()
   }
 
   current_state_.store(EpisodeState::IDLE);
-  if (enable_collection_planner_) {
-    campaign_state_.store(CampaignState::IDLE_AWAITING_BOARD);
-  }
   return true;
 }
 
@@ -802,7 +1180,7 @@ void EpisodeRecorderNode::handle_campaign_status(
     return;
   }
 
-  std::lock_guard<std::mutex> lock(domain_mutex_);
+  std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
   auto sum = quota_tracker_->get_summary();
   auto sess = quota_tracker_->get_session_state();
 
@@ -813,7 +1191,8 @@ void EpisodeRecorderNode::handle_campaign_status(
      << " [L:" << sum.clear_left_completed << "/R:" << sum.clear_right_completed << "]"
      << ", PICK: " << sum.completed_by_kind[domain::StepKind::PICK]
      << ", PLACE: " << sum.completed_by_kind[domain::StepKind::PLACE] << ")"
-     << " | Session #" << sess.session_id << ": " << sess.episodes_in_session << "/20 eps.";
+     << " | Session #" << sess.session_id << ": " << sess.episodes_in_session << "/"
+     << campaign_config_.episodes_per_session << " eps.";
 
   res->success = true;
   res->message = ss.str();
@@ -837,6 +1216,14 @@ RecorderDiagnosticsSnapshot EpisodeRecorderNode::capture_diagnostics_snapshot() 
   snap.episode_state = current_state_.load(std::memory_order_relaxed);
   snap.campaign_state = campaign_state_.load(std::memory_order_relaxed);
   snap.enable_collection_planner = enable_collection_planner_;
+  snap.is_action_server_connected = is_action_server_connected();
+  snap.has_active_goal = has_active_goal();
+  {
+    std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
+    if (active_move_candidate_.has_value()) {
+      snap.active_goal_uci = active_move_candidate_->uci;
+    }
+  }
   snap.current_episode_index = current_episode_index_;
   snap.base_output_dir = base_output_dir_.string();
 
@@ -869,8 +1256,7 @@ RecorderDiagnosticsSnapshot EpisodeRecorderNode::capture_diagnostics_snapshot() 
 
   // Campaign state & quotas
   if (enable_collection_planner_ && quota_tracker_) {
-    std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(domain_mutex_));
-    snap.board_is_stable = board_is_stable_;
+    std::lock_guard<std::recursive_mutex> lock(domain_mutex_);
     auto sum = quota_tracker_->get_summary();
     auto sess = quota_tracker_->get_session_state();
 

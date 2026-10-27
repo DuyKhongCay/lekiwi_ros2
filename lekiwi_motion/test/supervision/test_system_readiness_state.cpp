@@ -58,6 +58,9 @@ protected:
     tf_chains_.odom_to_base_fresh = true;
     tf_chains_.base_to_gripper_fresh = true;
     tf_chains_.map_to_board_fresh = true;
+
+    nav2_lifecycle_.active = true;
+    nav2_lifecycle_.stamp_sec = 9.95;
   }
 
   std::unique_ptr<SystemReadinessEvaluator> evaluator_;
@@ -66,6 +69,7 @@ protected:
   GlobalOdomSnapshot global_odom_;
   JointsSnapshot joints_;
   TfChainSnapshot tf_chains_;
+  Nav2LifecycleSnapshot nav2_lifecycle_;
 };
 
 /**
@@ -73,7 +77,7 @@ protected:
  */
 TEST_F(SystemReadinessEvaluatorTest, FullReadinessWhenStationaryAndAllSignalsFresh)
 {
-  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.nav_ready);
   EXPECT_TRUE(report.grasp_ready);
   EXPECT_TRUE(report.is_stationary);
@@ -88,7 +92,7 @@ TEST_F(SystemReadinessEvaluatorTest, NavigationReadyWhileMovingGraspNotReady)
   // Robot moving at 0.20 m/s linear velocity
   local_odom_.vx = 0.20;
 
-  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
 
   // Navigation remains READY so robot can continue moving
   EXPECT_TRUE(report.nav_ready);
@@ -104,7 +108,7 @@ TEST_F(SystemReadinessEvaluatorTest, NavigationReadyWhileMovingGraspNotReady)
 TEST_F(SystemReadinessEvaluatorTest, NavigationReadyWhenAprilTagLostTemporarily)
 {
   // 1. Initial stage: Global EKF converges while robot is stationary
-  auto initial_report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto initial_report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(initial_report.grasp_ready);
 
   // 2. Subsequent stage: Robot moves and loses AprilTag tracking (global odom stale > 0.3s)
@@ -114,7 +118,7 @@ TEST_F(SystemReadinessEvaluatorTest, NavigationReadyWhenAprilTagLostTemporarily)
   global_odom_.stamp_sec = 10.0;         // Tag lost for 2 seconds
   tf_chains_.map_to_board_fresh = false; // Board TF lost
 
-  auto moving_report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto moving_report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
 
   // Navigation remains READY due to local odom and prior global seed
   EXPECT_TRUE(moving_report.nav_ready);
@@ -130,7 +134,7 @@ TEST_F(SystemReadinessEvaluatorTest, MissingJointBlocksGraspNotNavigation)
   // Missing arm_gripper joint
   joints_.joint_names.erase("arm_gripper");
 
-  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
 
   EXPECT_TRUE(report.nav_ready);
   EXPECT_FALSE(report.grasp_ready);
@@ -145,7 +149,7 @@ TEST_F(SystemReadinessEvaluatorTest, StaleLocalOdomBlocksNavigation)
   // Local odometry too stale (> 0.5s)
   local_odom_.stamp_sec = now_sec_ - 1.0;
 
-  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
 
   EXPECT_FALSE(report.nav_ready);
 }
@@ -158,7 +162,7 @@ TEST_F(SystemReadinessEvaluatorTest, HighVarianceBlocksGrasp)
   // EKF position variance exceeds threshold (0.005 > 0.0012)
   global_odom_.pos_variance = 0.0050;
 
-  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
 
   EXPECT_FALSE(report.grasp_ready);
   EXPECT_NE(report.grasp_blocker_reason.find("Global EKF unconverged"), std::string::npos);
@@ -170,7 +174,7 @@ TEST_F(SystemReadinessEvaluatorTest, HighVarianceBlocksGrasp)
 TEST_F(SystemReadinessEvaluatorTest, ResetGlobalEkfSeedClearsReadiness)
 {
   // 1. Initial convergence seeds the filter
-  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.nav_ready);
   EXPECT_TRUE(evaluator_->is_global_ekf_seeded());
 
@@ -180,7 +184,7 @@ TEST_F(SystemReadinessEvaluatorTest, ResetGlobalEkfSeedClearsReadiness)
 
   // 3. Evaluation without new convergence must fail nav readiness if require_global_ekf_seed is true
   global_odom_.pos_variance = 0.050; // unconverged
-  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_FALSE(report.nav_ready);
   EXPECT_FALSE(report.grasp_ready);
 }
@@ -191,7 +195,7 @@ TEST_F(SystemReadinessEvaluatorTest, ResetGlobalEkfSeedClearsReadiness)
 TEST_F(SystemReadinessEvaluatorTest, TransientAngularSpikePreservesStationaryLatch)
 {
   // 1. Initial convergence seeds filter and establishes stationary latch
-  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.grasp_ready);
   EXPECT_TRUE(report.stationary_latched);
 
@@ -203,7 +207,7 @@ TEST_F(SystemReadinessEvaluatorTest, TransientAngularSpikePreservesStationaryLat
   now_sec_ = 10.10;
   local_odom_.stamp_sec = 10.08;
   joints_.stamp_sec = 10.08;
-  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.grasp_ready);
   EXPECT_TRUE(report.stationary_latched);
 
@@ -213,7 +217,7 @@ TEST_F(SystemReadinessEvaluatorTest, TransientAngularSpikePreservesStationaryLat
   local_odom_.stamp_sec = 10.19;
   joints_.stamp_sec = 10.19;
   local_odom_.wz = 0.15;
-  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.is_stationary);
   EXPECT_TRUE(report.stationary_latched);
   EXPECT_TRUE(report.grasp_ready);
@@ -223,7 +227,7 @@ TEST_F(SystemReadinessEvaluatorTest, TransientAngularSpikePreservesStationaryLat
   local_odom_.stamp_sec = 10.29;
   joints_.stamp_sec = 10.29;
   local_odom_.wz = 0.15;
-  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.is_stationary);
   EXPECT_TRUE(report.stationary_latched);
   EXPECT_TRUE(report.grasp_ready);
@@ -233,7 +237,7 @@ TEST_F(SystemReadinessEvaluatorTest, TransientAngularSpikePreservesStationaryLat
   local_odom_.stamp_sec = 10.34;
   joints_.stamp_sec = 10.34;
   local_odom_.wz = 0.0;
-  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.is_stationary);
   EXPECT_TRUE(report.stationary_latched);
   EXPECT_TRUE(report.grasp_ready);
@@ -245,7 +249,7 @@ TEST_F(SystemReadinessEvaluatorTest, TransientAngularSpikePreservesStationaryLat
 TEST_F(SystemReadinessEvaluatorTest, SustainedMotionBreaksStationaryLatch)
 {
   // 1. Initial convergence seeds filter and latches stationary
-  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.grasp_ready);
   EXPECT_TRUE(report.stationary_latched);
 
@@ -258,14 +262,14 @@ TEST_F(SystemReadinessEvaluatorTest, SustainedMotionBreaksStationaryLatch)
   local_odom_.stamp_sec = 10.09;
   joints_.stamp_sec = 10.09;
   local_odom_.vx = 0.10;
-  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.is_stationary); // First sample within debounce window
 
   // 4. Sustained motion exceeds debounce duration (t = 10.40s, elapsed = 0.30s >= 0.25s)
   now_sec_ = 10.40;
   local_odom_.stamp_sec = 10.39;
   joints_.stamp_sec = 10.39;
-  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_FALSE(report.is_stationary);
   EXPECT_FALSE(report.stationary_latched);
   EXPECT_FALSE(report.grasp_ready);
@@ -275,8 +279,62 @@ TEST_F(SystemReadinessEvaluatorTest, SustainedMotionBreaksStationaryLatch)
   local_odom_.stamp_sec = 10.49;
   joints_.stamp_sec = 10.49;
   local_odom_.vx = 0.0;
-  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_);
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
   EXPECT_TRUE(report.is_stationary);
   EXPECT_FALSE(report.stationary_latched);
   EXPECT_FALSE(report.grasp_ready);
 }
+
+/**
+ * @brief Tests that Nav2 inactive state strictly blocks nav_ready even when EKF is converged.
+ */
+TEST_F(SystemReadinessEvaluatorTest, Nav2InactiveBlocksNavReady)
+{
+  // Nav2 lifecycle inactive
+  nav2_lifecycle_.active = false;
+
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
+
+  EXPECT_FALSE(report.nav_ready);
+  EXPECT_FALSE(report.nav2_lifecycle_active);
+  EXPECT_EQ(report.nav_blocker_reason, "Nav2 lifecycle is not active");
+
+  // Grasp readiness should not be blocked solely by Nav2 being inactive
+  EXPECT_TRUE(report.grasp_ready);
+}
+
+/**
+ * @brief Tests that nav_ready requires both EKF convergence and Nav2 lifecycle active.
+ */
+TEST_F(SystemReadinessEvaluatorTest, Nav2ActiveWithEkfConvergedAllowsNavReady)
+{
+  nav2_lifecycle_.active = true;
+
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
+
+  EXPECT_TRUE(report.nav_ready);
+  EXPECT_TRUE(report.nav2_lifecycle_active);
+  EXPECT_EQ(report.nav_blocker_reason, "Ready");
+}
+
+/**
+ * @brief Tests that transitioning Nav2 from active to inactive drops nav_ready immediately.
+ */
+TEST_F(SystemReadinessEvaluatorTest, Nav2TransitionFromActiveToInactiveDropsNavReady)
+{
+  // 1. Initially active
+  nav2_lifecycle_.active = true;
+  auto report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
+  EXPECT_TRUE(report.nav_ready);
+
+  // 2. Nav2 lifecycle manager transitions to inactive (e.g. crash or pause)
+  now_sec_ = 10.50;
+  nav2_lifecycle_.active = false;
+  nav2_lifecycle_.stamp_sec = 10.48;
+
+  report = evaluator_->evaluate(now_sec_, local_odom_, global_odom_, joints_, tf_chains_, nav2_lifecycle_);
+  EXPECT_FALSE(report.nav_ready);
+  EXPECT_FALSE(report.nav2_lifecycle_active);
+  EXPECT_EQ(report.nav_blocker_reason, "Nav2 lifecycle is not active");
+}
+

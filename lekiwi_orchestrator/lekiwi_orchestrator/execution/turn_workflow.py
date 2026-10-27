@@ -31,6 +31,7 @@ from lekiwi_orchestrator.planning.move_planner import MovePlanBuilder
 
 if TYPE_CHECKING:
     from lekiwi_orchestrator.core.parameters import OrchestratorParameters
+    from lekiwi_orchestrator.execution.engine_client import EngineClient
     from lekiwi_orchestrator.execution.motion_client import MotionClient
     from lekiwi_orchestrator.execution.move_sequencer import MoveSequencer
     from lekiwi_orchestrator.planning.obs_navigator import ObsNavigator
@@ -54,7 +55,9 @@ class TurnHost(Protocol):
 
     def set_last_interaction_pose(self, pose: PoseStamped | None) -> None: ...
 
-    def set_candidate_move(self, move_details: ChessMoveDetails | None) -> None: ...
+    def publish_candidate_move(
+        self, details: ChessMoveGoal | ChessMoveDetails | None
+    ) -> None: ...
 
     def start_post_move_watchdog(self) -> None: ...
 
@@ -80,6 +83,7 @@ class GameStatusHandler:
         finalize_turn_fn: Callable[[], None],
         dispatch_workflow_fn: Callable[[str, Any], None],
         reset_obs_viewpoints_fn: Callable[[], None],
+        engine_client: EngineClient | None = None,
         on_robot_color_updated_cb: Callable[[str], None] | None = None,
     ) -> None:
         self._node = node
@@ -91,24 +95,38 @@ class GameStatusHandler:
         self._finalize_turn_fn = finalize_turn_fn
         self._dispatch_workflow_fn = dispatch_workflow_fn
         self._reset_obs_viewpoints_fn = reset_obs_viewpoints_fn
+        self._engine_client = engine_client
         self._on_robot_color_updated_cb = on_robot_color_updated_cb
 
         self._last_processed_fen = ""
         self._latest_full_fen = ""
-        self._robot_color = ""
+        self._robot_color = self._config.robot_color
+        self._is_evaluating_engine = False
 
     @property
     def robot_color(self) -> str:
         with self._state_lock:
             return self._robot_color
 
+    def set_robot_color(self, color: str) -> None:
+        norm_color = "b" if color.strip().lower() in ("b", "black") else "w"
+        color_changed = False
+        with self._state_lock:
+            if norm_color != self._robot_color:
+                self._robot_color = norm_color
+                color_changed = True
+        if color_changed and self._on_robot_color_updated_cb is not None:
+            self._on_robot_color_updated_cb(norm_color)
+
     @property
     def last_processed_fen(self) -> str:
-        return self._last_processed_fen
+        with self._state_lock:
+            return self._last_processed_fen
 
     @last_processed_fen.setter
     def last_processed_fen(self, fen: str) -> None:
-        self._last_processed_fen = fen
+        with self._state_lock:
+            self._last_processed_fen = fen
 
     @property
     def latest_full_fen(self) -> str:
@@ -131,8 +149,7 @@ class GameStatusHandler:
             if self._get_mission_state() != MacroMissionState.AWAITING_BOARD_SYNC:
                 return False
 
-        # If referee is still waiting for board sync or vision is not yet stable, stay in AWAITING_BOARD_SYNC
-        if msg.game_phase == ChessGameStatus.PHASE_AWAITING_BOARD_SYNC or not msg.is_board_stable:
+        if not msg.is_board_synced:
             return True
 
         # Physical board layout confirmed stable and matches imported FEN!
@@ -143,11 +160,29 @@ class GameStatusHandler:
         if self.handle_game_over_if_ended(msg):
             return True
 
-        # Default transition after AWAITING_BOARD_SYNC is EVALUATING_BEST_MOVE (COMPUTE_BEST_MOVE)
+        # Check if there is an interrupted recovery move pending execution
+        pending_move = getattr(self._node, "pending_recovery_move", None)
+        if pending_move is not None:
+            if self._config.record:
+                # In record mode, external action client drives all moves and episode tracking.
+                # Clear pending move and transition to WAITING_FOR_NEXT_MOVE so client can dispatch.
+                if hasattr(self._node, "clear_recovery_move"):
+                    self._node.clear_recovery_move()
+            else:
+                self._node.get_logger().info(
+                    f"[RECOVERY RESUME] Board verified synced. Resuming interrupted move '{pending_move.uci}'."
+                )
+                self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
+                if self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE):
+                    if hasattr(self._node, "clear_recovery_move"):
+                        self._node.clear_recovery_move()
+                    self._dispatch_workflow_fn(pending_move.uci, pending_move)
+                    return True
+
         self._node.get_logger().info(
-            ">>> [BOARD SYNC] Board layout stable. Defaulting transition to EVALUATING_BEST_MOVE."
+            ">>> [BOARD SYNC] Board layout stable. Transitioning to WAITING_FOR_NEXT_MOVE."
         )
-        self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE)
+        self._transition_to_fn(MacroMissionState.WAITING_FOR_NEXT_MOVE)
         return False
 
     def handle_game_over_if_ended(self, msg: ChessGameStatus) -> bool:
@@ -172,25 +207,18 @@ class GameStatusHandler:
         with self._state_lock:
             if self._get_mission_state() != MacroMissionState.POST_MOVE_VERIFYING:
                 return False
+            # Crucial: Must wait for vision to detect physical move causing FEN change
+            if msg.full_fen == self._last_processed_fen:
+                return True
 
-        if msg.is_board_stable and msg.is_legal_move:
+        if msg.is_legal_move:
             self._node.get_logger().info(
                 f">>> [POST-MOVE VERIFICATION] Board state confirmed stable & legal (FEN: {msg.full_fen}). Finalizing turn."
             )
+            with self._state_lock:
+                self._last_processed_fen = msg.full_fen
             self._finalize_turn_fn()
         return True
-
-    def is_eligible_robot_turn(self, msg: ChessGameStatus) -> bool:
-        """Determine if referee message indicates a valid turn ready for robot execution."""
-        with self._state_lock:
-            current_color = self._robot_color
-        is_robot_turn = msg.active_color == current_color
-        best_uci = bool(msg.best_move_details.uci)
-        is_phase_ready = msg.game_phase in (
-            ChessGameStatus.PHASE_ROBOT_READY,
-            ChessGameStatus.PHASE_WAITING_PLAYER,
-        )
-        return msg.is_board_stable and is_robot_turn and best_uci and is_phase_ready
 
     def on_game_status(
         self,
@@ -209,16 +237,6 @@ class GameStatusHandler:
         Thread-safety:
             Checks and updates `_last_processed_fen` under `_state_lock`.
         """
-        if msg.robot_color:
-            norm_color = msg.robot_color.lower().strip()
-            color_changed = False
-            with self._state_lock:
-                if norm_color != self._robot_color:
-                    self._robot_color = norm_color
-                    color_changed = True
-            if color_changed and self._on_robot_color_updated_cb is not None:
-                self._on_robot_color_updated_cb(norm_color)
-
         if msg.full_fen:
             with self._state_lock:
                 self._latest_full_fen = msg.full_fen
@@ -234,40 +252,102 @@ class GameStatusHandler:
         if self.verify_post_move_board(msg):
             return
 
+        if not msg.is_board_synced:
+            return
+
         with self._state_lock:
             current_color = self._robot_color
+            current_state = self._get_mission_state()
 
-        if (
-            msg.game_phase == ChessGameStatus.PHASE_ROBOT_THINKING
-            and current_color
-            and msg.active_color == current_color
-            and self._get_mission_state() == MacroMissionState.WAITING_FOR_PLAYER_MOVE
-        ):
-            self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE)
+        is_robot_turn = (msg.active_color == current_color)
+
+        if not is_robot_turn:
+            if current_state == MacroMissionState.TURN_COMPLETED:
+                self._transition_to_fn(MacroMissionState.WAITING_FOR_NEXT_MOVE)
             return
 
-        if not self.is_eligible_robot_turn(msg):
+        if self._config.record:
+            if current_state == MacroMissionState.TURN_COMPLETED:
+                self._transition_to_fn(MacroMissionState.WAITING_FOR_NEXT_MOVE)
             return
 
+        # Autonomous mode: compute best move via Stockfish engine
         with self._state_lock:
-
             eligible_state = self._get_mission_state() in (
-                MacroMissionState.WAITING_FOR_PLAYER_MOVE,
-                MacroMissionState.EVALUATING_BEST_MOVE,
+                MacroMissionState.WAITING_FOR_NEXT_MOVE,
                 MacroMissionState.TURN_COMPLETED,
             )
             if not eligible_state or msg.full_fen == self._last_processed_fen:
                 return
 
-            self._last_processed_fen = msg.full_fen
+            if self._is_evaluating_engine:
+                return
+            self._is_evaluating_engine = True
 
-        details = msg.best_move_details
+        if not self._transition_to_fn(MacroMissionState.EVALUATING_BEST_MOVE):
+            with self._state_lock:
+                self._is_evaluating_engine = False
+            return
+
+        if self._engine_client is None:
+            self._node.get_logger().error(
+                "EngineClient not configured but autonomous move requested!"
+            )
+            with self._state_lock:
+                self._is_evaluating_engine = False
+            self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
+            return
+
+        current_fen = msg.full_fen
         self._node.get_logger().info(
-            f">>> [ORCHESTRATOR] New Best Move Received: '{details.uci}' "
-            f"(Piece: {details.piece_type}, Capture: {details.is_capture}, Color: {msg.active_color})"
+            f">>> [ORCHESTRATOR] Autonomous Turn: Requesting best move for FEN: {current_fen} "
+            f"(Color: {msg.active_color}, Think time: {self._config.think_time_ms}ms)"
         )
-        self._reset_obs_viewpoints_fn()
-        self._dispatch_workflow_fn(details.uci, details)
+
+        def _on_engine_result(
+            best_move_uci: str | None, message: str = ""
+        ) -> None:
+            with self._state_lock:
+                self._is_evaluating_engine = False
+                if self._get_mission_state() != MacroMissionState.EVALUATING_BEST_MOVE:
+                    self._node.get_logger().warn(
+                        f"Ignoring engine result for '{best_move_uci}': state changed to {self._get_mission_state().name}"
+                    )
+                    return
+
+            if not best_move_uci:
+                self._node.get_logger().error(
+                    f"Engine returned empty best move for FEN {current_fen}: {message}"
+                )
+                self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
+                return
+
+            with self._state_lock:
+                self._last_processed_fen = current_fen
+
+            self._node.get_logger().info(
+                f">>> [ORCHESTRATOR] Engine Best Move: '{best_move_uci}'"
+            )
+            self._reset_obs_viewpoints_fn()
+            goal = ChessMoveGoal.from_uci_or_details(uci_move=best_move_uci)
+            if goal is None:
+                self._node.get_logger().error(
+                    f"Failed to create ChessMoveGoal from engine UCI '{best_move_uci}'!"
+                )
+                self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
+                return
+            self._dispatch_workflow_fn(best_move_uci, goal)
+
+        dispatched = self._engine_client.compute_best_move_async(
+            fen=current_fen,
+            think_time_ms=self._config.think_time_ms,
+            on_complete=_on_engine_result,
+        )
+        if not dispatched:
+            with self._state_lock:
+                self._is_evaluating_engine = False
+            self._node.get_logger().error("Failed to dispatch compute_best_move action goal!")
+            self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
 
 
 
@@ -317,82 +397,39 @@ class MoveWorkflow:
                     return pose
         return None
 
-    def dispatch_move_workflow(
-        self,
-        uci_move: str,
-        move_details: ChessMoveDetails | None = None,
-    ) -> None:
-        """Begin autonomous execution of a single chess move."""
-        if not self._host.is_nav_ready:
-            self._node.get_logger().warn(
-                f"Cannot dispatch move '{uci_move}': Navigation system not ready. Waiting for navigation readiness."
-            )
-            self._host.transition_to(MacroMissionState.WAITING_FOR_TF_READY)
-            self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
-            return
-
-        details = ChessMoveGoal.from_uci_or_details(uci_move, move_details)
-        if details is None:
-            self._node.get_logger().error(
-                f"Failed to parse UCI move '{uci_move}': Expected format like 'e2e4' or 'e7e8q'."
-            )
-            self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
-            return
-
-        self._host.set_current_move(details)
-
+    def dispatch_move_goal(self, details: ChessMoveGoal) -> tuple[bool, str]:
+        """Dispatch a chess move goal with reachability feasibility checks and candidate broadcast."""
         cur_state = self._host.mission_state
-        if cur_state in (
-            MacroMissionState.WAITING_FOR_PLAYER_MOVE,
-            MacroMissionState.TURN_COMPLETED,
-            MacroMissionState.WAITING_FOR_TF_READY,
-        ) and not self._host.transition_to(MacroMissionState.EVALUATING_BEST_MOVE):
-            return
-
-        if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
-            return
-
-        if details.is_castling:
-            self._query_castling_feasibility(details)
-            return
-
-        self._node.get_logger().info(
-            f"Querying reachability feasibility for {details.from_square} -> {details.to_square}..."
-        )
-        dispatcher = self._dispatcher_provider()
-        dispatched = dispatcher.check_feasibility(
-            goal=details,
-            timeout_sec=self._config.feasibility_timeout_sec,
-            on_success=lambda resp: self.on_feasibility_response(resp, details),
-            on_error=self.on_feasibility_error,
-        )
-        if not dispatched:
-            self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
-
-    def dispatch_collection_task(self, details: ChessMoveGoal) -> tuple[bool, str]:
-        """Dispatch an externally driven recording task with feasibility checks."""
-        if not self._host.is_nav_ready:
-            msg = "Cannot execute collection task: Navigation system not ready."
+        if cur_state == MacroMissionState.WAITING_FOR_TF_READY or not self._host.is_nav_ready:
+            msg = f"Cannot execute move '{details.uci}' while in WAITING_FOR_TF_READY: Navigation system not ready."
             self._node.get_logger().warn(msg)
             self._host.transition_to(MacroMissionState.WAITING_FOR_TF_READY)
             self._perception.set_context(PerceptionContext.TF_TRACKING_AND_NAV)
             return (False, msg)
 
-        cur_state = self._host.mission_state
-        if cur_state in (
-            MacroMissionState.WAITING_FOR_PLAYER_MOVE,
-            MacroMissionState.TURN_COMPLETED,
-            MacroMissionState.WAITING_FOR_TF_READY,
-            MacroMissionState.EVALUATING_BEST_MOVE,
-        ) and not self._host.transition_to(MacroMissionState.EVALUATING_BEST_MOVE):
-            return (False, f"Cannot transition to EVALUATING_BEST_MOVE from {cur_state.name}")
+        if self._config.record and cur_state == MacroMissionState.EVALUATING_BEST_MOVE:
+            msg = "Illegal state: Orchestrator must never enter EVALUATING_BEST_MOVE in record mode."
+            self._node.get_logger().error(msg)
+            self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
+            return (False, msg)
 
-        if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
-            return (False, f"Cannot transition to CHECKING_REACHABILITY from {self._host.mission_state.name}")
+        if cur_state in (
+            MacroMissionState.WAITING_FOR_NEXT_MOVE,
+            MacroMissionState.TURN_COMPLETED,
+        ):
+            if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
+                return (False, f"Cannot transition to CHECKING_REACHABILITY from {cur_state.name}")
+        elif cur_state == MacroMissionState.EVALUATING_BEST_MOVE:
+            if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
+                return (False, f"Cannot transition to CHECKING_REACHABILITY from {cur_state.name}")
+        elif cur_state != MacroMissionState.CHECKING_REACHABILITY:
+            if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
+                return (False, f"Cannot transition to CHECKING_REACHABILITY from {cur_state.name}")
 
         self._host.set_current_move(details)
+        self._host.publish_candidate_move(details)
         self._node.get_logger().info(
-            f"Querying reachability feasibility for collection task {details.from_square} -> {details.to_square}..."
+            f"Querying reachability feasibility for {details.from_square} -> {details.to_square} ({details.uci})..."
         )
 
         if details.is_castling:
@@ -401,15 +438,40 @@ class MoveWorkflow:
             dispatcher = self._dispatcher_provider()
             dispatched = dispatcher.check_feasibility(
                 goal=details,
-                timeout_sec=self._config.feasibility_timeout_sec,
+                timeout_sec=self._config.service_timeout_sec,
                 on_success=lambda resp: self.on_feasibility_response(resp, details),
                 on_error=self.on_feasibility_error,
             )
             if not dispatched:
+                self._host.publish_candidate_move(None)
                 self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
                 return (False, "Failed to dispatch feasibility service call")
 
-        return (True, f"Collection task dispatched successfully for {details.uci}")
+        return (True, f"Move goal dispatched successfully for {details.uci}")
+
+    def dispatch_move_workflow(
+        self,
+        uci_move: str,
+        move_details: ChessMoveDetails | ChessMoveGoal | None = None,
+    ) -> None:
+        """Begin autonomous execution of a single chess move."""
+        if isinstance(move_details, ChessMoveGoal):
+            details = move_details
+        else:
+            details = ChessMoveGoal.from_uci_or_details(uci_move, move_details)
+
+        if details is None:
+            self._node.get_logger().error(
+                f"Failed to parse UCI move '{uci_move}': Expected format like 'e2e4' or 'e7e8q'."
+            )
+            self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
+            return
+
+        self.dispatch_move_goal(details)
+
+    def dispatch_collection_task(self, details: ChessMoveGoal) -> tuple[bool, str]:
+        """Dispatch an externally driven recording task with feasibility checks."""
+        return self.dispatch_move_goal(details)
 
     def _query_castling_feasibility(self, details: ChessMoveGoal) -> None:
         """Execute two sequential feasibility checks for King and Rook in castling."""
@@ -419,7 +481,7 @@ class MoveWorkflow:
         king_goal = ChessMoveGoal(
             uci=f"{details.from_square}{details.to_square}",
             piece_type="king",
-            color=details.color,
+            piece_color=details.piece_color,
             force_pick_place=details.force_pick_place,
             clear_bin_side=details.clear_bin_side,
             bypass_steps=details.bypass_steps,
@@ -427,11 +489,12 @@ class MoveWorkflow:
         dispatcher = self._dispatcher_provider()
         dispatched = dispatcher.check_feasibility(
             goal=king_goal,
-            timeout_sec=self._config.feasibility_timeout_sec,
+            timeout_sec=self._config.service_timeout_sec,
             on_success=lambda resp_king: self._on_castling_king_feasibility_response(resp_king, details),
             on_error=self.on_feasibility_error,
         )
         if not dispatched:
+            self._host.publish_candidate_move(None)
             self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
 
     def _on_castling_king_feasibility_response(
@@ -441,6 +504,7 @@ class MoveWorkflow:
             self._node.get_logger().error(
                 f"[CASTLING] King move {details.from_square}->{details.to_square} NOT FEASIBLE: {resp_king.message}"
             )
+            self._host.publish_candidate_move(None)
             self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
             return
 
@@ -451,7 +515,7 @@ class MoveWorkflow:
         rook_goal = ChessMoveGoal(
             uci=f"{details.castling_rook_from}{details.castling_rook_to}",
             piece_type="rook",
-            color=details.color,
+            piece_color=details.piece_color,
             force_pick_place=details.force_pick_place,
             clear_bin_side=details.clear_bin_side,
             bypass_steps=details.bypass_steps,
@@ -459,13 +523,14 @@ class MoveWorkflow:
         dispatcher = self._dispatcher_provider()
         dispatched = dispatcher.check_feasibility(
             goal=rook_goal,
-            timeout_sec=self._config.feasibility_timeout_sec,
+            timeout_sec=self._config.service_timeout_sec,
             on_success=lambda resp_rook: self._on_castling_rook_feasibility_response(
                 resp_king, resp_rook, details, rook_goal
             ),
             on_error=self.on_feasibility_error,
         )
         if not dispatched:
+            self._host.publish_candidate_move(None)
             self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
 
     def _on_castling_rook_feasibility_response(
@@ -479,6 +544,7 @@ class MoveWorkflow:
             self._node.get_logger().error(
                 f"[CASTLING] Rook move {details.castling_rook_from}->{details.castling_rook_to} NOT FEASIBLE: {resp_rook.message}"
             )
+            self._host.publish_candidate_move(None)
             self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
             return
 
@@ -498,7 +564,7 @@ class MoveWorkflow:
         king_goal = ChessMoveGoal(
             uci=f"{details.from_square}{details.to_square}",
             piece_type="king",
-            color=details.color,
+            piece_color=details.piece_color,
             force_pick_place=details.force_pick_place,
             clear_bin_side=details.clear_bin_side,
             bypass_steps=details.bypass_steps,
@@ -510,12 +576,16 @@ class MoveWorkflow:
         if not self._host.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE):
             return
 
+        if hasattr(self._host, "publish_collection_feedback"):
+            self._host.publish_collection_feedback("EXECUTING_MOVE_PIPELINE", 30.0)
+
         self._pipeline_executor.start_pipeline(all_stages)
 
     def on_feasibility_error(self, error_msg: str) -> None:
         self._node.get_logger().error(
             f"Workspace feasibility query failed: {error_msg}"
         )
+        self._host.publish_candidate_move(None)
         self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
 
     def on_feasibility_response(
@@ -527,6 +597,7 @@ class MoveWorkflow:
             self._node.get_logger().error(
                 f"Move {details.uci} declared NOT FEASIBLE: {resp.message}"
             )
+            self._host.publish_candidate_move(None)
             self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
             return
 
@@ -549,17 +620,22 @@ class MoveWorkflow:
         if not self._host.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE):
             return
 
+        if hasattr(self._host, "publish_collection_feedback"):
+            self._host.publish_collection_feedback("EXECUTING_MOVE_PIPELINE", 30.0)
+
         self._pipeline_executor.start_pipeline(stages)
 
     def on_move_pipeline_completed(self) -> None:
         """Physical move pipeline completed: transition to POST_MOVE_VERIFYING and start active verification."""
-        self._host.clear_move_goals()
         self._host.transition_to(MacroMissionState.POST_MOVE_VERIFYING)
         self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
+        if hasattr(self._host, "publish_collection_feedback"):
+            self._host.publish_collection_feedback("POST_MOVE_VERIFYING", 75.0)
         self._host.start_post_move_watchdog()
 
     def on_move_pipeline_failed(self, error_msg: str) -> None:
         self._node.get_logger().error(f"Move pipeline execution failed: {error_msg}")
+        self._host.publish_candidate_move(None)
         self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
 
 
