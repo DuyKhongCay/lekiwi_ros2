@@ -13,7 +13,6 @@
     game_status_topic: "/chess/game_status"
     set_fen_service: "/chess/set_fen"
     debounce_frames: 3
-    robot_color: "black"          # Robot player piece color ("black" or "white")
 
 chessboard_2d_visualizer:
   ros__parameters:

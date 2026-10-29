@@ -127,7 +127,6 @@ chess_mission_orchestrator:
     service_timeout_sec: 5.0
     action_timeout_sec: 0.0
     readiness_timeout_sec: 1.0
-    chassis_settle_timeout_sec: 2.0
 
     # --- Self-Healing & Recovery Settings ---
     recovery:
@@ -152,7 +151,6 @@ chess_mission_orchestrator:
       chess_set_fen: "/chess/set_fen"
       set_perception_context: "/orchestrator/set_perception_context"
       system_reset_readiness: "/system/reset_readiness"
-      ekf_reset: "/ekf_filter_node_map/reset"
 
     disturbance:
       local_odom_topic: "/odometry/local"
