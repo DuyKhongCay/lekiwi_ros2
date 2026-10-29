@@ -178,3 +178,27 @@ class TfReplayer:
 
         transformed = R @ point_xyz.astype(np.float64) + t
         return transformed.astype(np.float32)
+
+    def lookup_tcp_pose(
+        self,
+        tool_frame: str,
+        base_frame: str,
+        time_ns: int,
+    ) -> np.ndarray:
+        """Lookup Cartesian 3D position [x, y, z] of tool_frame in base_frame.
+
+        Strictly enforces tool_frame (defaults to 'gripperframe').
+        Does NOT fallback to alternative frames.
+        """
+        origin = np.zeros(3, dtype=np.float32)
+        transformed = self.transform_point(
+            origin,
+            source_frame=tool_frame,
+            target_frame=base_frame,
+            time_ns=time_ns,
+        )
+        if transformed is None:
+            raise RuntimeError(
+                f"Failed to lookup TCP pose from '{tool_frame}' to '{base_frame}' at timestamp {time_ns} ns."
+            )
+        return transformed

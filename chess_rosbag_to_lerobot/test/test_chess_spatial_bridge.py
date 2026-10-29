@@ -177,32 +177,31 @@ def test_resolve_episode_spatial_plan():
     assert plan_move.target.is_board_frame is True
     assert np.allclose(plan_move.stow_xyz, [0.070, -0.188, 0.175])
 
-    # 2. MOVE plan without square notation (defaults to stow landmark)
+    # 2. MOVE plan without square notation (no synthetic fallback to stow)
     plan_move_nosq = resolve_episode_spatial_plan("Move black pawn to target", cfg)
     assert plan_move_nosq.task_type == TaskType.MOVE
-    assert plan_move_nosq.source.is_board_frame is False
-    assert plan_move_nosq.target.is_board_frame is False
-    assert np.allclose(plan_move_nosq.source.xyz, plan_move_nosq.stow_xyz)
-    assert np.allclose(plan_move_nosq.target.xyz, plan_move_nosq.stow_xyz)
+    assert plan_move_nosq.source is None
+    assert plan_move_nosq.target is None
 
     # 3. CLEAR plan
     plan_clear = resolve_episode_spatial_plan("Clear white knight to left bin", cfg)
     assert plan_clear.task_type == TaskType.CLEAR
-    assert plan_clear.source.is_board_frame is False
+    assert plan_clear.source is None
+    assert plan_clear.target is not None
     assert plan_clear.target.is_board_frame is False
     assert np.allclose(plan_clear.target.xyz, [-0.003, 0.143, 0.170])
 
     # 4. PICK plan
     plan_pick = resolve_episode_spatial_plan("Pick black bishop", cfg)
     assert plan_pick.task_type == TaskType.PICK
-    assert plan_pick.target.is_board_frame is False
-    assert np.allclose(plan_pick.target.xyz, [0.070, -0.188, 0.175])
+    assert plan_pick.source is None
+    assert plan_pick.target is None
 
     # 5. PLACE plan
     plan_place = resolve_episode_spatial_plan("Place black bishop", cfg)
     assert plan_place.task_type == TaskType.PLACE
-    assert plan_place.source.is_board_frame is False
-    assert np.allclose(plan_place.source.xyz, [0.070, -0.188, 0.175])
+    assert plan_place.source is None
+    assert plan_place.target is None
 
 
 def test_sort_episodes():

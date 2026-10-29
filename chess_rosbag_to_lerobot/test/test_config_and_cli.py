@@ -35,6 +35,14 @@ def test_load_config_lekiwi_chess():
     assert len(cfg.chessboard.landmarks.clear_left) == 3
     assert len(cfg.chessboard.landmarks.clear_right) == 3
 
+    # Teleop filter check
+    assert cfg.teleop_filter.tool_frame == "gripper"
+    assert cfg.teleop_filter.base_frame == "base_footprint"
+    assert cfg.teleop_filter.z_threshold_m == 0.15
+    assert cfg.teleop_filter.dwell_time_s == 0.5
+    assert cfg.teleop_filter.transit_min_s == 1.0
+    assert cfg.teleop_filter.gripper_close_threshold == 0.15
+
     # Features check
     feature_keys = [f.key for f in cfg.features]
     assert "observation.images.wrist" in feature_keys
@@ -53,8 +61,8 @@ def test_load_config_lekiwi_chess():
     assert len(names) == 12
     assert names[0] == "arm_shoulder_pan.pos"
     assert names[5] == "arm_gripper.pos"
-    assert names[6:9] == ["source_x", "source_y", "source_z"]
-    assert names[9:12] == ["target_x", "target_y", "target_z"]
+    assert names[6:9] == ["ee_x", "ee_y", "ee_z"]
+    assert names[9:12] == ["delta_x", "delta_y", "delta_z"]
     assert "observation.environment_state" not in lerobot_schema
 
 
@@ -100,10 +108,11 @@ def test_convert_one_bag_skips_ambiguous_clear_via_value_error(caplog):
         )
 
         with caplog.at_level(logging.WARNING):
-            frames, dropped = convert_one_bag(bag_path, cfg, None)
+            frames, dropped, plan = convert_one_bag(bag_path, cfg, None)
 
         assert frames == 0
         assert dropped == 0
+        assert plan is None
         assert any("Skipping episode" in rec.message and "Ambiguous CLEAR" in rec.message for rec in caplog.records)
 
 

@@ -18,6 +18,15 @@ include_task_types:
   - "pick"
   - "place"
 
+# Teleoperation false event filtering & TF tracking configuration
+teleop_filter:
+  tool_frame: "gripper"
+  base_frame: "base_footprint"
+  z_threshold_m: 0.15
+  dwell_time_s: 0.5
+  transit_min_s: 1.0
+  gripper_close_threshold: 0.15
+
 # Chessboard geometry settings (Single Source of Truth matching chessboard_pose_estimator)
 chessboard:
   board_frame: "chessboard_frame"
