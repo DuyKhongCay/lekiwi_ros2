@@ -44,24 +44,61 @@ if(rosbag2_storage_VERSION VERSION_GREATER_EQUAL "0.22.0")
   add_compile_definitions(HAS_ROSBAG2_CUSTOM_DATA=1)
 endif()
 
-# Pure Domain Library (Clean Architecture, decoupled from ROS 2)
-add_library(collection_planner_domain STATIC
-  src/collection_planner_domain.cpp
+# 1. Pure C++17 Domain Library (Quota & Planning)
+add_library(chess_episode_recorder_domain STATIC
+  src/campaign_quota_domain.cpp
+  src/move_planning_domain.cpp
 )
-set_target_properties(collection_planner_domain PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(collection_planner_domain PUBLIC
+set_target_properties(chess_episode_recorder_domain PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(chess_episode_recorder_domain PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${chess_library_SOURCE_DIR}/include
 )
-target_link_libraries(collection_planner_domain
+
+# 2. Storage & MCAP Recording Library
+add_library(chess_episode_recorder_storage STATIC
+  src/dataset_storage.cpp
+)
+set_target_properties(chess_episode_recorder_storage PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(chess_episode_recorder_storage PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${chess_library_SOURCE_DIR}/include
+)
+target_link_libraries(chess_episode_recorder_storage
+  chess_episode_recorder_domain
+  yaml-cpp
+)
+ament_target_dependencies(chess_episode_recorder_storage
+  rclcpp
+  rosbag2_cpp
+  rosbag2_storage
   yaml-cpp
 )
 
-# Composable component library
+# 3. Campaign Conductor FSM & Diagnostics Library
+add_library(chess_episode_recorder_conductor STATIC
+  src/campaign_conductor.cpp
+)
+set_target_properties(chess_episode_recorder_conductor PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(chess_episode_recorder_conductor PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${chess_library_SOURCE_DIR}/include
+)
+target_link_libraries(chess_episode_recorder_conductor
+  chess_episode_recorder_domain
+  chess_episode_recorder_storage
+)
+ament_target_dependencies(chess_episode_recorder_conductor
+  rclcpp
+  diagnostic_updater
+)
+
+# 4. Composable Component Library
 add_library(episode_recorder_component SHARED
   src/episode_recorder_node.cpp
-  src/recorder_diagnostics.cpp
 )
 target_include_directories(episode_recorder_component PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -69,7 +106,9 @@ target_include_directories(episode_recorder_component PUBLIC
   ${chess_library_SOURCE_DIR}/include
 )
 target_link_libraries(episode_recorder_component
-  collection_planner_domain
+  chess_episode_recorder_conductor
+  chess_episode_recorder_storage
+  chess_episode_recorder_domain
 )
 ament_target_dependencies(episode_recorder_component
   rclcpp
@@ -94,7 +133,9 @@ rclcpp_components_register_node(episode_recorder_component
 )
 
 install(TARGETS
-  collection_planner_domain
+  chess_episode_recorder_domain
+  chess_episode_recorder_storage
+  chess_episode_recorder_conductor
   episode_recorder_component
   episode_recorder_node
   ARCHIVE DESTINATION lib
@@ -109,37 +150,68 @@ install(DIRECTORY include/
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
-  # 1. Pure Domain unit tests
-  ament_add_gtest(test_collection_planner_domain test/test_collection_planner_domain.cpp)
-  if(TARGET test_collection_planner_domain)
-    target_include_directories(test_collection_planner_domain PRIVATE
+  # 1. Campaign Quota Domain Unit Tests
+  ament_add_gtest(test_campaign_quota_domain test/test_campaign_quota_domain.cpp)
+  if(TARGET test_campaign_quota_domain)
+    target_include_directories(test_campaign_quota_domain PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       ${chess_library_SOURCE_DIR}/include
     )
-    target_link_libraries(test_collection_planner_domain
-      collection_planner_domain
-      yaml-cpp
+    target_link_libraries(test_campaign_quota_domain
+      chess_episode_recorder_domain
     )
   endif()
 
-  # 2. Recorder Diagnostics unit tests
-  ament_add_gtest(test_recorder_diagnostics test/test_recorder_diagnostics.cpp)
-  if(TARGET test_recorder_diagnostics)
-    target_include_directories(test_recorder_diagnostics PRIVATE
+  # 2. Move Planning Domain Unit Tests
+  ament_add_gtest(test_move_planning_domain test/test_move_planning_domain.cpp)
+  if(TARGET test_move_planning_domain)
+    target_include_directories(test_move_planning_domain PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       ${chess_library_SOURCE_DIR}/include
     )
-    target_link_libraries(test_recorder_diagnostics
-      episode_recorder_component
-      collection_planner_domain
+    target_link_libraries(test_move_planning_domain
+      chess_episode_recorder_domain
     )
-    ament_target_dependencies(test_recorder_diagnostics
+  endif()
+
+  # 3. Dataset Storage Unit Tests
+  ament_add_gtest(test_dataset_storage test/test_dataset_storage.cpp)
+  if(TARGET test_dataset_storage)
+    target_include_directories(test_dataset_storage PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      ${chess_library_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_dataset_storage
+      chess_episode_recorder_storage
+      chess_episode_recorder_domain
+      yaml-cpp
+    )
+    ament_target_dependencies(test_dataset_storage
+      rclcpp
+      rosbag2_cpp
+      rosbag2_storage
+    )
+  endif()
+
+  # 4. Campaign Conductor Unit Tests
+  ament_add_gtest(test_campaign_conductor test/test_campaign_conductor.cpp)
+  if(TARGET test_campaign_conductor)
+    target_include_directories(test_campaign_conductor PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      ${chess_library_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_campaign_conductor
+      chess_episode_recorder_conductor
+      chess_episode_recorder_storage
+      chess_episode_recorder_domain
+    )
+    ament_target_dependencies(test_campaign_conductor
       rclcpp
       diagnostic_updater
     )
   endif()
 
-  # 3. EpisodeRecorderNode integration tests
+  # 5. EpisodeRecorderNode Integration Tests
   ament_add_gtest(test_episode_recorder_node test/test_episode_recorder_node.cpp)
   if(TARGET test_episode_recorder_node)
     target_include_directories(test_episode_recorder_node PRIVATE
@@ -148,10 +220,10 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_episode_recorder_node
       episode_recorder_component
-      collection_planner_domain
     )
     ament_target_dependencies(test_episode_recorder_node
       rclcpp
+      rclcpp_action
       diagnostic_updater
       sensor_msgs
       std_srvs
