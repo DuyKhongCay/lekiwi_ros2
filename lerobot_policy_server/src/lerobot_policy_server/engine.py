@@ -41,8 +41,9 @@ from lerobot.async_inference.helpers import (
 )
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 from lerobot.processor import PolicyProcessorPipeline
-from lerobot.utils.constants import OBS_ENV_STATE, OBS_STATE
+from lerobot.utils.constants import OBS_STATE
 from lerobot_policy_server.config import InferenceEngineConfig
+import lerobot_policy_server.processors  # noqa: F401 - Register custom processor steps (e.g. chess_goal_noise)
 
 logger = logging.getLogger("lerobot_policy_server.engine")
 
@@ -57,18 +58,28 @@ def _decode_jpeg_to_rgb(jpeg_bytes: bytes) -> np.ndarray:
 
 
 def _raw_observation_to_observation(raw_obs: dict[str, Any]) -> Observation:
-    """Convert raw robot observation dict to policy-ready PyTorch tensors.
+    """Convert raw robot observation dict to policy-ready PyTorch tensors for SmolVLA.
 
+    - Fail-Fast check: 'task' instruction must be a non-empty string prompt.
     - Decodes JPEG bytes to RGB uint8 (H, W, 3).
     - Image keys (observation.images.*): converts to float32 [0.0, 1.0] (1, C, H, W)
       preserving native aspect ratio without pre-resizing.
-    - State keys (observation.state 6D, observation.environment_state 10D):
-      converts to float32 (1, D).
-    - Task key: preserved for batch processor / tokenizer.
+    - State key (observation.state): verifies exact 12D unified layout
+      [6 joints + 3D ee_xyz + 3D delta_xyz] per chess_rosbag_to_lerobot, converts to (1, 12).
     """
-    obs_tensors: Observation = {}
+    raw_task = raw_obs.get("task")
+    if not raw_task or not isinstance(raw_task, str) or not raw_task.strip():
+        raise ValueError(
+            "Missing or empty 'task' instruction in observation payload. "
+            "SmolVLA requires an explicit, non-empty language task string."
+        )
+
+    obs_tensors: Observation = {"task": raw_task.strip()}
 
     for key, value in raw_obs.items():
+        if key == "task":
+            continue
+
         if isinstance(value, (bytes, bytearray)):
             value = _decode_jpeg_to_rgb(bytes(value))
 
@@ -86,7 +97,7 @@ def _raw_observation_to_observation(raw_obs: dict[str, Any]) -> Observation:
                 if t.dtype == torch.uint8:
                     t = t.to(dtype=torch.float32).div_(255.0)
                 obs_tensors[key] = t.contiguous()
-        elif key in (OBS_STATE, OBS_ENV_STATE):
+        elif key == OBS_STATE:
             if isinstance(value, np.ndarray):
                 arr = value if value.flags.writeable else value.copy()
                 t = torch.from_numpy(arr).to(dtype=torch.float32)
@@ -96,9 +107,12 @@ def _raw_observation_to_observation(raw_obs: dict[str, Any]) -> Observation:
                 t = torch.tensor(value, dtype=torch.float32)
             if t.ndim == 1:
                 t = t.unsqueeze(0)
+            if t.shape[-1] != 12:
+                raise ValueError(
+                    f"SmolVLA requires 12D observation.state [6 joints + 3D ee_xyz + 3D delta_xyz], "
+                    f"got shape {tuple(t.shape)}"
+                )
             obs_tensors[key] = t
-        elif key == "task":
-            obs_tensors[key] = value
         else:
             if isinstance(value, np.ndarray):
                 arr = value if value.flags.writeable else value.copy()
@@ -125,7 +139,7 @@ class InferenceEngine:
         self.preprocessor: PolicyProcessorPipeline | None = None
         self.postprocessor: PolicyProcessorPipeline | None = None
         self.device: str = "cpu"
-        self.actions_per_chunk: int = 40
+        self.actions_per_chunk: int = self.config.actions_per_chunk
         self.fps_tracker = FPSTracker(target_fps=float(self.config.fps))
         self._lock = threading.RLock()
 

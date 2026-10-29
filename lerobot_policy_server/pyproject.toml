@@ -37,6 +37,7 @@ dependencies = [
     "msgpack>=1.0",
     "opencv-python-headless>=4.8",
     "lerobot>=0.6.1",
+    "draccus>=0.8.0",
 ]
 
 [project.scripts]
@@ -46,7 +47,7 @@ lerobot-policy-server = "lerobot_policy_server.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-lerobot_policy_server = ["py.typed"]
+lerobot_policy_server = ["py.typed", "configs/*.yaml"]
 
 [tool.ruff]
 target-version = "py312"

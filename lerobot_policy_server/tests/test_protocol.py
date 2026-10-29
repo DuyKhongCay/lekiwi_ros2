@@ -36,13 +36,11 @@ def test_observation_twoway_serialization(dummy_timed_observation):
         assert isinstance(obs_dict[full_key], (bytes, bytearray))
         assert obs_dict[full_key] == dummy_timed_observation.get_observation()[full_key]
 
+    # Verify 12D unified state
+    assert obs_dict["observation.state"].shape == (12,)
     np.testing.assert_allclose(
         obs_dict["observation.state"],
         dummy_timed_observation.get_observation()["observation.state"],
-    )
-    np.testing.assert_allclose(
-        obs_dict["observation.environment_state"],
-        dummy_timed_observation.get_observation()["observation.environment_state"],
     )
     assert obs_dict["task"] == dummy_timed_observation.get_observation()["task"]
 
@@ -52,14 +50,11 @@ def test_observation_twoway_serialization(dummy_timed_observation):
 
     assert client_decoded.get_timestep() == dummy_timed_observation.get_timestep()
     client_obs = client_decoded.get_observation()
-    assert client_obs["task"] == "play chess"
+    assert client_obs["task"] == dummy_timed_observation.get_observation()["task"]
+    assert client_obs["observation.state"].shape == (12,)
     np.testing.assert_allclose(
         client_obs["observation.state"],
         dummy_timed_observation.get_observation()["observation.state"],
-    )
-    np.testing.assert_allclose(
-        client_obs["observation.environment_state"],
-        dummy_timed_observation.get_observation()["observation.environment_state"],
     )
 
 

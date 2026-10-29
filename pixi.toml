@@ -13,6 +13,9 @@ version = "0.1.0"
 python = "3.12.*"
 numpy = ">=2.0,<2.3"
 pyyaml = ">=6.0.2"
+uv = "*"
+pyarrow = "*"
+pandas = "*"
 
 [feature.viewer.pypi-dependencies]
 rerun-sdk = ">=0.31.0"
@@ -45,7 +48,7 @@ parquet-tools = "*"
 
 [feature.lerobot.tasks]
 # --- Task 1: Khởi động Policy Server trên GPU nhận ZeroMQ từ robot ---
-server = { cmd = "python -m lerobot_policy_server.cli --host 0.0.0.0 --port 8090" }
+server = { cmd = "python -m lerobot_policy_server.cli" }
 
 # --- Task 2: Chuyển đổi MCAP rosbag cờ vua sang LeRobot Dataset v3.0 ---
 # Bọc sub-shell tự động nạp ROS 2 Jazzy và overlay của lekiwi_ros2

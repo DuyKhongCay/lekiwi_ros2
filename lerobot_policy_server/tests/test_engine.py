@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from lerobot.async_inference.helpers import RemotePolicyConfig, TimedAction, TimedObservation
+from lerobot.async_inference.helpers import TimedAction
 from lerobot_policy_server.config import InferenceEngineConfig
 from lerobot_policy_server.engine import (
     InferenceEngine,
@@ -25,7 +25,7 @@ def test_decode_jpeg_to_rgb():
 
 
 def test_raw_observation_to_observation(dummy_timed_observation):
-    """Verify conversion of raw observation dict into policy tensors."""
+    """Verify conversion of raw observation dict into SmolVLA policy tensors."""
     raw_obs = dummy_timed_observation.get_observation()
     tensor_obs = _raw_observation_to_observation(raw_obs)
 
@@ -39,18 +39,49 @@ def test_raw_observation_to_observation(dummy_timed_observation):
         assert float(t.min()) >= 0.0
         assert float(t.max()) <= 1.0
 
-    # States
-    assert tensor_obs["observation.state"].shape == (1, 6)
+    # 12D unified state [6 joints + 3D ee_xyz + 3D delta_xyz]
+    assert tensor_obs["observation.state"].shape == (1, 12)
     assert tensor_obs["observation.state"].dtype == torch.float32
 
-    assert tensor_obs["observation.environment_state"].shape == (1, 10)
-    assert tensor_obs["observation.environment_state"].dtype == torch.float32
-
-    assert tensor_obs["task"] == "play chess"
+    # Language task instruction
+    assert tensor_obs["task"] == "Move white pawn to target"
 
 
-def test_inference_engine_with_act_lekiwi_chess(dummy_policy_config, dummy_timed_observation):
-    """Test full model loading and action chunk inference on act_lekiwi_chess."""
+def test_raw_observation_fails_fast_on_missing_task(dummy_timed_observation):
+    """Verify fail-fast behavior when 'task' instruction is missing from observation."""
+    raw_obs = dict(dummy_timed_observation.get_observation())
+    del raw_obs["task"]
+
+    with pytest.raises(ValueError, match="Missing or empty 'task' instruction"):
+        _raw_observation_to_observation(raw_obs)
+
+
+def test_raw_observation_fails_fast_on_empty_task(dummy_timed_observation):
+    """Verify fail-fast behavior when 'task' instruction is empty or whitespace-only."""
+    raw_obs = dict(dummy_timed_observation.get_observation())
+    raw_obs["task"] = "   "
+
+    with pytest.raises(ValueError, match="Missing or empty 'task' instruction"):
+        _raw_observation_to_observation(raw_obs)
+
+
+def test_raw_observation_fails_fast_on_invalid_state_dim(dummy_timed_observation):
+    """Verify fail-fast rejection when observation.state is not 12D."""
+    raw_obs = dict(dummy_timed_observation.get_observation())
+
+    # 6D state (old ACT format) must fail immediately
+    raw_obs["observation.state"] = np.zeros(6, dtype=np.float32)
+    with pytest.raises(ValueError, match="SmolVLA requires 12D observation.state"):
+        _raw_observation_to_observation(raw_obs)
+
+    # 10D state must fail immediately
+    raw_obs["observation.state"] = np.zeros(10, dtype=np.float32)
+    with pytest.raises(ValueError, match="SmolVLA requires 12D observation.state"):
+        _raw_observation_to_observation(raw_obs)
+
+
+def test_inference_engine_with_smolvla_lekiwi_chess(dummy_policy_config, dummy_timed_observation):
+    """Test full model loading and action chunk inference on lekiwi_chess_smolvla."""
     cfg = InferenceEngineConfig(fps=30)
     engine = InferenceEngine(cfg)
     assert engine.running is True
@@ -59,15 +90,15 @@ def test_inference_engine_with_act_lekiwi_chess(dummy_policy_config, dummy_timed
     with pytest.raises(RuntimeError, match="Policy not loaded"):
         engine.predict_action_chunk(dummy_timed_observation)
 
-    # Load model
+    # Load SmolVLA policy
     engine.load_policy(dummy_policy_config)
     assert engine.policy is not None
     assert engine.preprocessor is not None
     assert engine.postprocessor is not None
 
-    # Predict action chunk
+    # Predict action chunk (30 steps for SmolVLA)
     actions = engine.predict_action_chunk(dummy_timed_observation)
-    assert len(actions) == 40
+    assert len(actions) == 30
 
     for i, timed_act in enumerate(actions):
         assert isinstance(timed_act, TimedAction)
@@ -85,7 +116,7 @@ def test_inference_engine_with_act_lekiwi_chess(dummy_policy_config, dummy_timed
     assert engine.fps_tracker.total_obs_count == 1
     dummy_timed_observation.must_go = True
     actions_must_go = engine.predict_action_chunk(dummy_timed_observation)
-    assert len(actions_must_go) == 40
+    assert len(actions_must_go) == 30
     assert engine.fps_tracker.total_obs_count == 0
     assert engine.fps_tracker.first_timestamp is None
 
