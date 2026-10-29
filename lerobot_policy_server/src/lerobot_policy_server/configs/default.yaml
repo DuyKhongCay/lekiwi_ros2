@@ -1,0 +1,19 @@
+# ==============================================================================
+# LeRobot Policy Server Configuration (SmolVLA / LeRobot v0.6.1)
+# ==============================================================================
+
+server:
+  host: "0.0.0.0"
+  port: 8090
+  fps: 30
+
+engine:
+  fps: 30
+  policy_type: "smolvla"
+  pretrained_name_or_path: "/home/duykhongcay/lerobot_ws/lekiwi_chess_smolvla"
+  actions_per_chunk: 30
+  device: "cuda"
+  preload: false
+
+log_level: "INFO"
+

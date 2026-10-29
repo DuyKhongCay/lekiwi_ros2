@@ -12,6 +12,17 @@ VALID_TASK_TYPES = ("move", "clear", "pick", "place")
 
 
 @dataclass(frozen=True)
+class TeleopFilterConfig:
+    """Configuration for teleoperation event detection and false event filtering."""
+    tool_frame: str = "gripperframe"
+    base_frame: str = "base_footprint"
+    z_threshold_m: float = 0.08
+    dwell_time_s: float = 0.5
+    transit_min_s: float = 1.0
+    gripper_close_threshold: float = 0.15
+
+
+@dataclass(frozen=True)
 class LandmarksConfig:
     """Calibrated 3D Cartesian landmark coordinates [x, y, z] in base_footprint (meters)."""
     stow: List[float] = field(default_factory=lambda: [0.0704, -0.1882, 0.1757])
@@ -54,6 +65,7 @@ class Config:
     default_max_age_s: float
     task: str
     chessboard: ChessboardConfig = field(default_factory=ChessboardConfig)
+    teleop_filter: TeleopFilterConfig = field(default_factory=TeleopFilterConfig)
     features: List[FeatureSpec] = field(default_factory=list)
     include_task_types: List[str] = field(
         default_factory=lambda: ["move", "clear", "pick", "place"]
@@ -95,6 +107,20 @@ def load_config(path: Path | str) -> Config:
         chessboard_pose_in_map=cb_pose_in_map,
     )
 
+    # Teleop Filter section
+    tf_data = data.get("teleop_filter", {})
+    default_tf = TeleopFilterConfig()
+    teleop_filter = TeleopFilterConfig(
+        tool_frame=str(tf_data.get("tool_frame", default_tf.tool_frame)),
+        base_frame=str(tf_data.get("base_frame", default_tf.base_frame)),
+        z_threshold_m=float(tf_data.get("z_threshold_m", default_tf.z_threshold_m)),
+        dwell_time_s=float(tf_data.get("dwell_time_s", default_tf.dwell_time_s)),
+        transit_min_s=float(tf_data.get("transit_min_s", default_tf.transit_min_s)),
+        gripper_close_threshold=float(
+            tf_data.get("gripper_close_threshold", default_tf.gripper_close_threshold)
+        ),
+    )
+
     # Features
     features: List[FeatureSpec] = []
     for f in data.get("features", []):
@@ -125,6 +151,7 @@ def load_config(path: Path | str) -> Config:
         default_max_age_s=float(data.get("default_max_age_s", 0.08)),
         task=str(data.get("task", "Chess pick and place")),
         chessboard=cb_cfg,
+        teleop_filter=teleop_filter,
         features=features,
         include_task_types=include_task_types,
     )

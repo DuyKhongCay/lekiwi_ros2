@@ -74,8 +74,8 @@ class EpisodeSpatialPlan:
     """Pre-computed spatial plan for an episode to prevent hot-loop branching."""
     task_type: TaskType
     canonical_task: str
-    source: SpatialEndpoint
-    target: SpatialEndpoint
+    source: Optional[SpatialEndpoint]
+    target: Optional[SpatialEndpoint]
     task_one_hot: np.ndarray  # shape (4,), [is_move, is_clear, is_pick, is_place]
     stow_xyz: np.ndarray      # shape (3,), dtype float32 in base_footprint frame
 
@@ -300,31 +300,31 @@ def resolve_episode_spatial_plan(
     task_text: str,
     cfg: ChessboardConfig,
 ) -> EpisodeSpatialPlan:
-    """Resolve an episode's spatial conditioning plan using direct Cartesian landmarks."""
+    """Resolve an episode's spatial conditioning plan.
+
+    If square notations are absent (e.g. unannotated teleop episodes), source/target endpoints
+    are set to None (no synthetic fallback to stow or grid snapping). The true endpoints
+    must be recovered directly from robot TF trajectories via TrajectoryAnalyzer.
+    """
     parsed = parse_chess_task(task_text)
     stow_xyz = np.array(cfg.landmarks.stow, dtype=np.float32)
+
+    source: Optional[SpatialEndpoint] = None
+    target: Optional[SpatialEndpoint] = None
 
     if parsed.task_type == TaskType.MOVE:
         if parsed.from_square:
             from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
             source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
-        else:
-            source = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
-
         if parsed.to_square:
             to_xyz = np.array(square_to_metric(parsed.to_square, cfg), dtype=np.float32)
             target = SpatialEndpoint(xyz=to_xyz, is_board_frame=True)
-        else:
-            target = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
-
         one_hot = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
     elif parsed.task_type == TaskType.CLEAR:
         if parsed.from_square:
             from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
             source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
-        else:
-            source = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
 
         bin_coords = (
             cfg.landmarks.clear_left
@@ -338,20 +338,12 @@ def resolve_episode_spatial_plan(
         if parsed.from_square:
             from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
             source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
-        else:
-            source = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
-
-        target = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
         one_hot = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
 
     elif parsed.task_type == TaskType.PLACE:
-        source = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
         if parsed.to_square:
             to_xyz = np.array(square_to_metric(parsed.to_square, cfg), dtype=np.float32)
             target = SpatialEndpoint(xyz=to_xyz, is_board_frame=True)
-        else:
-            target = SpatialEndpoint(xyz=stow_xyz, is_board_frame=False)
-
         one_hot = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
 
     else:

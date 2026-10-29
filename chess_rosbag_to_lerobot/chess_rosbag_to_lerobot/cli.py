@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--overwrite",
         action="store_true",
         default=False,
-        help="Delete existing dataset directory before converting",
+        help="Overwrite entire output dataset (default: resume and only convert pending episodes)",
     )
     parser.add_argument(
         "--task-types",

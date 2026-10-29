@@ -12,16 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CLI entry point for lerobot_policy_server."""
+"""CLI entry point for lerobot_policy_server powered by Draccus."""
 
 from __future__ import annotations
 
-import argparse
 import logging
-import os
+from pathlib import Path
 import sys
 
-from lerobot_policy_server.config import ZmqServerConfig
+import draccus
+
+from lerobot.async_inference.helpers import RemotePolicyConfig
+from lerobot_policy_server.config import PolicyServerConfig, get_default_config_path
+from lerobot_policy_server.engine import InferenceEngine
 from lerobot_policy_server.server import ZmqPolicyServer
 
 
@@ -34,56 +37,61 @@ def setup_logging(log_level: str) -> None:
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Construct command-line argument parser."""
-    parser = argparse.ArgumentParser(
+def parse_args(
+    argv: list[str] | None = None,
+    config_path: str | Path | None = None,
+) -> PolicyServerConfig:
+    """Parse configuration from YAML file and command-line arguments via Draccus."""
+    cfg_file = Path(config_path) if config_path else get_default_config_path()
+    return draccus.parse(
+        config_class=PolicyServerConfig,
+        config_path=cfg_file,
+        args=argv,
         prog="lerobot-policy-server",
-        description="ZeroMQ Policy Inference Server for LeKiwi robot (LeRobot v0.6.1)",
     )
-    parser.add_argument(
-        "--host",
-        type=str,
-        default=os.getenv("POLICY_SERVER_HOST", "0.0.0.0"),
-        help="Host address to bind ZeroMQ REP socket (default: 0.0.0.0)",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=int(os.getenv("POLICY_SERVER_PORT", "8090")),
-        help="TCP port to bind (default: 8090)",
-    )
-    parser.add_argument(
-        "--fps",
-        type=int,
-        default=int(os.getenv("POLICY_SERVER_FPS", "30")),
-        help="Target inference frames per second (default: 30)",
-    )
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        default=os.getenv("LOGLEVEL", "INFO"),
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging level (default: INFO)",
-    )
-    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Main CLI execution flow."""
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    """Main CLI execution flow driven by Draccus configuration."""
+    try:
+        config = parse_args(argv)
+    except Exception as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 1
 
-    setup_logging(args.log_level)
+    setup_logging(config.log_level)
     logger = logging.getLogger("lerobot_policy_server")
-    logger.info("Initializing LeRobot ZeroMQ Policy Server on %s:%d...", args.host, args.port)
-
-    config = ZmqServerConfig(
-        host=args.host,
-        port=args.port,
-        fps=args.fps,
+    logger.info(
+        "Initializing LeRobot ZeroMQ Policy Server on %s:%d (policy: %s, device: %s)...",
+        config.server.host,
+        config.server.port,
+        config.engine.policy_type,
+        config.engine.device,
     )
 
-    server = ZmqPolicyServer(config)
+    engine = InferenceEngine(config=config.engine)
+    server = ZmqPolicyServer(config=config.server, engine=engine)
+
+    if config.engine.preload:
+        logger.info(
+            "Preloading policy '%s' on %s...",
+            config.engine.pretrained_name_or_path,
+            config.engine.device,
+        )
+        try:
+            server.engine.load_policy(
+                RemotePolicyConfig(
+                    policy_type=config.engine.policy_type,
+                    pretrained_name_or_path=config.engine.pretrained_name_or_path,
+                    actions_per_chunk=config.engine.actions_per_chunk,
+                    device=config.engine.device,
+                )
+            )
+            logger.info("Policy preloaded successfully.")
+        except Exception as exc:
+            logger.error("Failed to preload policy: %s", exc, exc_info=True)
+            return 1
+
     try:
         server.serve()
     except Exception as exc:

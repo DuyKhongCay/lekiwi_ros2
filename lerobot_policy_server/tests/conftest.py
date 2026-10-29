@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pytest fixtures for lerobot_policy_server testing matching act_lekiwi_chess."""
+"""Pytest fixtures for lerobot_policy_server testing matching lekiwi_chess_smolvla."""
 
 from __future__ import annotations
 
@@ -41,10 +41,22 @@ def make_dummy_jpeg(h: int = 384, w: int = 384) -> bytes:
 
 @pytest.fixture
 def dummy_timed_observation() -> TimedObservation:
-    """Fixture providing a TimedObservation matching act_lekiwi_chess schema."""
+    """Fixture providing a TimedObservation matching lekiwi_chess_smolvla schema.
+
+    The 12D unified observation.state vector follows chess_rosbag_to_lerobot:
+    - [0:6]: 6-DoF arm joint positions (joint_states)
+    - [6:9]: 3D Cartesian TCP/end-effector coordinates (ee_x, ee_y, ee_z)
+    - [9:12]: 3D dynamic relative delta to target (delta_x, delta_y, delta_z)
+    """
     jpeg_bytes = make_dummy_jpeg(384, 384)
-    state = np.array([0.1, -0.2, 0.5, 0.0, 1.2, -0.8], dtype=np.float32)
-    env_state = np.array([1.0, 0.0, -1.0, 0.5, 0.2, -0.2, 0.0, 0.1, 0.9, -0.5], dtype=np.float32)
+
+    # 6-DoF arm joint angles in radians
+    joint_states = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.05], dtype=np.float32)
+    # 3D end-effector TCP pose in base_footprint frame
+    ee_xyz = np.array([0.15, -0.05, 0.035], dtype=np.float32)
+    # 3D dynamic relative delta (target - ee)
+    delta_xyz = np.array([0.10, 0.15, 0.0], dtype=np.float32)
+    state_12d = np.concatenate([joint_states, ee_xyz, delta_xyz]).astype(np.float32)
 
     return TimedObservation(
         timestamp=time.time(),
@@ -53,9 +65,8 @@ def dummy_timed_observation() -> TimedObservation:
             "observation.images.wrist": jpeg_bytes,
             "observation.images.side": jpeg_bytes,
             "observation.images.overhead": jpeg_bytes,
-            "observation.state": state,
-            "observation.environment_state": env_state,
-            "task": "play chess",
+            "observation.state": state_12d,
+            "task": "Move white pawn to target",
         },
         must_go=False,
     )
@@ -63,7 +74,7 @@ def dummy_timed_observation() -> TimedObservation:
 
 @pytest.fixture
 def dummy_actions_chunk() -> list[TimedAction]:
-    """Fixture providing a chunk of 40 predicted TimedActions (6D)."""
+    """Fixture providing a chunk of 30 predicted TimedActions (6D)."""
     t0 = time.time()
     dt = 1.0 / 30.0
     return [
@@ -72,17 +83,17 @@ def dummy_actions_chunk() -> list[TimedAction]:
             timestep=i,
             action=np.full(6, fill_value=float(i) * 0.05, dtype=np.float32),
         )
-        for i in range(40)
+        for i in range(30)
     ]
 
 
 @pytest.fixture
 def dummy_policy_config() -> RemotePolicyConfig:
-    """Fixture providing RemotePolicyConfig pointing to act_lekiwi_chess."""
+    """Fixture providing RemotePolicyConfig pointing to lekiwi_chess_smolvla."""
     return RemotePolicyConfig(
-        policy_type="act",
-        pretrained_name_or_path="/home/duykhongcay/lerobot_ws/act_lekiwi_chess",
+        policy_type="smolvla",
+        pretrained_name_or_path="/home/duykhongcay/lerobot_ws/lekiwi_chess_smolvla",
         lerobot_features={},
-        actions_per_chunk=40,
+        actions_per_chunk=30,
         device="cpu",
     )

@@ -274,7 +274,7 @@ pixi run -e lerobot hf upload DuyKhongCay/lekiwi_chess_v5 \
 * `--vcodec <codec>`: Video compression library (`libsvtav1` default, `libx264` for fast CPU encoding, `h264_nvenc` for NVIDIA hardware NVENC encoding).
 * `--sync-p95`: Enable detailed 95th-percentile latency diagnostic profiling table.
 * `--push-hub`: Automatically push to Hugging Face Hub (`dataset.push_to_hub()`) upon successful conversion completion.
-* `--overwrite`: Overwrite destination folder if already present.
+* `--overwrite`: Overwrite destination dataset directory completely. When omitted, automatically resumes existing dataset and incrementally converts only pending/unconverted episodes.
 
 ### 4.3 Inspect and Visualize Dataset
 
