@@ -157,6 +157,13 @@ namespace lekiwi_chess_master
       rclcpp::Publisher<sensor_msgs::msg::CompressedImage> &pub,
       const cv::Mat &panel);
 
+    /** @brief Common base renderer for checkered board, tiles, piece sprites, and margins. */
+    int renderBaseBoard(
+      cv::Mat &panel,
+      BoardLayout &layout,
+      const BoardTheme &theme,
+      const std::string &fen);
+
     /** @brief Renders the authoritative legal chess board with move annotations. */
     void renderLegalPanel(cv::Mat &panel, const BoardDisplayContext &ctx);
 
@@ -253,6 +260,7 @@ namespace lekiwi_chess_master
     bool raw_state_dirty_{false};
 
     std::string pieces_dir_;
+    mutable std::mutex sprite_mutex_;
     std::map<std::string, cv::Mat> sprite_cache_;
     int cached_cell_size_{0};
   };

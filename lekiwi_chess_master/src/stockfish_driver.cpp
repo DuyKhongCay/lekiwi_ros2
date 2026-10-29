@@ -11,6 +11,7 @@
 
 #include "lekiwi_chess_master/stockfish_driver.hpp"
 
+#include <csignal>
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/wait.h>
@@ -32,6 +33,12 @@ namespace lekiwi_chess_master
 
   StockfishDriver::StockfishDriver()
   {
+    // Ignore SIGPIPE globally for pipe writes to avoid crashing the composable container
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_IGN;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPIPE, &sa, nullptr);
   }
 
   StockfishDriver::~StockfishDriver()
@@ -41,7 +48,7 @@ namespace lekiwi_chess_master
 
   bool StockfishDriver::start(const std::string &executable_path)
   {
-    std::lock_guard<std::mutex> lock(process_mutex_);
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
     if (engine_pid_ > 0)
     {
       return true; // Subprocess is already spawned and active
@@ -54,11 +61,18 @@ namespace lekiwi_chess_master
       return false;
     }
 
-    int in_pipe[2];
-    int out_pipe[2];
-    if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0)
+    int in_pipe[2] = {-1, -1};
+    int out_pipe[2] = {-1, -1};
+    if (pipe(in_pipe) != 0)
     {
-      std::cerr << "[StockfishDriver] Failed to create POSIX pipes." << std::endl;
+      std::cerr << "[StockfishDriver] Failed to create child stdin POSIX pipe." << std::endl;
+      return false;
+    }
+    if (pipe(out_pipe) != 0)
+    {
+      std::cerr << "[StockfishDriver] Failed to create child stdout POSIX pipe." << std::endl;
+      close(in_pipe[0]);
+      close(in_pipe[1]);
       return false;
     }
 
@@ -91,8 +105,11 @@ namespace lekiwi_chess_master
     }
 
     // Parent process: retain write descriptor for in_pipe and read descriptor for out_pipe
+    {
+      std::lock_guard<std::mutex> stdin_lock(stdin_mutex_);
+      in_pipe_fd_ = in_pipe[1];
+    }
     engine_pid_ = pid;
-    in_pipe_fd_ = in_pipe[1];
     out_pipe_fd_ = out_pipe[0];
 
     close(in_pipe[0]);
@@ -109,10 +126,10 @@ namespace lekiwi_chess_master
 
     // Perform UCI Handshake: initiate identification and readiness probe
     const char *init_cmds = "uci\nisready\n";
-    if (write(in_pipe_fd_, init_cmds, strlen(init_cmds)) < 0)
+    if (!send_command(init_cmds))
     {
       std::cerr << "[StockfishDriver] Failed to send UCI handshake." << std::endl;
-      stop();
+      stop_unlocked();
       return false;
     }
 
@@ -134,7 +151,7 @@ namespace lekiwi_chess_master
     if (!ready)
     {
       std::cerr << "[StockfishDriver] Handshake timed out waiting for readyok." << std::endl;
-      stop();
+      stop_unlocked();
       return false;
     }
 
@@ -143,16 +160,24 @@ namespace lekiwi_chess_master
 
   void StockfishDriver::stop()
   {
-    std::lock_guard<std::mutex> lock(process_mutex_);
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    stop_unlocked();
+  }
+
+  void StockfishDriver::stop_unlocked()
+  {
     if (engine_pid_ > 0)
     {
       // Gracefully signal engine shutdown over stdin pipe
-      if (in_pipe_fd_ >= 0)
       {
-        const char *quit_cmd = "quit\n";
-        (void)!write(in_pipe_fd_, quit_cmd, strlen(quit_cmd));
-        close(in_pipe_fd_);
-        in_pipe_fd_ = -1;
+        std::lock_guard<std::mutex> stdin_lock(stdin_mutex_);
+        if (in_pipe_fd_ >= 0)
+        {
+          const char *quit_cmd = "quit\n";
+          (void)!write(in_pipe_fd_, quit_cmd, strlen(quit_cmd));
+          close(in_pipe_fd_);
+          in_pipe_fd_ = -1;
+        }
       }
       if (out_pipe_fd_ >= 0)
       {
@@ -161,15 +186,32 @@ namespace lekiwi_chess_master
       }
 
       int status = 0;
-      // Wait for child termination to prevent zombie processes
-      waitpid(engine_pid_, &status, 0);
+      // Wait for child termination gracefully with timeout (up to 500ms)
+      bool terminated = false;
+      for (int i = 0; i < 25; ++i)
+      {
+        pid_t res = waitpid(engine_pid_, &status, WNOHANG);
+        if (res == engine_pid_ || res < 0)
+        {
+          terminated = true;
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+
+      // Hard kill if subprocess hangs on shutdown
+      if (!terminated)
+      {
+        kill(engine_pid_, SIGKILL);
+        waitpid(engine_pid_, &status, 0);
+      }
       engine_pid_ = -1;
     }
   }
 
   bool StockfishDriver::is_running() const
   {
-    std::lock_guard<std::mutex> lock(process_mutex_);
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
     if (engine_pid_ <= 0)
     {
       return false;
@@ -177,10 +219,21 @@ namespace lekiwi_chess_master
     int status = 0;
     // Non-blocking query to inspect child termination status
     pid_t res = waitpid(engine_pid_, &status, WNOHANG);
+    if (res == engine_pid_ || (res < 0 && errno == ECHILD))
+    {
+      engine_pid_ = -1;
+      return false;
+    }
     return (res == 0);
   }
 
   bool StockfishDriver::send_command(const std::string &cmd)
+  {
+    std::lock_guard<std::mutex> lock(stdin_mutex_);
+    return send_command_unlocked(cmd);
+  }
+
+  bool StockfishDriver::send_command_unlocked(const std::string &cmd)
   {
     if (in_pipe_fd_ < 0)
     {
@@ -192,8 +245,24 @@ namespace lekiwi_chess_master
 
   void StockfishDriver::send_uci_stop()
   {
-    std::lock_guard<std::mutex> lock(process_mutex_);
-    send_command("stop\n");
+    std::lock_guard<std::mutex> lock(stdin_mutex_);
+    send_command_unlocked("stop\n");
+  }
+
+  bool StockfishDriver::extract_buffered_line(std::string &buffer, std::string &out)
+  {
+    auto nl_pos = buffer.find('\n');
+    if (nl_pos == std::string::npos)
+    {
+      return false;
+    }
+    out = buffer.substr(0, nl_pos);
+    buffer.erase(0, nl_pos + 1);
+    if (!out.empty() && out.back() == '\r')
+    {
+      out.pop_back();
+    }
+    return true;
   }
 
   std::string StockfishDriver::read_line(int timeout_ms)
@@ -203,17 +272,10 @@ namespace lekiwi_chess_master
       return "";
     }
 
+    std::string line;
     // Inspect buffer for a newline already cached from a previous chunk read
-    auto nl_pos = line_buffer_.find('\n');
-    if (nl_pos != std::string::npos)
+    if (extract_buffered_line(line_buffer_, line))
     {
-      std::string line = line_buffer_.substr(0, nl_pos);
-      line_buffer_.erase(0, nl_pos + 1);
-      // Strip carriage return for CRLF compatibility
-      if (!line.empty() && line.back() == '\r')
-      {
-        line.pop_back();
-      }
       return line;
     }
 
@@ -223,28 +285,41 @@ namespace lekiwi_chess_master
     pfd.events = POLLIN;
     pfd.revents = 0;
 
-    int ret = poll(&pfd, 1, timeout_ms);
-    if (ret > 0 && (pfd.revents & POLLIN))
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (true)
     {
-      char chunk[512];
-      ssize_t n = read(out_pipe_fd_, chunk, sizeof(chunk) - 1);
-      if (n > 0)
+      auto now = std::chrono::steady_clock::now();
+      if (now >= deadline)
       {
-        chunk[n] = '\0';
-        line_buffer_.append(chunk, n);
+        break;
+      }
+      int remaining_ms = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
 
-        // Check if the freshly appended chunk completes a line
-        nl_pos = line_buffer_.find('\n');
-        if (nl_pos != std::string::npos)
+      int ret = poll(&pfd, 1, remaining_ms);
+      if (ret > 0 && (pfd.revents & POLLIN))
+      {
+        char chunk[512];
+        ssize_t n = read(out_pipe_fd_, chunk, sizeof(chunk) - 1);
+        if (n > 0)
         {
-          std::string line = line_buffer_.substr(0, nl_pos);
-          line_buffer_.erase(0, nl_pos + 1);
-          if (!line.empty() && line.back() == '\r')
+          chunk[n] = '\0';
+          line_buffer_.append(chunk, n);
+
+          if (extract_buffered_line(line_buffer_, line))
           {
-            line.pop_back();
+            return line;
           }
-          return line;
         }
+        else if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
+        {
+          // EOF or pipe broken
+          break;
+        }
+      }
+      else
+      {
+        break;
       }
     }
 
@@ -343,18 +418,18 @@ namespace lekiwi_chess_master
       std::function<void(const EngineInfoFeedback &)> on_feedback,
       std::function<bool()> is_canceled)
   {
-    std::lock_guard<std::mutex> lock(process_mutex_);
     BestMoveResult result;
     result.success = false;
 
-    if (engine_pid_ <= 0 || in_pipe_fd_ < 0 || out_pipe_fd_ < 0)
     {
-      result.message = "Stockfish engine is not running.";
-      return result;
+      std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+      if (engine_pid_ <= 0 || in_pipe_fd_ < 0 || out_pipe_fd_ < 0)
+      {
+        result.message = "Stockfish engine is not running.";
+        return result;
+      }
+      line_buffer_.clear();
     }
-
-    // Flush any leftover tokens or lines in the read accumulator buffer
-    line_buffer_.clear();
 
     // Instruct engine to configure internal board representation to target FEN
     if (!send_command("position fen " + fen + "\n"))
@@ -392,7 +467,7 @@ namespace lekiwi_chess_master
       // Check if external client requested goal cancellation
       if (is_canceled && is_canceled() && !stop_sent)
       {
-        send_command("stop\n");
+        send_uci_stop();
         stop_sent = true;
       }
 
@@ -402,7 +477,7 @@ namespace lekiwi_chess_master
       if (elapsed_sec > timeout_sec)
       {
         result.message = "Engine query timed out.";
-        send_command("stop\n");
+        send_uci_stop();
         break;
       }
 
@@ -430,6 +505,11 @@ namespace lekiwi_chess_master
         result.score_cp = latest_feedback.score_cp;
         result.is_mate = latest_feedback.is_mate;
         result.mate_in = latest_feedback.mate_in;
+        if (stop_sent)
+        {
+          result.success = false;
+          result.message = "Search canceled by caller.";
+        }
         break;
       }
     }

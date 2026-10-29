@@ -21,6 +21,18 @@ namespace lekiwi_chess_master::domain
 {
 
   /**
+   * @brief Extracts the first piece placement token from a 6-field FEN or raw placement string.
+   *
+   * @param[in] fen Full 6-field standard FEN or 1-field piece placement string view.
+   * @return Substring view containing the 8-rank piece placement prior to the first whitespace.
+   */
+  [[nodiscard]] constexpr std::string_view extract_placement_token(std::string_view fen) noexcept
+  {
+    const auto space_pos = fen.find(' ');
+    return (space_pos == std::string_view::npos) ? fen : fen.substr(0, space_pos);
+  }
+
+  /**
    * @brief Converts chess::PieceType to lowercase canonical name ("pawn", "knight", etc.).
    *
    * Provides consistent naming for downstream vision, manipulation, and UI components.
@@ -35,10 +47,9 @@ namespace lekiwi_chess_master::domain
    *
    * @details Evaluates move geometry, legality, piece dynamics, capture targets, and special
    * rules according to FIDE standards:
-   * - En-passant pawn capture coordinate resolution ((to.file, from.rank)).
-   * - Kingside/queenside castling rook travel trajectory determination.
+   * - En-passant pawn capture detection and target classification.
+   * - Kingside and queenside castling flag classification.
    * - Pawn promotion piece type mapping.
-   * - Standard Algebraic Notation (SAN) generation with fallback on exception.
    *
    * @param[in] board Reference to current FIDE board state before executing the move.
    * @param[in] uci_move Cleaned UCI move token (e.g. "e2e4", "e7e8q").
@@ -47,7 +58,7 @@ namespace lekiwi_chess_master::domain
    *
    * @pre board must represent a valid FIDE game position.
    * @post If uci_move is malformed or shorter than 4 characters, returns empty details msg.
-   * @note If the move is illegal in the current position, populates fallback promotion and SAN
+   * @note If the move is illegal in the current position, populates fallback promotion
    * fields without crashing or throwing exceptions.
    */
   [[nodiscard]] lekiwi_interfaces::msg::ChessMoveDetails classify_move(

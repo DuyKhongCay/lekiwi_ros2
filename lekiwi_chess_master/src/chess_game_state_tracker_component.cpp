@@ -27,10 +27,22 @@ namespace lekiwi_chess_master
         consecutive_count_(0)
   {
     // Declare and initialize tracking parameters
+    rcl_interfaces::msg::ParameterDescriptor debounce_desc;
+    debounce_desc.description = "Consecutive identical frames needed for debounce stability";
+    debounce_desc.integer_range.resize(1);
+    debounce_desc.integer_range[0].from_value = 1;
+    debounce_desc.integer_range[0].to_value = 100;
+    debounce_desc.integer_range[0].step = 1;
+
     raw_fen_topic_ = declare_parameter<std::string>("raw_fen_topic", "/chess/raw_fen");
     game_status_topic_ = declare_parameter<std::string>("game_status_topic", "/chess/game_status");
     set_fen_service_name_ = declare_parameter<std::string>("set_fen_service", "/chess/set_fen");
-    debounce_frames_ = declare_parameter<int>("debounce_frames", 3);
+    debounce_frames_ = declare_parameter<int>("debounce_frames", 3, debounce_desc);
+    if (debounce_frames_ < 1)
+    {
+      RCLCPP_WARN(get_logger(), "debounce_frames (%d) < 1. Clamping to 1.", debounce_frames_);
+      debounce_frames_ = 1;
+    }
 
     RCLCPP_INFO(
         get_logger(),
@@ -100,10 +112,7 @@ namespace lekiwi_chess_master
 
     board_ = candidate_board;
     std::string full_fen = board_.getFen();
-    auto space_idx = full_fen.find(' ');
-    last_accepted_placement_ = (space_idx != std::string::npos)
-                                   ? full_fen.substr(0, space_idx)
-                                   : full_fen;
+    last_accepted_placement_ = std::string(domain::extract_placement_token(full_fen));
 
     pending_placement_.clear();
     consecutive_count_ = 0;
@@ -133,7 +142,6 @@ namespace lekiwi_chess_master
         response->canonical_fen,
         response->active_color,
         response->message);
-    response->robot_color = request->robot_color;
   }
 
   void ChessGameStateTrackerComponent::handle_reset_service(
@@ -160,10 +168,7 @@ namespace lekiwi_chess_master
       board_.unmakeMove(move); // Revert simulation state
 
       // Extract only the 8x8 piece placement token (first token prior to whitespace)
-      auto space_idx = sim_fen.find(' ');
-      std::string_view sim_placement = (space_idx != std::string::npos)
-                                           ? std::string_view(sim_fen).substr(0, space_idx)
-                                           : std::string_view(sim_fen);
+      std::string_view sim_placement = domain::extract_placement_token(sim_fen);
 
       // Confirm unique match with vision-detected placement
       if (sim_placement == detected_placement)
@@ -203,77 +208,22 @@ namespace lekiwi_chess_master
     game_status_pub_->publish(msg);
   }
 
-  void ChessGameStateTrackerComponent::raw_fen_callback(const std_msgs::msg::String::ConstSharedPtr msg)
+  bool ChessGameStateTrackerComponent::update_debounce_filter(std::string_view placement)
   {
-    if (!msg || msg->data.empty())
-    {
-      return;
-    }
-
-    // Extract piece placement substring (first token before whitespace)
-    std::string placement = msg->data;
-    auto space_pos = placement.find(' ');
-    if (space_pos != std::string::npos)
-    {
-      placement = placement.substr(0, space_pos);
-    }
-
-    std::lock_guard<std::mutex> lock(state_mutex_);
-
-    // Apply temporal debounce filter to reject transitory vision noise or hand occlusion
     if (placement == pending_placement_)
     {
       consecutive_count_++;
     }
     else
     {
-      pending_placement_ = placement;
+      pending_placement_ = std::string(placement);
       consecutive_count_ = 1;
     }
+    return consecutive_count_ >= debounce_frames_;
+  }
 
-    bool is_stable = (consecutive_count_ >= debounce_frames_);
-
-    // Handle board synchronization mode
-    if (awaiting_physical_sync_)
-    {
-      if (placement == last_accepted_placement_ && is_stable)
-      {
-        awaiting_physical_sync_ = false;
-        RCLCPP_INFO(
-            get_logger(),
-            "Physical board synchronization complete! Matched placement: %s",
-            placement.c_str());
-        publish_game_status(true);
-      }
-      return;
-    }
-
-    // Discard redundant updates if placement is already accepted and current
-    if (placement == last_accepted_placement_)
-    {
-      return;
-    }
-
-    // Await sufficient consecutive identical frames before accepting new board layout
-    if (!is_stable)
-    {
-      return;
-    }
-
-    // Detect vision reset back to standard starting position
-    if (placement == kDefaultStartingPlacement)
-    {
-      if (last_accepted_placement_ != kDefaultStartingPlacement)
-      {
-        board_ = chess::Board();
-        last_accepted_placement_ = kDefaultStartingPlacement;
-        last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
-        RCLCPP_INFO(get_logger(), "Board reset to starting position detected from vision.");
-        publish_game_status(true);
-      }
-      return;
-    }
-
+  void ChessGameStateTrackerComponent::process_stable_placement(const std::string &placement)
+  {
     // Verify whether the stable new placement corresponds to any legal candidate move
     chess::Move matched_move;
     if (match_legal_move(placement, matched_move))
@@ -299,6 +249,45 @@ namespace lekiwi_chess_master
       last_move_details_ = lekiwi_interfaces::msg::ChessMoveDetails();
       publish_game_status(false);
     }
+  }
+
+  void ChessGameStateTrackerComponent::raw_fen_callback(const std_msgs::msg::String::ConstSharedPtr msg)
+  {
+    if (!msg || msg->data.empty())
+    {
+      return;
+    }
+
+    std::string_view placement = domain::extract_placement_token(msg->data);
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    bool is_stable = update_debounce_filter(placement);
+
+    // Handle board synchronization mode
+    if (awaiting_physical_sync_)
+    {
+      if (placement == last_accepted_placement_ && is_stable)
+      {
+        awaiting_physical_sync_ = false;
+        RCLCPP_INFO(
+            get_logger(),
+            "Physical board synchronization complete! Matched placement: %s",
+            std::string(placement).c_str());
+        publish_game_status(true);
+      }
+      return;
+    }
+
+    // Discard redundant updates if placement is already accepted or not yet stable
+    if (placement == last_accepted_placement_ || !is_stable)
+    {
+      return;
+    }
+
+    // Note: Implicit vision auto-reset to start position has been removed to avoid
+    // overriding imported FEN states. Game reset is explicitly requested via /chess/reset_game.
+    process_stable_placement(std::string(placement));
   }
 
 } // namespace lekiwi_chess_master

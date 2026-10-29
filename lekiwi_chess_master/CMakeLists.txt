@@ -92,6 +92,9 @@ install(TARGETS
 install(DIRECTORY include/
   DESTINATION include
 )
+install(DIRECTORY ${chess_library_SOURCE_DIR}/include/
+  DESTINATION include
+)
 install(DIRECTORY resources/
   DESTINATION share/${PROJECT_NAME}/resources
 )
@@ -124,6 +127,6 @@ endif()
 
 ament_export_include_directories(include)
 ament_export_libraries(lekiwi_chess_master_components)
-ament_export_dependencies(rclcpp rclcpp_components rclcpp_action lekiwi_interfaces std_msgs std_srvs sensor_msgs ament_index_cpp)
+ament_export_dependencies(rclcpp rclcpp_components rclcpp_action lekiwi_interfaces std_msgs std_srvs sensor_msgs ament_index_cpp OpenCV)
 ament_package()
 

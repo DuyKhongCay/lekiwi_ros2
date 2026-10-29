@@ -145,26 +145,36 @@ namespace lekiwi_chess_master
 
   private:
     /**
-     * @brief Writes a command string to the child stdin pipe descriptor.
+     * @brief Writes a command string to child stdin pipe descriptor (thread-safe, locks stdin_mutex_).
      */
     bool send_command(const std::string &cmd);
 
     /**
+     * @brief Internal write to child stdin assuming caller holds stdin_mutex_.
+     */
+    bool send_command_unlocked(const std::string &cmd);
+
+    /**
+     * @brief Internal subprocess teardown assuming caller holds lifecycle_mutex_.
+     */
+    void stop_unlocked();
+
+    /**
+     * @brief Helper to pop a newline-delimited line from the accumulator buffer.
+     */
+    static bool extract_buffered_line(std::string &buffer, std::string &out);
+
+    /**
      * @brief Reads a single newline-terminated line from non-blocking child stdout pipe.
-     *
-     * @details Accumulates incoming byte chunks into line_buffer_ using poll(2) with timeout
-     * until a newline character is encountered.
-     *
-     * @param[in] timeout_ms Maximum duration in milliseconds to await incoming data chunks.
-     * @return Extracted line string without trailing newline, or empty string on timeout.
      */
     std::string read_line(int timeout_ms = 100);
 
-    mutable std::mutex process_mutex_; ///< Serializes process control and pipe I/O.
-    pid_t engine_pid_{-1};             ///< Process ID of spawned Stockfish subprocess.
-    int in_pipe_fd_{-1};               ///< Write descriptor connected to child stdin.
-    int out_pipe_fd_{-1};              ///< Non-blocking read descriptor connected to child stdout.
-    std::string line_buffer_;          ///< Accumulator buffer for partial pipe read chunks.
+    mutable std::mutex stdin_mutex_;     ///< Serializes write operations to in_pipe_fd_ (send_command, send_uci_stop).
+    mutable std::mutex lifecycle_mutex_; ///< Serializes process creation, termination, and state inspection.
+    mutable pid_t engine_pid_{-1};       ///< Process ID of spawned Stockfish subprocess.
+    int in_pipe_fd_{-1};                 ///< Write descriptor connected to child stdin.
+    int out_pipe_fd_{-1};                ///< Non-blocking read descriptor connected to child stdout.
+    std::string line_buffer_;            ///< Accumulator buffer for partial pipe read chunks.
   };
 
 } // namespace lekiwi_chess_master
