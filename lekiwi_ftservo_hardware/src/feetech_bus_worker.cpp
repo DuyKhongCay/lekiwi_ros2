@@ -11,7 +11,7 @@
 #include <cmath>
 #include <rclcpp/rclcpp.hpp>
 
-#include "lekiwi_ftservo_hardware/velocity_codec.hpp"
+#include "lekiwi_ftservo_hardware/joint_codec.hpp"
 
 namespace lekiwi_ftservo_hardware
 {
@@ -684,17 +684,13 @@ namespace lekiwi_ftservo_hardware
           {
             if (active_torque_states_[p_idx] != 0U)
             {
-              active_pos_ids.push_back(topology_.joints[p_idx].id);
+              const auto &joint = topology_.joints[p_idx];
+              active_pos_ids.push_back(joint.id);
               const double pos = current_cmds[p_idx];
-              if (std::isfinite(pos))
-              {
-                position_commands.push_back(
-                    static_cast<int>(std::lround(pos * kEncoderTicksPerRadian)) + kEncoderCenterTicks);
-              }
-              else
-              {
-                position_commands.push_back(kEncoderCenterTicks);
-              }
+              const int ticks = joint.has_position_limits
+                  ? radians_to_clamped_ticks(pos, joint.min_position_radians, joint.max_position_radians)
+                  : radians_to_clamped_ticks(pos, -M_PI, M_PI);
+              position_commands.push_back(ticks);
             }
           }
 

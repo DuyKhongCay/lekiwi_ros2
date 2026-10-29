@@ -20,7 +20,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "lekiwi_ftservo_hardware/velocity_codec.hpp"
+#include "lekiwi_ftservo_hardware/joint_codec.hpp"
 
 namespace lekiwi_ftservo_hardware
 {

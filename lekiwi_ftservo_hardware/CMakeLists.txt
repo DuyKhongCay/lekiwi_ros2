@@ -47,9 +47,9 @@ install(FILES lekiwi_ftservo_hardware_plugin.xml DESTINATION share/${PROJECT_NAM
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_velocity_codec test/test_velocity_codec.cpp)
-  target_compile_features(test_velocity_codec PUBLIC cxx_std_20)
-  target_include_directories(test_velocity_codec PRIVATE include)
+  ament_add_gtest(test_joint_codec test/test_joint_codec.cpp)
+  target_compile_features(test_joint_codec PUBLIC cxx_std_20)
+  target_include_directories(test_joint_codec PRIVATE include)
 
   ament_add_gtest(test_sts_protocol test/test_sts_protocol.cpp)
   target_compile_features(test_sts_protocol PUBLIC cxx_std_20)
