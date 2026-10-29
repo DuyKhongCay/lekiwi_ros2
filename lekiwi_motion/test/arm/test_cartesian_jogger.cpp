@@ -64,13 +64,15 @@ protected:
   std::unique_ptr<arm::CartesianJogger> jogger_;
 };
 
-TEST_F(CartesianJoggerTest, UninitializedState)
+TEST_F(CartesianJoggerTest, LifecycleInitializationFkSyncAndZeroDeltaHold)
 {
-  EXPECT_FALSE(jogger_->is_initialized());
-}
+  // Null solver throws
+  EXPECT_THROW(arm::CartesianJogger(nullptr, model_), std::invalid_argument);
 
-TEST_F(CartesianJoggerTest, InitializationAndFKSync)
-{
+  // Uninitialized state
+  EXPECT_FALSE(jogger_->is_initialized());
+
+  // Initialization and FK Sync
   const std::array<double, 5> nominal_joints{0.0, -0.5, 1.2, 0.3, 0.0};
   jogger_->sync_from_fk(nominal_joints);
 
@@ -83,16 +85,10 @@ TEST_F(CartesianJoggerTest, InitializationAndFKSync)
   for (size_t i = 0; i < 5; ++i) {
     EXPECT_NEAR(joints[i], nominal_joints[i], 1e-4);
   }
-}
 
-TEST_F(CartesianJoggerTest, ZeroDeltaHold)
-{
-  const std::array<double, 5> nominal_joints{0.0, -0.5, 1.2, 0.3, 0.0};
-  jogger_->sync_from_fk(nominal_joints);
-
+  // Zero delta hold maintains position without drift
   arm::CartesianDelta zero_delta{};
   auto res = jogger_->process_jog(zero_delta);
-
   EXPECT_TRUE(res.success);
   for (size_t i = 0; i < 5; ++i) {
     EXPECT_NEAR(res.joints[i], nominal_joints[i], 1e-5);

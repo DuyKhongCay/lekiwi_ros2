@@ -111,7 +111,13 @@ std::unordered_map<std::string, std::vector<double>> ArmMotionPlanner::build_cle
   const double closed_g = gripper_closed_rad();
 
   const std::string bin_pose_name = (bin_side == ClearBinSide::LEFT) ? "clear_left" : "clear_right";
-  const std::vector<double> bin_pose = named_poses_cfg_.get(bin_pose_name).value_or(std::vector<double>{});
+  const auto opt_bin_pose = named_poses_cfg_.get(bin_pose_name);
+  if (!opt_bin_pose.has_value() || opt_bin_pose->empty()) {
+    throw std::runtime_error(
+      "ArmMotionPlanner: '" + bin_pose_name +
+      "' named pose is required for clear operation but is not configured.");
+  }
+  const std::vector<double> & bin_pose = *opt_bin_pose;
 
   return {
     {"APPROACH_PICK",  with_gripper(pick_approach, open_g)},
@@ -122,6 +128,26 @@ std::unordered_map<std::string, std::vector<double>> ArmMotionPlanner::build_cle
     {"RELEASE_CLEAR",  with_gripper(bin_pose, open_g)},
     {"RETRACT_STOW",   with_gripper(get_stow_pose_internal(), closed_g)},
   };
+}
+
+void ArmMotionPlanner::validate_joint_vectors(
+  const std::vector<double> & start_positions,
+  const std::vector<double> & target_positions) const
+{
+  const size_t num_joints = start_positions.size();
+  if (num_joints == 0) {
+    throw std::invalid_argument("Joint positions vector cannot be empty.");
+  }
+  if (target_positions.size() != num_joints) {
+    throw std::invalid_argument(
+      "Dimension mismatch: start_positions has " + std::to_string(num_joints) +
+      " elements while target_positions has " + std::to_string(target_positions.size()) + ".");
+  }
+  if (!arm_joints_.empty() && arm_joints_.size() != num_joints) {
+    throw std::invalid_argument(
+      "Dimension mismatch: arm_joints has " + std::to_string(arm_joints_.size()) +
+      " elements while positions have " + std::to_string(num_joints) + ".");
+  }
 }
 
 double ArmMotionPlanner::calculate_trajectory_duration(
@@ -139,21 +165,9 @@ double ArmMotionPlanner::calculate_trajectory_duration(
       "min_duration_sec must be positive, got " + std::to_string(min_duration_sec) + "s.");
   }
 
-  const size_t num_joints = start_positions.size();
-  if (num_joints == 0) {
-    throw std::invalid_argument("Joint positions vector cannot be empty.");
-  }
-  if (target_positions.size() != num_joints) {
-    throw std::invalid_argument(
-      "Dimension mismatch: start_positions has " + std::to_string(num_joints) +
-      " elements while target_positions has " + std::to_string(target_positions.size()) + ".");
-  }
-  if (!arm_joints_.empty() && arm_joints_.size() != num_joints) {
-    throw std::invalid_argument(
-      "Dimension mismatch: arm_joints has " + std::to_string(arm_joints_.size()) +
-      " elements while positions have " + std::to_string(num_joints) + ".");
-  }
+  validate_joint_vectors(start_positions, target_positions);
 
+  const size_t num_joints = start_positions.size();
   double required_duration = min_duration_sec;
   for (size_t i = 0; i < num_joints; ++i) {
     const double delta_q = std::abs(target_positions[i] - start_positions[i]);
@@ -194,20 +208,8 @@ trajectory_msgs::msg::JointTrajectory ArmMotionPlanner::plan_trajectory(
       "Sampling rate must be positive, got " + std::to_string(effective_rate_hz) + "Hz.");
   }
 
-  const size_t num_joints = start_positions.size();
-  if (num_joints == 0) {
-    throw std::invalid_argument("Joint positions vector cannot be empty.");
-  }
-  if (target_positions.size() != num_joints) {
-    throw std::invalid_argument(
-      "Dimension mismatch: start_positions has " + std::to_string(num_joints) +
-      " elements while target_positions has " + std::to_string(target_positions.size()) + ".");
-  }
-  if (!arm_joints_.empty() && arm_joints_.size() != num_joints) {
-    throw std::invalid_argument(
-      "Dimension mismatch: arm_joints has " + std::to_string(arm_joints_.size()) +
-      " elements while positions have " + std::to_string(num_joints) + ".");
-  }
+  validate_joint_vectors(start_positions, target_positions);
+  const size_t num_joints = arm_joints_.size();
 
   const double dt = 1.0 / effective_rate_hz;
   const size_t num_points = std::max<size_t>(

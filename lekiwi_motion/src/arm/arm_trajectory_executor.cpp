@@ -75,50 +75,70 @@ void ArmTrajectoryExecutor::stop() noexcept
   is_shutting_down_.store(true, std::memory_order_release);
 }
 
+namespace
+{
+template <typename T>
+T get_or_declare_param(
+  rclcpp::Node * node,
+  const std::string & name,
+  const T & default_val,
+  const std::string & description = "")
+{
+  if (!node) {
+    return default_val;
+  }
+  if (!node->has_parameter(name)) {
+    rcl_interfaces::msg::ParameterDescriptor desc;
+    desc.description = description;
+    desc.read_only = true;
+    return node->declare_parameter<T>(name, default_val, desc);
+  }
+  return node->get_parameter(name).get_value<T>();
+}
+}  // namespace
+
 void ArmTrajectoryExecutor::init_parameters()
 {
   if (!node_) {
     return;
   }
 
-  config_.arm_joints = declare_or_get_param<std::vector<std::string>>(
-    node_, "arm_joints", config_.arm_joints);
-  config_.default_velocity = declare_or_get_param<double>(
-    node_, "default_velocity", config_.default_velocity);
-  config_.sampling_rate_hz = declare_or_get_param<double>(
-    node_, "sampling_rate_hz", config_.sampling_rate_hz);
-  config_.controller_action_name = declare_or_get_param<std::string>(
-    node_, "controller_action_name", config_.controller_action_name);
-  config_.joint_states_topic = declare_or_get_param<std::string>(
-    node_, "joint_states_topic", config_.joint_states_topic);
-  config_.robot_description_topic = declare_or_get_param<std::string>(
-    node_, "robot_description_topic", config_.robot_description_topic);
-  config_.board_frame = declare_or_get_param<std::string>(
-    node_, "board_frame", config_.board_frame);
-  config_.base_frame = declare_or_get_param<std::string>(
-    node_, "base_frame", config_.base_frame);
-  config_.tip_frame = declare_or_get_param<std::string>(
-    node_, "tip_frame", config_.tip_frame);
-  config_.default_pitch = declare_or_get_param<double>(
-    node_, "planning.default_pitch", config_.default_pitch);
-  config_.default_roll = declare_or_get_param<double>(
-    node_, "planning.default_roll", config_.default_roll);
-  config_.mock_execution = declare_or_get_param<bool>(
-    node_, "mock_execution", config_.mock_execution);
+  config_.arm_joints = get_or_declare_param<std::vector<std::string>>(
+    node_, "arm_joints", config_.arm_joints, "Names of arm joints in kinematic order");
+  config_.default_velocity = get_or_declare_param<double>(
+    node_, "default_velocity", config_.default_velocity, "Default joint trajectory velocity (rad/s)");
+  config_.sampling_rate_hz = get_or_declare_param<double>(
+    node_, "sampling_rate_hz", config_.sampling_rate_hz, "Trajectory interpolation sampling rate (Hz)");
+  config_.controller_action_name = get_or_declare_param<std::string>(
+    node_, "controller_action_name", config_.controller_action_name, "FollowJointTrajectory action server name");
+  config_.joint_states_topic = get_or_declare_param<std::string>(
+    node_, "joint_states_topic", config_.joint_states_topic, "Joint states topic name");
+  config_.robot_description_topic = get_or_declare_param<std::string>(
+    node_, "robot_description_topic", config_.robot_description_topic, "Robot description topic name");
+  config_.board_frame = get_or_declare_param<std::string>(
+    node_, "board_frame", config_.board_frame, "Chessboard frame ID");
+  config_.base_frame = get_or_declare_param<std::string>(
+    node_, "base_frame", config_.base_frame, "Arm mounting base footprint frame ID");
+  config_.tip_frame = get_or_declare_param<std::string>(
+    node_, "tip_frame", config_.tip_frame, "Gripper tool center point frame ID");
+  config_.default_pitch = get_or_declare_param<double>(
+    node_, "planning.default_pitch", config_.default_pitch, "Default pick/place pitch angle (rad)");
+  config_.default_roll = get_or_declare_param<double>(
+    node_, "planning.default_roll", config_.default_roll, "Default pick/place roll angle (rad)");
+  config_.mock_execution = get_or_declare_param<bool>(
+    node_, "mock_execution", config_.mock_execution, "Mock trajectory execution flag");
 
-  config_.gripper_cfg.open_rad = declare_or_get_param<double>(
-    node_, "gripper.open", config_.gripper_cfg.open_rad);
-  config_.gripper_cfg.closed_rad = declare_or_get_param<double>(
-    node_, "gripper.closed", config_.gripper_cfg.closed_rad);
+  config_.gripper_cfg.open_rad = get_or_declare_param<double>(
+    node_, "gripper.open", config_.gripper_cfg.open_rad, "Gripper fully open position (rad)");
+  config_.gripper_cfg.closed_rad = get_or_declare_param<double>(
+    node_, "gripper.closed", config_.gripper_cfg.closed_rad, "Gripper fully closed position (rad)");
 
-  config_.named_poses.approach = declare_or_get_param<std::vector<double>>(
-    node_, "named_poses.approach", config_.named_poses.approach);
-  config_.named_poses.stow = declare_or_get_param<std::vector<double>>(
-    node_, "named_poses.stow", config_.named_poses.stow);
-  config_.named_poses.clear_left = declare_or_get_param<std::vector<double>>(
-    node_, "named_poses.clear_left", config_.named_poses.clear_left);
-  config_.named_poses.clear_right = declare_or_get_param<std::vector<double>>(
-    node_, "named_poses.clear_right", config_.named_poses.clear_right);
+  config_.named_poses.stow = get_or_declare_param<std::vector<double>>(
+    node_, "named_poses.stow", config_.named_poses.stow, "Stowed transit joint angles");
+  config_.named_poses.clear_left = get_or_declare_param<std::vector<double>>(
+    node_, "named_poses.clear_left", config_.named_poses.clear_left, "Left bin clear joint angles");
+  config_.named_poses.clear_right = get_or_declare_param<std::vector<double>>(
+    node_, "named_poses.clear_right", config_.named_poses.clear_right, "Right bin clear joint angles");
 
   std::lock_guard<std::mutex> lock(planner_mutex_);
   motion_planner_ = arm::ArmMotionPlanner(
@@ -173,7 +193,7 @@ void ArmTrajectoryExecutor::init_kinematics_and_tf()
     qos_profile,
     std::bind(&ArmTrajectoryExecutor::on_robot_description, this, std::placeholders::_1));
 
-  const std::string urdf_param = declare_or_get_param<std::string>(
+  const std::string urdf_param = get_or_declare_param<std::string>(
     node_, "robot_description", "");
   if (!urdf_param.empty()) {
     if (!accept_robot_description(urdf_param)) {
@@ -292,25 +312,14 @@ void ArmTrajectoryExecutor::on_joint_state(const sensor_msgs::msg::JointState::C
     }
   }
 
-  if (!has_joint_states_.load(std::memory_order_relaxed)) {
-    if (config_.arm_joints.size() >= 5) {
-      bool all_found = true;
-      for (size_t i = 0; i < 5; ++i) {
-        bool found = false;
-        for (const auto & name : msg->name) {
-          if (name == config_.arm_joints[i]) {
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          all_found = false;
-          break;
-        }
-      }
-      if (all_found) {
-        has_joint_states_.store(true, std::memory_order_release);
-      }
+  if (!has_joint_states_.load(std::memory_order_relaxed) && config_.arm_joints.size() >= 5) {
+    const bool all_found = std::all_of(
+      config_.arm_joints.begin(), config_.arm_joints.begin() + 5,
+      [&msg](const std::string & joint) {
+        return std::find(msg->name.begin(), msg->name.end(), joint) != msg->name.end();
+      });
+    if (all_found) {
+      has_joint_states_.store(true, std::memory_order_release);
     }
   }
 }
@@ -353,6 +362,13 @@ std::optional<std::vector<double>> ArmTrajectoryExecutor::get_named_pose(
 {
   std::lock_guard<std::mutex> lock(planner_mutex_);
   return motion_planner_.get_named_pose(name);
+}
+
+bool ArmTrajectoryExecutor::has_named_pose(const std::string & name) const
+{
+  std::lock_guard<std::mutex> lock(planner_mutex_);
+  const auto opt = motion_planner_.get_named_pose(name);
+  return opt.has_value() && !opt->empty();
 }
 
 bool ArmTrajectoryExecutor::set_named_pose(
@@ -411,6 +427,8 @@ std::optional<std::vector<double>> ArmTrajectoryExecutor::resolve_point_ik(
   const std::string & target_frame,
   double clamped_gripper_rad) const
 {
+  const double safe_gripper_rad = clamp_gripper(clamped_gripper_rad);
+
   geometry_msgs::msg::PointStamped in_pt;
   in_pt.header.frame_id = target_frame.empty() ? config_.board_frame : target_frame;
   in_pt.point = point;
@@ -444,7 +462,7 @@ std::optional<std::vector<double>> ArmTrajectoryExecutor::resolve_point_ik(
     joint_positions[i] = ik_res.joints[i];
   }
   if (!joint_positions.empty()) {
-    joint_positions.back() = clamped_gripper_rad;
+    joint_positions.back() = safe_gripper_rad;
   }
   return joint_positions;
 }

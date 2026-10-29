@@ -70,11 +70,12 @@ public:
     return is_waiting_record_.load(std::memory_order_acquire);
   }
 
+  [[nodiscard]] bool is_goal_active() const noexcept
+  {
+    return is_goal_active_.load(std::memory_order_acquire);
+  }
+
 private:
-  [[nodiscard]] std::optional<std::vector<double>> resolve_point_ik(
-    const geometry_msgs::msg::Point & point,
-    const std::string & target_frame,
-    double gripper_state) const;
   struct ApproachDescendPair
   {
     std::vector<double> approach;
@@ -199,6 +200,19 @@ private:
     double progress,
     const std::string & instruction_label);
 
+  enum class ActionTerminalState
+  {
+    SUCCEEDED,
+    CANCELED,
+    ABORTED
+  };
+
+  void finalize_move(
+    const MoveExecutionContext & ctx,
+    ActionTerminalState term_state,
+    const std::string & message,
+    double progress = 100.0);
+
   void succeed_move(const MoveExecutionContext & ctx, const std::string & message);
   void cancel_move(const MoveExecutionContext & ctx, const std::string & message, double progress);
   void abort_move(const MoveExecutionContext & ctx, const std::string & message, double progress);
@@ -232,9 +246,6 @@ private:
   rclcpp::Service<GoToNamedPose>::SharedPtr named_pose_srv_;
   rclcpp::Client<Trigger>::SharedPtr save_client_;
   rclcpp::Client<Trigger>::SharedPtr discard_client_;
-
-  mutable std::mutex approach_mutex_;
-  std::optional<std::vector<double>> cached_approach_joints_{std::nullopt};
 
   // Diagnostics & Execution State
   diagnostic_updater::Updater diagnostic_updater_;

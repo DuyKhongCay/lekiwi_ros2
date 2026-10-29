@@ -51,26 +51,6 @@ namespace lekiwi_motion::arm
 {
 
 /**
- * @brief Thread-safe ROS 2 parameter helper: returns existing parameter value or declares with default.
- * @tparam T Parameter type.
- * @param[in] node Pointer to ROS 2 node.
- * @param[in] name Parameter key.
- * @param[in] default_val Fallback value if node does not have parameter.
- * @return Resolved parameter value.
- */
-template <typename T>
-T declare_or_get_param(rclcpp::Node * node, const std::string & name, const T & default_val)
-{
-  if (!node) {
-    return default_val;
-  }
-  if (!node->has_parameter(name)) {
-    return node->declare_parameter<T>(name, default_val);
-  }
-  return node->get_parameter(name).get_value<T>();
-}
-
-/**
  * @struct ArmTrajectoryExecutorConfig
  * @brief Configuration parameters for ArmTrajectoryExecutor initialization.
  */
@@ -91,7 +71,7 @@ struct ArmTrajectoryExecutorConfig
   double default_velocity{1.5};
   double sampling_rate_hz{50.0};
   NamedPosesConfig named_poses{
-    {0.0414, -0.0199, 0.0598, -0.0552, -1.57, 0.0798},       // approach
+    {},                                                         // approach (dynamically computed)
     {1.5616, -1.7411, 1.5570, 0.7747, -2.7888, 0.0813},       // stow
     {-1.9804, -0.3375, 0.3927, 1.4972, -1.5631, 0.0828},     // clear_left
     {2.0632, -0.2301, 0.3405, 1.5079, -1.5723, 0.0828}       // clear_right
@@ -215,6 +195,7 @@ public:
 
   // Landmark & Gripper Configuration
   [[nodiscard]] std::optional<std::vector<double>> get_named_pose(const std::string & name) const;
+  [[nodiscard]] bool has_named_pose(const std::string & name) const;
   bool set_named_pose(const std::string & name, std::vector<double> joints);
   [[nodiscard]] GripperConfig gripper_config() const;
   [[nodiscard]] double clamp_gripper(double target_rad) const;
