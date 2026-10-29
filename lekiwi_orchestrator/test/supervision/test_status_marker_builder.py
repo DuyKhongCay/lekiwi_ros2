@@ -22,27 +22,6 @@ def dummy_stamp() -> Time:
     return t
 
 
-def test_builder_deleteall_hygiene(dummy_stamp):
-    """Verify that builder always prepends a DELETEALL marker for RViz telemetry hygiene."""
-    builder = StatusMarkerBuilder(VisualizerConfig(robot_frame="test_base"))
-    snapshot = OrchestratorStateSnapshot(
-        mission_state=MacroMissionState.WAITING_FOR_NEXT_MOVE,
-        perception_context=0,
-    )
-    markers = builder.build(
-        snapshot=snapshot,
-        nav_ready=True,
-        robot_color="w",
-        stamp=dummy_stamp,
-    )
-
-    assert len(markers.markers) == 2
-    clear_marker = markers.markers[0]
-    assert clear_marker.action == Marker.DELETEALL
-    assert clear_marker.header.frame_id == "test_base"
-    assert clear_marker.header.stamp == dummy_stamp
-
-
 @pytest.mark.parametrize(
     ("state", "nav_ready", "robot_color", "last_move", "stage", "expected_text_snippets"),
     [
@@ -122,6 +101,12 @@ def test_builder_hud_marker_attributes_parameterized(
         robot_color=robot_color,
         stamp=dummy_stamp,
     )
+
+    assert len(markers.markers) == 2
+    clear_marker = markers.markers[0]
+    assert clear_marker.action == Marker.DELETEALL
+    assert clear_marker.header.frame_id == "base_link"
+    assert clear_marker.header.stamp == dummy_stamp
 
     hud = markers.markers[1]
     assert hud.header.frame_id == "base_link"

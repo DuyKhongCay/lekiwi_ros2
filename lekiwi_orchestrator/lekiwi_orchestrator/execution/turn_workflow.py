@@ -53,11 +53,11 @@ class TurnHost(Protocol):
 
     def clear_move_goals(self) -> None: ...
 
-    def set_last_interaction_pose(self, pose: PoseStamped | None) -> None: ...
-
     def publish_candidate_move(
         self, details: ChessMoveGoal | ChessMoveDetails | None
     ) -> None: ...
+
+    def publish_collection_feedback(self, stage: str, percent: float) -> None: ...
 
     def start_post_move_watchdog(self) -> None: ...
 
@@ -272,12 +272,18 @@ class GameStatusHandler:
             return
 
         # Autonomous mode: compute best move via Stockfish engine
+        self._request_autonomous_engine_move(msg.full_fen, msg.active_color)
+
+    def _request_autonomous_engine_move(
+        self, current_fen: str, active_color: str
+    ) -> None:
+        """Trigger asynchronous Stockfish engine evaluation for autonomous play."""
         with self._state_lock:
             eligible_state = self._get_mission_state() in (
                 MacroMissionState.WAITING_FOR_NEXT_MOVE,
                 MacroMissionState.TURN_COMPLETED,
             )
-            if not eligible_state or msg.full_fen == self._last_processed_fen:
+            if not eligible_state or current_fen == self._last_processed_fen:
                 return
 
             if self._is_evaluating_engine:
@@ -298,56 +304,58 @@ class GameStatusHandler:
             self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
             return
 
-        current_fen = msg.full_fen
         self._node.get_logger().info(
             f">>> [ORCHESTRATOR] Autonomous Turn: Requesting best move for FEN: {current_fen} "
-            f"(Color: {msg.active_color}, Think time: {self._config.think_time_ms}ms)"
+            f"(Color: {active_color}, Think time: {self._config.think_time_ms}ms)"
         )
-
-        def _on_engine_result(
-            best_move_uci: str | None, message: str = ""
-        ) -> None:
-            with self._state_lock:
-                self._is_evaluating_engine = False
-                if self._get_mission_state() != MacroMissionState.EVALUATING_BEST_MOVE:
-                    self._node.get_logger().warn(
-                        f"Ignoring engine result for '{best_move_uci}': state changed to {self._get_mission_state().name}"
-                    )
-                    return
-
-            if not best_move_uci:
-                self._node.get_logger().error(
-                    f"Engine returned empty best move for FEN {current_fen}: {message}"
-                )
-                self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
-                return
-
-            with self._state_lock:
-                self._last_processed_fen = current_fen
-
-            self._node.get_logger().info(
-                f">>> [ORCHESTRATOR] Engine Best Move: '{best_move_uci}'"
-            )
-            self._reset_obs_viewpoints_fn()
-            goal = ChessMoveGoal.from_uci_or_details(uci_move=best_move_uci)
-            if goal is None:
-                self._node.get_logger().error(
-                    f"Failed to create ChessMoveGoal from engine UCI '{best_move_uci}'!"
-                )
-                self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
-                return
-            self._dispatch_workflow_fn(best_move_uci, goal)
 
         dispatched = self._engine_client.compute_best_move_async(
             fen=current_fen,
             think_time_ms=self._config.think_time_ms,
-            on_complete=_on_engine_result,
+            on_complete=lambda best_move, msg="": self._handle_engine_move_result(
+                best_move, current_fen, msg
+            ),
         )
         if not dispatched:
             with self._state_lock:
                 self._is_evaluating_engine = False
             self._node.get_logger().error("Failed to dispatch compute_best_move action goal!")
             self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
+
+    def _handle_engine_move_result(
+        self, best_move_uci: str | None, current_fen: str, message: str = ""
+    ) -> None:
+        """Process Stockfish best move result and dispatch physical move workflow."""
+        with self._state_lock:
+            self._is_evaluating_engine = False
+            if self._get_mission_state() != MacroMissionState.EVALUATING_BEST_MOVE:
+                self._node.get_logger().warn(
+                    f"Ignoring engine result for '{best_move_uci}': state changed to {self._get_mission_state().name}"
+                )
+                return
+
+        if not best_move_uci:
+            self._node.get_logger().error(
+                f"Engine returned empty best move for FEN {current_fen}: {message}"
+            )
+            self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
+            return
+
+        with self._state_lock:
+            self._last_processed_fen = current_fen
+
+        self._node.get_logger().info(
+            f">>> [ORCHESTRATOR] Engine Best Move: '{best_move_uci}'"
+        )
+        self._reset_obs_viewpoints_fn()
+        goal = ChessMoveGoal.from_uci_or_details(uci_move=best_move_uci)
+        if goal is None:
+            self._node.get_logger().error(
+                f"Failed to create ChessMoveGoal from engine UCI '{best_move_uci}'!"
+            )
+            self._transition_to_fn(MacroMissionState.ERROR_FALLBACK)
+            return
+        self._dispatch_workflow_fn(best_move_uci, goal)
 
 
 
@@ -413,16 +421,7 @@ class MoveWorkflow:
             self._host.transition_to(MacroMissionState.ERROR_FALLBACK)
             return (False, msg)
 
-        if cur_state in (
-            MacroMissionState.WAITING_FOR_NEXT_MOVE,
-            MacroMissionState.TURN_COMPLETED,
-        ):
-            if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
-                return (False, f"Cannot transition to CHECKING_REACHABILITY from {cur_state.name}")
-        elif cur_state == MacroMissionState.EVALUATING_BEST_MOVE:
-            if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
-                return (False, f"Cannot transition to CHECKING_REACHABILITY from {cur_state.name}")
-        elif cur_state != MacroMissionState.CHECKING_REACHABILITY:
+        if cur_state != MacroMissionState.CHECKING_REACHABILITY:
             if not self._host.transition_to(MacroMissionState.CHECKING_REACHABILITY):
                 return (False, f"Cannot transition to CHECKING_REACHABILITY from {cur_state.name}")
 
@@ -553,7 +552,6 @@ class MoveWorkflow:
         )
 
         last_base_pose = self.extract_valid_base_pose(resp_rook) or self.extract_valid_base_pose(resp_king)
-        self._host.set_last_interaction_pose(last_base_pose)
 
         obs_pose = (
             self._obs_nav.compute_observation_pose_for_base(last_base_pose)
@@ -576,8 +574,7 @@ class MoveWorkflow:
         if not self._host.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE):
             return
 
-        if hasattr(self._host, "publish_collection_feedback"):
-            self._host.publish_collection_feedback("EXECUTING_MOVE_PIPELINE", 30.0)
+        self._host.publish_collection_feedback("EXECUTING_MOVE_PIPELINE", 30.0)
 
         self._pipeline_executor.start_pipeline(all_stages)
 
@@ -606,7 +603,6 @@ class MoveWorkflow:
         )
 
         last_base_pose = self.extract_valid_base_pose(resp)
-        self._host.set_last_interaction_pose(last_base_pose)
 
         obs_pose = (
             self._obs_nav.compute_observation_pose_for_base(last_base_pose)
@@ -620,8 +616,7 @@ class MoveWorkflow:
         if not self._host.transition_to(MacroMissionState.EXECUTING_MOVE_PIPELINE):
             return
 
-        if hasattr(self._host, "publish_collection_feedback"):
-            self._host.publish_collection_feedback("EXECUTING_MOVE_PIPELINE", 30.0)
+        self._host.publish_collection_feedback("EXECUTING_MOVE_PIPELINE", 30.0)
 
         self._pipeline_executor.start_pipeline(stages)
 
@@ -629,8 +624,7 @@ class MoveWorkflow:
         """Physical move pipeline completed: transition to POST_MOVE_VERIFYING and start active verification."""
         self._host.transition_to(MacroMissionState.POST_MOVE_VERIFYING)
         self._perception.set_context(PerceptionContext.BOARD_STATE_SCAN)
-        if hasattr(self._host, "publish_collection_feedback"):
-            self._host.publish_collection_feedback("POST_MOVE_VERIFYING", 75.0)
+        self._host.publish_collection_feedback("POST_MOVE_VERIFYING", 75.0)
         self._host.start_post_move_watchdog()
 
     def on_move_pipeline_failed(self, error_msg: str) -> None:
@@ -657,8 +651,8 @@ class PostMoveVerifier:
         perception: PerceptionContextManager,
         state_lock: threading.RLock,
         get_mission_state: Callable[[], MacroMissionState],
-        get_last_interaction_pose: Callable[[], PoseStamped | None],
         on_finalize_turn: Callable[[], None],
+        get_last_interaction_pose: Callable[[], PoseStamped | None] | None = None,
         chassis_settle_provider: Callable[[], bool] | None = None,
         callback_group: CallbackGroup | None = None,
     ) -> None:
@@ -675,6 +669,7 @@ class PostMoveVerifier:
 
         self._timer: Timer | None = None
         self._is_repositioning: bool = False
+        self._cancel_event = threading.Event()
 
     @property
     def is_repositioning(self) -> bool:
@@ -710,7 +705,7 @@ class PostMoveVerifier:
 
     def _wait_for_chassis_settle(self, timeout_sec: float) -> bool:
         """Wait until chassis has fully settled (velocity within stop thresholds) or timeout expires."""
-        if not self._is_post_move_verifying() or timeout_sec <= 0.0:
+        if not self._is_post_move_verifying() or timeout_sec <= 0.0 or self._cancel_event.is_set():
             return False
         if self._chassis_settle_provider():
             return True
@@ -720,7 +715,8 @@ class PostMoveVerifier:
         poll_interval = min(0.02, timeout_sec / 4.0)
 
         while self._is_post_move_verifying():
-            time.sleep(poll_interval)
+            if self._cancel_event.wait(timeout=poll_interval):
+                break
             if self._chassis_settle_provider():
                 return True
             now_ros = get_node_now_sec(self._node)
@@ -729,11 +725,16 @@ class PostMoveVerifier:
             ):
                 break
 
-        return self._is_post_move_verifying() and self._chassis_settle_provider()
+        return (
+            self._is_post_move_verifying()
+            and not self._cancel_event.is_set()
+            and self._chassis_settle_provider()
+        )
 
     def start(self) -> None:
         """Start verification timer while in POST_MOVE_VERIFYING state."""
         self.stop()
+        self._cancel_event.clear()
         timeout = max(1.0, float(self._config.observation_scan_timeout_sec))
         self._node.get_logger().info(
             f"[POST-MOVE VERIFICATION] Starting verification watchdog ({timeout:.1f}s)..."
@@ -746,6 +747,7 @@ class PostMoveVerifier:
 
     def stop(self) -> None:
         """Cancel and clean up verification watchdog timer."""
+        self._cancel_event.set()
         if self._timer is not None:
             self._timer.cancel()
             self._node.destroy_timer(self._timer)

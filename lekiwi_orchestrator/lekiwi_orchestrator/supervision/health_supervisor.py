@@ -479,6 +479,48 @@ class HealthSupervisor:
         if sub_to_destroy is not None:
             self._node.destroy_subscription(sub_to_destroy)
 
+    def _evaluate_uncommanded_motion_locked(
+        self, speed: float, wz: float, now_sec: float
+    ) -> Callable[[str], None] | None:
+        """Evaluate speed against thresholds under state lock and return callback if disturbance latched."""
+        self._last_linear_speed = speed
+        self._last_angular_speed = abs(wz)
+        if not self._startup_ekf_received:
+            return None
+
+        snapshot = self._state_provider()
+        is_commanded_nav = (
+            is_navigating_motion_state(snapshot.motion_state)
+            or snapshot.is_navigating
+        )
+        exceeds_threshold = (
+            speed > self._config.uncommanded_linear_thresh
+            or abs(wz) > self._config.uncommanded_angular_thresh
+        )
+
+        if is_commanded_nav or not exceeds_threshold:
+            self._uncommanded_motion_since_sec = None
+            return None
+
+        if self._uncommanded_motion_since_sec is None:
+            self._uncommanded_motion_since_sec = now_sec
+
+        elapsed_sec = max(0.0, now_sec - self._uncommanded_motion_since_sec)
+        if (
+            elapsed_sec >= self._config.uncommanded_confirm_duration_sec
+            and not self._operator_intervention_latched
+        ):
+            self._node.get_logger().warn(
+                f"[DISTURBANCE] Sustained uncommanded chassis motion detected "
+                f"(v={speed:.3f}m/s, w={wz:.3f}rad/s for {elapsed_sec:.3f}s)! "
+                "Robot might have been lifted, kicked, or displaced."
+            )
+            self._operator_intervention_latched = True
+            self._uncommanded_motion_since_sec = None
+            return self._on_disturbance_detected_cb
+
+        return None
+
     def on_local_odom(self, msg: Odometry) -> None:
         """Monitor local odometry for sustained uncommanded chassis motion."""
         vx = msg.twist.twist.linear.x
@@ -487,43 +529,8 @@ class HealthSupervisor:
         speed = math.hypot(vx, vy)
         now_sec = get_header_stamp_sec(msg, fallback_sec=self._get_now_sec())
 
-        disturbance_cb: Callable[[str], None] | None = None
         with self._state_lock:
-            self._last_linear_speed = speed
-            self._last_angular_speed = abs(wz)
-            if not self._startup_ekf_received:
-                return
-
-            snapshot = self._state_provider()
-            is_commanded_nav = (
-                is_navigating_motion_state(snapshot.motion_state)
-                or snapshot.is_navigating
-            )
-            exceeds_threshold = (
-                speed > self._config.uncommanded_linear_thresh
-                or abs(wz) > self._config.uncommanded_angular_thresh
-            )
-
-            if is_commanded_nav or not exceeds_threshold:
-                self._uncommanded_motion_since_sec = None
-                return
-
-            if self._uncommanded_motion_since_sec is None:
-                self._uncommanded_motion_since_sec = now_sec
-
-            elapsed_sec = max(0.0, now_sec - self._uncommanded_motion_since_sec)
-            if (
-                elapsed_sec >= self._config.uncommanded_confirm_duration_sec
-                and not self._operator_intervention_latched
-            ):
-                self._node.get_logger().warn(
-                    f"[DISTURBANCE] Sustained uncommanded chassis motion detected "
-                    f"(v={speed:.3f}m/s, w={wz:.3f}rad/s for {elapsed_sec:.3f}s)! "
-                    "Robot might have been lifted, kicked, or displaced."
-                )
-                self._operator_intervention_latched = True
-                self._uncommanded_motion_since_sec = None
-                disturbance_cb = self._on_disturbance_detected_cb
+            disturbance_cb = self._evaluate_uncommanded_motion_locked(speed, wz, now_sec)
 
         if disturbance_cb is not None:
             disturbance_cb("uncommanded_motion")

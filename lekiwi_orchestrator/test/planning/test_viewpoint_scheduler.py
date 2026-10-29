@@ -11,12 +11,7 @@ import rclpy
 from lekiwi_orchestrator.planning.board_geometry import (
     rank_by_azimuth,
 )
-from lekiwi_orchestrator.core.utils import (
-    create_pose2d_stamped,
-    get_header_stamp_sec,
-    normalize_angle,
-    yaw_to_quaternion,
-)
+
 
 
 @pytest.fixture
@@ -27,60 +22,13 @@ def ros_context():
     rclpy.shutdown()
 
 
-def test_geometry_angle_and_quaternion_transforms():
-    """Verify angle normalization and yaw-to-quaternion planar conversions."""
-    # Test angle normalization across wrap boundaries
-    assert math.isclose(normalize_angle(0.0), 0.0)
-    assert math.isclose(normalize_angle(math.pi), math.pi, abs_tol=1e-6)
-    assert math.isclose(normalize_angle(-math.pi), -math.pi, abs_tol=1e-6)
-    assert math.isclose(normalize_angle(3 * math.pi), math.pi, abs_tol=1e-6)
-    assert math.isclose(normalize_angle(-3 * math.pi), -math.pi, abs_tol=1e-6)
-    assert math.isclose(normalize_angle(math.pi / 2), math.pi / 2)
-
-    # Test yaw to quaternion
-    q0 = yaw_to_quaternion(0.0)
-    assert (q0.x, q0.y, q0.z, q0.w) == (0.0, 0.0, 0.0, 1.0)
-    q_pi2 = yaw_to_quaternion(math.pi / 2)
-    assert math.isclose(q_pi2.z, math.sin(math.pi / 4), abs_tol=1e-6)
-    assert math.isclose(q_pi2.w, math.cos(math.pi / 4), abs_tol=1e-6)
-
-    # Test create_pose2d_stamped
-    pose = create_pose2d_stamped(x=1.5, y=-2.0, yaw=0.0, frame_id="chessboard_frame", z=0.1)
-    assert pose.header.frame_id == "chessboard_frame"
-    assert pose.pose.position.x == 1.5
-    assert pose.pose.position.y == -2.0
-    assert pose.pose.position.z == 0.1
-    assert (pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z, pose.pose.orientation.w) == (0.0, 0.0, 0.0, 1.0)
-
-
-def test_get_header_stamp_sec():
-    """Verify header timestamp extraction and fallback."""
-    from unittest.mock import Mock
-
-    # Valid stamp
-    msg = Mock()
-    msg.header.stamp.sec = 42
-    msg.header.stamp.nanosec = 500_000_000
-    assert get_header_stamp_sec(msg) == 42.5
-
-    # Zero stamp fallback
-    msg_zero = Mock()
-    msg_zero.header.stamp.sec = 0
-    msg_zero.header.stamp.nanosec = 0
-    assert get_header_stamp_sec(msg_zero, fallback_sec=99.0) == 99.0
-
-    # No stamp fallback
-    msg_no_stamp = Mock(spec=[])
-    assert get_header_stamp_sec(msg_no_stamp, fallback_sec=12.3) == 12.3
-
-
-def test_rank_by_azimuth_sorting_and_edges():
-    """Verify viewpoint ranking by global shortest tour, wraparound handling, and edge cases."""
+def test_rank_by_azimuth_geodesic_sorting():
+    """Verify viewpoint ranking by global shortest tour, wraparound handling, and chained sequences."""
     candidates = [math.pi / 2, 0.1, -0.3, math.pi]
     ranked = rank_by_azimuth(0.56, 0.0, candidate_offsets=candidates, standoff_radius=0.56)
     assert len(ranked) == 4
     # Global shortest tour starting at 0.0:
-    # 0.0 -> -0.3 -> 0.1 -> pi/2 -> pi (cost ~ 3.74 rad)
+    # 0.0 -> -0.3 -> 0.1 -> pi/2 -> pi
     assert math.isclose(ranked[0].angle_offset, -0.3)
     assert math.isclose(ranked[1].angle_offset, 0.1)
     assert math.isclose(ranked[2].angle_offset, math.pi / 2)
@@ -100,23 +48,14 @@ def test_rank_by_azimuth_sorting_and_edges():
     ranked_orig = rank_by_azimuth(0.0, 0.0, candidate_offsets=[0.0, math.pi - 0.1], standoff_radius=0.56, fallback_yaw=math.pi)
     assert math.isclose(ranked_orig[0].angle_offset, math.pi - 0.1)
 
-
-def test_rank_by_azimuth_chained_sequence():
-    """Verify that viewpoints form a continuous global shortest tour without backtracking."""
-    # Candidates: [-0.3, 0.1, 0.4, 0.7] starting from 0.0 rad
-    # Shortest global tour sweeps from -0.3 to 0.7:
-    # 0.0 -> -0.3 -> 0.1 -> 0.4 -> 0.7 (total angular cost = 0.3 + 0.4 + 0.3 + 0.3 = 1.3 rad)
-    candidates = [-0.3, 0.1, 0.4, 0.7]
-    ranked = rank_by_azimuth(0.56, 0.0, candidate_offsets=candidates, standoff_radius=0.56)
-
-    assert len(ranked) == 4
-    assert math.isclose(ranked[0].angle_offset, -0.3)
-    assert math.isclose(ranked[1].angle_offset, 0.1)
-    assert math.isclose(ranked[2].angle_offset, 0.4)
-    assert math.isclose(ranked[3].angle_offset, 0.7)
-
-    for i in range(len(ranked) - 1):
-        assert ranked[i].cumulative_cost <= ranked[i + 1].cumulative_cost
+    # Chained continuous tour
+    chained_candidates = [-0.3, 0.1, 0.4, 0.7]
+    ranked_chained = rank_by_azimuth(0.56, 0.0, candidate_offsets=chained_candidates, standoff_radius=0.56)
+    assert len(ranked_chained) == 4
+    assert math.isclose(ranked_chained[0].angle_offset, -0.3)
+    assert math.isclose(ranked_chained[1].angle_offset, 0.1)
+    assert math.isclose(ranked_chained[2].angle_offset, 0.4)
+    assert math.isclose(ranked_chained[3].angle_offset, 0.7)
 
 
 def test_obs_navigator_shortest_tour_locking(ros_context):

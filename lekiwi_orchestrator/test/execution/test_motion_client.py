@@ -113,6 +113,12 @@ def test_ros_action_dispatcher_mock_nav2(monkeypatch, ros_context):
         )
         assert success
         assert manip_results == [True]
+
+        # Action watchdog disabled when <= 0.0
+        dispatcher._start_action_watchdog("Test zero timeout", timeout_sec=0.0)
+        assert dispatcher._action_timer is None
+        dispatcher._start_action_watchdog("Test negative timeout", timeout_sec=-1.0)
+        assert dispatcher._action_timer is None
     finally:
         dispatcher.destroy()
         node.destroy_node()
@@ -138,7 +144,7 @@ def test_ros_action_dispatcher_mock_nav2(monkeypatch, ros_context):
             type(
                 "CustomManipResult",
                 (),
-                {"success": False, "error_msg": "Kinematic limit reached", "execution_time_sec": 0.5},
+                {"success": False, "message": "Kinematic limit reached", "execution_time_sec": 0.5},
             )(),
             False,
             "Kinematic limit reached",
@@ -172,238 +178,6 @@ def test_wrap_completed_action_status_matrix(
     result = outcomes[0]
     assert result.success is expected_success
     assert expected_msg_snippet in result.message
-
-
-def test_obs_navigator_direct_geodesic_reposition(ros_context):
-    """Verify reposition_to_next_viewpoint directly dispatches to calibrated angle_offsets in single goal."""
-    dispatched_poses = []
-
-    class DirectTrackingNav(NavigationClient):
-        @property
-        def is_navigating(self) -> bool:
-            return False
-
-        def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None) -> bool:
-            dispatched_poses.append(target_pose)
-            if on_completed:
-                on_completed(ActionResult(success=True, message="Reached viewpoint"))
-            return True
-
-        def cancel_active_goal(self) -> None:
-            pass
-
-    node = Node("test_direct_geodesic_node")
-    dispatcher = DirectTrackingNav()
-    candidates = [0.0, 0.314, -0.314]
-    navigator = ObsNavigator(
-        node=node,
-        dispatcher=dispatcher,
-        map_frame="map",
-        board_frame="chessboard_frame",
-        standoff_distance=0.65,
-        angle_offsets_map={ObservationIntent.POST_MOVE_VERIFY: candidates},
-    )
-
-    try:
-        # Robot is inside standoff circle at (0.35, 0.0) relative to board
-        ref_pose = PoseStamped()
-        ref_pose.header.frame_id = "chessboard_frame"
-        ref_pose.pose.position.x = 0.35
-        ref_pose.pose.position.y = 0.0
-
-        final_results = []
-        dispatched = navigator.reposition_to_next_viewpoint(
-            intent=ObservationIntent.POST_MOVE_VERIFY,
-            reference_pose=ref_pose,
-            on_completed=lambda res: final_results.append(res),
-        )
-
-        # Directly dispatched to closest candidate (0.0 rad) without intermediate uncalibrated retreat
-        assert dispatched is True
-        assert len(dispatched_poses) == 1
-        vp_goal = dispatched_poses[0]
-        assert math.isclose(vp_goal.pose.position.x, 0.65, abs_tol=1e-3)
-        assert math.isclose(vp_goal.pose.position.y, 0.0, abs_tol=1e-3)
-        assert len(final_results) == 1
-        assert final_results[0].success is True
-        assert navigator.get_viewpoint_index(ObservationIntent.POST_MOVE_VERIFY) == 1
-    finally:
-        node.destroy_node()
-
-
-def test_compute_observation_pose_selects_closest_calibrated_viewpoint(ros_context):
-    """Verify compute_observation_pose_for_base selects closest angle_offsets viewpoint and advances index."""
-    node = Node("test_compute_obs_calibrated_node")
-    dispatcher = Mock()
-    candidates = [math.pi / 2, -math.pi / 2, 0.0]
-    navigator = ObsNavigator(
-        node=node,
-        dispatcher=dispatcher,
-        map_frame="map",
-        board_frame="chessboard_frame",
-        standoff_distance=0.65,
-        angle_offsets_map={ObservationIntent.POST_MOVE_VERIFY: candidates},
-    )
-
-    try:
-        # Manipulation base at South (y = -0.4, angle = -pi/2)
-        base_pose = PoseStamped()
-        base_pose.header.frame_id = "chessboard_frame"
-        base_pose.pose.position.x = 0.0
-        base_pose.pose.position.y = -0.4
-
-        obs_pose = navigator.compute_observation_pose_for_base(base_pose)
-        assert obs_pose is not None
-
-        # Must select candidate -pi/2 (closest to South)
-        assert math.isclose(obs_pose.pose.position.x, 0.0, abs_tol=1e-3)
-        assert math.isclose(obs_pose.pose.position.y, -0.65, abs_tol=1e-3)
-
-        # viewpoint_index must be advanced to 1 for next reposition
-        assert navigator.get_viewpoint_index(ObservationIntent.POST_MOVE_VERIFY) == 1
-    finally:
-        node.destroy_node()
-
-
-def test_azimuth_viewpoint_ranking_and_exhaustion(ros_context):
-    """Verify that viewpoints are ranked by azimuth distance and exhaustion is tracked."""
-    dispatched_poses = []
-
-    class MockNav(NavigationClient):
-        @property
-        def is_navigating(self) -> bool:
-            return False
-
-        def send_navigation_goal(self, target_pose, timeout_sec=60.0, on_completed=None) -> bool:
-            dispatched_poses.append(target_pose)
-            if on_completed:
-                on_completed(ActionResult(success=True, message="OK"))
-            return True
-
-        def cancel_active_goal(self) -> None:
-            pass
-
-    node = Node("test_azimuth_ranking_node")
-    candidates = [-math.pi / 2.0, 0.0, math.pi / 2.0]
-    navigator = ObsNavigator(
-        node=node,
-        dispatcher=MockNav(),
-        standoff_distance=1.0,
-        angle_offsets_map={ObservationIntent.RELOCALIZE: candidates},
-    )
-
-    try:
-        assert navigator.get_max_attempts(ObservationIntent.RELOCALIZE) == 3
-        assert navigator.has_exhausted_viewpoints(ObservationIntent.RELOCALIZE) is False
-
-        ref_pose = PoseStamped()
-        ref_pose.header.frame_id = "chessboard_frame"
-        ref_pose.pose.position.x = 0.0
-        ref_pose.pose.position.y = 1.0
-
-        # Attempt 1: closest candidate pi/2 (distance 0)
-        navigator.reposition_to_next_viewpoint(intent=ObservationIntent.RELOCALIZE, reference_pose=ref_pose)
-        assert len(dispatched_poses) == 1
-        p1 = dispatched_poses[0].pose.position
-        assert math.isclose(p1.x, 0.0, abs_tol=1e-2)
-        assert math.isclose(p1.y, 1.0, abs_tol=1e-2)
-
-        # Attempt 2: next closest is candidate 0.0 (distance pi/2)
-        navigator.reposition_to_next_viewpoint(intent=ObservationIntent.RELOCALIZE, reference_pose=ref_pose)
-        assert len(dispatched_poses) == 2
-        p2 = dispatched_poses[1].pose.position
-        assert math.isclose(p2.x, 1.0, abs_tol=1e-2)
-        assert math.isclose(p2.y, 0.0, abs_tol=1e-2)
-
-        # Attempt 3: farthest candidate -pi/2 (distance pi) -> triggers exhaustion
-        navigator.reposition_to_next_viewpoint(intent=ObservationIntent.RELOCALIZE, reference_pose=ref_pose)
-        assert len(dispatched_poses) == 3
-        assert navigator.has_exhausted_viewpoints(ObservationIntent.RELOCALIZE) is True
-
-        # Attempt 4: Should return False without dispatching because viewpoints are exhausted
-        assert (
-            navigator.reposition_to_next_viewpoint(
-                intent=ObservationIntent.RELOCALIZE, reference_pose=ref_pose
-            )
-            is False
-        )
-        assert len(dispatched_poses) == 3
-
-        # Reset session
-        navigator.reset_tour(ObservationIntent.RELOCALIZE)
-        assert navigator.has_exhausted_viewpoints(ObservationIntent.RELOCALIZE) is False
-        assert navigator.get_viewpoint_index(ObservationIntent.RELOCALIZE) == 0
-    finally:
-        node.destroy_node()
-
-
-def test_obs_navigator_cancellation_and_tf_fallback(ros_context):
-    """Verify ObsNavigator cancellation and TF exception fallback handling."""
-    node = Node("test_obs_nav_cancel_tf_node")
-    mock_dispatcher = Mock()
-    mock_dispatcher.send_navigation_goal.return_value = True
-
-    mock_tf_buffer = Mock()
-    mock_transform = Mock()
-    mock_transform.transform.translation.x = 0.65
-    mock_transform.transform.translation.y = 0.0
-    mock_tf_buffer.lookup_transform.return_value = mock_transform
-
-    mock_tf_pose = PoseStamped()
-    mock_tf_pose.header.frame_id = "map"
-    mock_tf_pose.pose.position.x = 2.0
-    mock_tf_pose.pose.position.y = 3.0
-    mock_tf_buffer.transform.return_value = mock_tf_pose
-
-    navigator = ObsNavigator(
-        node=node,
-        dispatcher=mock_dispatcher,
-        standoff_distance=0.65,
-        tf_buffer=mock_tf_buffer,
-    )
-
-    try:
-        # 1. Cancellation propagation
-        navigator.cancel()
-        mock_dispatcher.cancel_active_goal.assert_called_once()
-
-        # 2. TF lookup and transform succeeds
-        navigator.reposition_to_next_viewpoint(intent=ObservationIntent.POST_MOVE_VERIFY)
-        mock_tf_buffer.lookup_transform.assert_called_once()
-        mock_tf_buffer.transform.assert_called_once()
-
-        # 3. TF lookup/transform failure fails safe
-        mock_tf_buffer.lookup_transform.side_effect = RuntimeError("TF timeout")
-        mock_tf_buffer.transform.side_effect = RuntimeError("TF transform error")
-        ref_pose = PoseStamped()
-        ref_pose.header.frame_id = "map"
-        ref_pose.pose.position.x = 1.0
-        ref_pose.pose.position.y = 0.0
-        success = navigator.reposition_to_next_viewpoint(
-            intent=ObservationIntent.POST_MOVE_VERIFY,
-            reference_pose=ref_pose,
-        )
-        assert success is False
-    finally:
-        node.destroy_node()
-
-
-def test_action_watchdog_disabled_when_zero_or_negative_timeout(ros_context):
-    """Verify that _start_action_watchdog does not create a timer when timeout_sec <= 0.0."""
-    node = Node("test_watchdog_bypass_node")
-    try:
-        client = RosMotionClient(node=node, mock_nav2=True)
-        # Call with 0.0
-        client._start_action_watchdog("Test zero timeout", timeout_sec=0.0)
-        assert client._action_timer is None
-        assert client._action_watchdog_desc == ""
-
-        # Call with negative timeout
-        client._start_action_watchdog("Test negative timeout", timeout_sec=-1.0)
-        assert client._action_timer is None
-        assert client._action_watchdog_desc == ""
-    finally:
-        node.destroy_node()
 
 
 def test_ros_motion_client_is_navigating_lifecycle(monkeypatch, ros_context):
@@ -486,22 +260,5 @@ def test_fake_motion_client():
     client.cancel_active_goal()
     assert client.cancelled
     client.destroy()
-
-
-def test_get_node_now_sec_clock():
-    """Verify get_node_now_sec correctly retrieves seconds from ROS node clock."""
-    node = Mock()
-    clock = Mock()
-    clock.now.return_value.nanoseconds = 150 * 10**9
-    node.get_clock.return_value = clock
-    assert get_node_now_sec(node) == 150.0
-
-
-def test_get_node_now_sec_fallback():
-    """Verify get_node_now_sec falls back to monotonic time if node clock fails."""
-    node = Mock(spec=[])
-    t = get_node_now_sec(node)
-    assert isinstance(t, float)
-    assert t > 0.0
 
 

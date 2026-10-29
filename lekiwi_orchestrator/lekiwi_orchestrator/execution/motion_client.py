@@ -22,7 +22,6 @@ from geometry_msgs.msg import PoseStamped
 from lekiwi_interfaces.srv import CheckMoveFeasibility
 from rclpy.action import ActionClient
 from rclpy.callback_groups import CallbackGroup
-from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 
 from lekiwi_orchestrator.core.mission_types import ActionResult, ChessMoveGoal
@@ -134,7 +133,8 @@ class RosMotionClient(MotionClient):
         self._node = node
         self._callback_group = callback_group
         self._mock_nav2 = mock_nav2
-        self._active_goal_handle: Any = None
+        self._active_nav_goal_handle: Any = None
+        self._active_manip_goal_handle: Any = None
         self._action_timer: Any = None
         self._feasibility_timer: Any = None
         self._action_watchdog_desc: str = ""
@@ -214,13 +214,7 @@ class RosMotionClient(MotionClient):
     @staticmethod
     def _build_feasibility_request(goal: ChessMoveGoal) -> CheckMoveFeasibility.Request:
         req = CheckMoveFeasibility.Request()
-        req.move.uci = goal.uci
-        req.move.piece_color = goal.piece_color
-        req.move.piece_type = goal.piece_type
-        req.move.is_capture = goal.is_capture
-        req.move.is_en_passant = goal.is_en_passant
-        req.move.is_castling = goal.is_castling
-        req.move.promotion_piece = goal.promotion_piece
+        req.move = goal.to_ros_move_details()
         return req
 
     @staticmethod
@@ -345,7 +339,10 @@ class RosMotionClient(MotionClient):
                 return
             with self._lock:
                 self._is_navigating = is_nav
-            self._active_goal_handle = handle
+            if is_nav:
+                self._active_nav_goal_handle = handle
+            else:
+                self._active_manip_goal_handle = handle
             self._node.get_logger().info(f"{label} goal accepted.")
             res_future = handle.get_result_async()
             res_future.add_done_callback(
@@ -474,10 +471,24 @@ class RosMotionClient(MotionClient):
             return bool(result.success) and (not has_status or is_goal_succeeded)
         return is_goal_succeeded
 
+    @property
+    def _active_goal_handle(self) -> Any:
+        return self._active_manip_goal_handle or self._active_nav_goal_handle
+
+    @_active_goal_handle.setter
+    def _active_goal_handle(self, val: Any) -> None:
+        if val is None:
+            self._active_nav_goal_handle = None
+            self._active_manip_goal_handle = None
+        elif self._is_navigating:
+            self._active_nav_goal_handle = val
+        else:
+            self._active_manip_goal_handle = val
+
     @staticmethod
     def _parse_action_message(result: Any, status: int | None, success: bool) -> str:
         """Resolve user-facing outcome message from action result."""
-        msg = getattr(result, "message", None) or getattr(result, "error_msg", None)
+        msg = getattr(result, "message", None)
         if msg:
             return str(msg)
         return "Action succeeded" if success else f"Action failed with status {status}"
@@ -488,7 +499,8 @@ class RosMotionClient(MotionClient):
         self._cancel_action_watchdog()
         with self._lock:
             self._is_navigating = False
-        self._active_goal_handle = None
+        self._active_nav_goal_handle = None
+        self._active_manip_goal_handle = None
         if on_completed is None:
             return
         try:
@@ -515,18 +527,19 @@ class RosMotionClient(MotionClient):
         self._cancel_feasibility_timer()
         with self._lock:
             self._is_navigating = False
-        if self._active_goal_handle is not None:
-            try:
-                self._node.get_logger().warn(
-                    "Cancelling active ROS 2 action goal handle..."
-                )
-                self._active_goal_handle.cancel_goal_async()
-            except Exception as e:
-                self._node.get_logger().warn(
-                    f"Exception cancelling active goal handle: {e}"
-                )
-            finally:
-                self._active_goal_handle = None
+        for handle in (self._active_nav_goal_handle, self._active_manip_goal_handle):
+            if handle is not None:
+                try:
+                    self._node.get_logger().warn(
+                        "Cancelling active ROS 2 action goal handle..."
+                    )
+                    handle.cancel_goal_async()
+                except Exception as e:
+                    self._node.get_logger().warn(
+                        f"Exception cancelling active goal handle: {e}"
+                    )
+        self._active_nav_goal_handle = None
+        self._active_manip_goal_handle = None
 
     def destroy(self) -> None:
         """Clean up action clients, timers, and active goal handles."""
