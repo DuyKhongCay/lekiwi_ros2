@@ -20,6 +20,7 @@ import pytest
 from lekiwi_inference.helpers import (
     AGGREGATE_FUNCTIONS,
     FPSTracker,
+    LatencyTracker,
     RemotePolicyConfig,
     TimedAction,
     TimedData,
@@ -114,4 +115,44 @@ def test_observations_similar_exceed_tolerance():
     # Norm is sqrt(0.04^2 + 0.04^2) = 0.05657 > 0.05
     s2 = np.array([0.04, 0.04, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
     assert observations_similar(s1, s2, atol=0.05) is False
+
+
+def test_latency_tracker():
+    """Validates LatencyTracker rolling window, max, mean, delay computation and reset."""
+    tracker = LatencyTracker(window_size=4)
+    # Default without history
+    assert tracker.compute_delay_steps(dt=0.04, default_steps=14) == 14
+
+    # Add samples: 0.1s, 0.2s, 0.15s, 0.28s -> max=0.28s -> ceil(0.28 / 0.04) = 7 steps
+    tracker.add(0.10)
+    tracker.add(0.20)
+    tracker.add(0.15)
+    tracker.add(0.28)
+    assert tracker.max() == pytest.approx(0.28)
+    assert tracker.mean() == pytest.approx((0.10 + 0.20 + 0.15 + 0.28) / 4)
+    assert tracker.compute_delay_steps(dt=0.04) == 7
+
+    # Add 5th sample, 1st sample (0.10) is evicted
+    tracker.add(0.08)
+    assert len(tracker.history) == 4
+    assert 0.10 not in tracker.history
+
+    tracker.reset()
+    assert len(tracker.history) == 0
+    assert tracker.compute_delay_steps(dt=0.04, default_steps=14) == 14
+
+
+def test_timed_observation_rtc():
+    """Validates TimedObservation initialized with RTC delay and leftover prefix."""
+    prev_actions = np.zeros((10, 6), dtype=np.float32)
+    obs = TimedObservation(
+        timestamp=200.0,
+        timestep=5,
+        observation={"state": np.zeros(6)},
+        inference_delay=14,
+        prev_chunk_left_over=prev_actions,
+    )
+    assert obs.inference_delay == 14
+    assert obs.prev_chunk_left_over is not None
+    assert obs.prev_chunk_left_over.shape == (10, 6)
 

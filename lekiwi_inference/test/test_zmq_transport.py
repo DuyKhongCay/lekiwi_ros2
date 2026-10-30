@@ -65,6 +65,32 @@ def test_observation_roundtrip():
     assert raw_decoded["observation.images.side"] == img_side
 
 
+def test_observation_roundtrip_with_rtc():
+    """Validates lossless serialization and deserialization of RTC delay and leftover actions."""
+    state = np.array([0.1, -0.2, 0.5, 1.2, -0.8, 0.0], dtype=np.float32)
+    leftover = np.random.randn(18, 6).astype(np.float32)
+
+    obs = TimedObservation(
+        timestamp=999.0,
+        timestep=10,
+        observation={"observation.state": state},
+        must_go=False,
+        inference_delay=14,
+        prev_chunk_left_over=leftover,
+    )
+
+    encoded = serialize_observation(obs)
+    assert isinstance(encoded, bytes)
+
+    decoded = deserialize_observation(encoded)
+    assert decoded.get_timestamp() == pytest.approx(999.0)
+    assert decoded.get_timestep() == 10
+    assert decoded.inference_delay == 14
+    assert decoded.prev_chunk_left_over is not None
+    assert decoded.prev_chunk_left_over.shape == (18, 6)
+    assert np.allclose(decoded.prev_chunk_left_over, leftover)
+
+
 def test_actions_roundtrip():
     """Validates lossless serialization and deserialization of predicted action horizons."""
     actions = [

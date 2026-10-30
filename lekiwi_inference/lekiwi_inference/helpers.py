@@ -64,9 +64,46 @@ class TimedObservation(TimedData):
 
     observation: dict[str, Any]
     must_go: bool = False
+    inference_delay: int = 14
+    prev_chunk_left_over: Optional[np.ndarray] = None
 
     def get_observation(self) -> dict[str, Any]:
         return self.observation
+
+
+@dataclass
+class LatencyTracker:
+    """Tracks rolling network and inference latency to estimate discrete delay steps."""
+
+    window_size: int = 8
+    history: list[float] = field(default_factory=list)
+
+    def add(self, latency_s: float) -> None:
+        """Adds a measured latency sample in seconds."""
+        self.history.append(float(latency_s))
+        if len(self.history) > self.window_size:
+            self.history.pop(0)
+
+    def max(self) -> float:
+        """Returns the maximum recorded latency in seconds."""
+        return max(self.history) if self.history else 0.0
+
+    def mean(self) -> float:
+        """Returns the average recorded latency in seconds."""
+        return float(np.mean(self.history)) if self.history else 0.0
+
+    def compute_delay_steps(self, dt: float, default_steps: int = 14) -> int:
+        """Computes discrete delay steps using conservative max latency."""
+        if not self.history:
+            return default_steps
+        effective_dt = max(1e-4, float(dt))
+        # Round to 6 decimal places to prevent floating-point epsilon (e.g. 0.28/0.04=7.000000000000001) from inflating ceil
+        ratio = round(self.max() / effective_dt, 6)
+        return max(1, int(np.ceil(ratio)))
+
+    def reset(self) -> None:
+        """Flushes recorded history."""
+        self.history.clear()
 
 
 @dataclass

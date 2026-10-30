@@ -28,6 +28,7 @@ import numpy as np
 from lekiwi_inference.helpers import (
     AGGREGATE_FUNCTIONS,
     FPSTracker,
+    LatencyTracker,
     RemotePolicyConfig,
     TimedAction,
     TimedObservation,
@@ -50,6 +51,9 @@ class ClientConfig:
     chunk_size_threshold: float = 0.15
     observation_filter_epsilon: float = 0.05
     aggregation_fn: str = "weighted_average"
+    enable_rtc: bool = True
+    default_inference_delay: int = 14
+    rtc_execution_horizon: int = 18
     device: str = "cuda"
     features: dict[str, Any] = field(default_factory=dict)
     rename_map: dict[str, str] = field(default_factory=dict)
@@ -103,6 +107,11 @@ class AsyncInferenceClient:
         self._chunks_received_count = 0
         self._inference_in_flight = False
         self._last_action_timestamp = 0.0
+
+        # RTC (Real-Time Chunking) state
+        self.latency_tracker = LatencyTracker()
+        self._actions_executed_at_infer_start = 0
+        self._last_inference_delay = self.config.default_inference_delay
 
     def start(self) -> bool:
         """Connects transport, negotiates policy loading, and spawns the inference thread."""
@@ -160,13 +169,16 @@ class AsyncInferenceClient:
                 break
         self._inference_in_flight = False
         self._actions_executed_count = 0
+        self._actions_executed_at_infer_start = 0
         self._last_sent_state = None
         self.must_go.set()
         self.fps_tracker.reset()
+        self.latency_tracker.reset()
+        self._last_inference_delay = self.config.default_inference_delay
         self._log.info("Episode reset: queues cleared, timestep tracking re-initialized.")
 
-    def notify_phase_transition(self, keep_steps: int = 3) -> None:
-        """Truncates stale pre-transition action tail, keeping a small RTT bridge, and forces immediate send."""
+    def flush_action_queue(self, keep_steps: int = 2) -> None:
+        """Truncates stale actions in queue, keeping at most keep_steps for smooth bridging."""
         max_keep = max(0, int(keep_steps))
         with self.action_queue_lock:
             retained: Queue[TimedAction] = Queue()
@@ -176,7 +188,10 @@ class AsyncInferenceClient:
                 except Empty:
                     break
             self.action_queue = retained
+        self._log.info(f"Action queue flushed: retained {retained.qsize()} steps (keep_steps={max_keep}).")
 
+    def notify_phase_transition(self) -> None:
+        """Flushes pending observations and triggers immediate send on next cycle."""
         while not self._pending_obs_queue.empty():
             try:
                 self._pending_obs_queue.get_nowait()
@@ -185,15 +200,14 @@ class AsyncInferenceClient:
 
         self.must_go.set()
         self._last_sent_state = None
-        self._log.info(f"Phase transition notified: action queue truncated to {max_keep} steps, must_go set.")
+        self._log.info("Phase transition notified: pending observations flushed, must_go set.")
 
     def ready_to_send(self, current_state: np.ndarray) -> bool:
         """Determines if a new observation should be submitted to the policy server.
 
-        Zero backward-compatible implementation: current_state is strictly required.
-        Bypass Rule: If must_go is active or the action queue is empty, sending is permitted immediately.
-        Threshold & Filter: If queue ratio <= chunk_size_threshold (0.15), verifies joint displacement
-        exceeds observation_filter_epsilon (0.05 rad) relative to _last_sent_state.
+        Queue Starvation Immunity: Triggered when queue ratio <= chunk_size_threshold or
+        queue is depleted, guaranteeing continuous action replenishment without redundant
+        edge-side similarity blocking.
         """
         if self._inference_in_flight or not self._pending_obs_queue.empty():
             return False
@@ -211,14 +225,6 @@ class AsyncInferenceClient:
         if ratio > self.config.chunk_size_threshold:
             return False
 
-        if self._last_sent_state is not None and observations_similar(
-            current_state,
-            self._last_sent_state,
-            atol=self.config.observation_filter_epsilon,
-        ):
-            self._obs_filtered_count += 1
-            return False
-
         return True
 
     def submit_observation(self, raw_obs: dict[str, Any], timestamp: Optional[float] = None) -> bool:
@@ -231,11 +237,31 @@ class AsyncInferenceClient:
         if must_go_val:
             self.must_go.clear()
 
+        delay_steps = self.config.default_inference_delay
+        prev_chunk: Optional[np.ndarray] = None
+        if self.config.enable_rtc:
+            delay_steps = self.latency_tracker.compute_delay_steps(
+                dt=1.0 / max(1.0, self.config.fps),
+                default_steps=self.config.default_inference_delay,
+            )
+            with self.action_queue_lock:
+                if not self.action_queue.empty():
+                    unconsumed = [item.get_action() for item in list(self.action_queue.queue)]
+                    if unconsumed:
+                        prev_chunk = np.stack(
+                            unconsumed[: self.config.rtc_execution_horizon], axis=0
+                        ).astype(np.float32)
+
+            self._last_inference_delay = delay_steps
+            self._actions_executed_at_infer_start = self._actions_executed_count
+
         obs = TimedObservation(
             timestamp=ts,
             timestep=latest,
             observation=raw_obs,
             must_go=must_go_val,
+            inference_delay=delay_steps,
+            prev_chunk_left_over=prev_chunk,
         )
 
         if self._pending_obs_queue.full():
@@ -295,6 +321,14 @@ class AsyncInferenceClient:
         """Returns the last state vector successfully submitted for inference."""
         return self._last_sent_state
 
+    def get_last_inference_delay(self) -> int:
+        """Returns the most recent discrete inference delay steps."""
+        return self._last_inference_delay
+
+    def get_last_rtt_ms(self) -> float:
+        """Returns the round-trip latency in milliseconds."""
+        return self.transport.ping()
+
     def _inference_loop(self) -> None:
         """Continuous background worker loop processing pending frames over ZeroMQ."""
         self._log.info("Inference worker thread started.")
@@ -307,10 +341,19 @@ class AsyncInferenceClient:
             self._inference_in_flight = True
             try:
                 self._obs_sent_count += 1
+                t_start = time.perf_counter()
                 actions = self.transport.infer(obs)
+                rtt_s = time.perf_counter() - t_start
+                self.latency_tracker.add(rtt_s)
+
                 if actions:
                     self._last_action_timestamp = time.time()
-                    self._aggregate_actions(actions)
+                    if self.config.enable_rtc:
+                        consumed = self._actions_executed_count - self._actions_executed_at_infer_start
+                        real_delay = max(getattr(obs, "inference_delay", 0), consumed)
+                        self._merge_rtc_actions(actions, real_delay=real_delay)
+                    else:
+                        self._aggregate_actions(actions)
                     self.fps_tracker.calculate_fps_metrics(self._last_action_timestamp)
                 else:
                     self._log.warning("Inference request returned empty action chunk.")
@@ -319,6 +362,31 @@ class AsyncInferenceClient:
                 time.sleep(0.04)
             finally:
                 self._inference_in_flight = False
+
+    def _merge_rtc_actions(self, timed_actions: list[TimedAction], real_delay: int) -> None:
+        """Replace the queue with new actions (RTC mode).
+
+        Discards the first real_delay actions since they correspond to the time
+        spent during inference, when the robot was executing previous actions.
+        """
+        self._chunks_received_count += 1
+        chunk_len = len(timed_actions)
+        self.action_chunk_size = max(self.action_chunk_size, chunk_len)
+
+        clamped_delay = max(0, min(real_delay, chunk_len))
+        remaining_actions = timed_actions[clamped_delay:]
+
+        new_queue: Queue[TimedAction] = Queue()
+        for action in remaining_actions:
+            new_queue.put(action)
+
+        with self.action_queue_lock:
+            self.action_queue = new_queue
+
+        self._log.debug(
+            f"RTC actions merged: total={chunk_len}, real_delay={real_delay}, "
+            f"clamped_delay={clamped_delay}, queued={new_queue.qsize()}"
+        )
 
     def _aggregate_actions(self, timed_actions: list[TimedAction]) -> None:
         """Merge incoming actions into the queue — single-pass, LeRobot-style."""

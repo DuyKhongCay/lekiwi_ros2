@@ -50,7 +50,7 @@ class PolicyTransport(ABC):
 
     @abstractmethod
     def infer(self, observation: TimedObservation) -> Optional[list[TimedAction]]:
-        """Transmits observation frame to policy server and retrieves predicted action chunk."""
+        """Transmits observation frame (with RTC prefix and delay) to policy server and retrieves action chunk."""
         pass
 
     @abstractmethod

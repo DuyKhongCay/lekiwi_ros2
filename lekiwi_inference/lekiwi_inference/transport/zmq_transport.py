@@ -58,11 +58,21 @@ def serialize_observation(obs: TimedObservation) -> bytes:
         else:
             scalar_entries[key] = value
 
+    # RTC: Serialize prev_chunk_left_over into array_entries if present
+    prev_left_over = getattr(obs, "prev_chunk_left_over", None)
+    if prev_left_over is not None:
+        arr = np.ascontiguousarray(prev_left_over, dtype=np.float32)
+        array_entries.append(("_rtc_prev_chunk_left_over", arr.tobytes(), list(arr.shape), "float32"))
+
+    delay_steps = getattr(obs, "inference_delay", 0)
+    scalar_entries["inference_delay"] = int(delay_steps)
+
     header = {
         "type": "observation",
         "timestep": obs.get_timestep(),
         "timestamp": obs.get_timestamp(),
         "must_go": getattr(obs, "must_go", False),
+        "inference_delay": int(delay_steps),
         "arrays": {entry[0]: {"shape": entry[2], "dtype": entry[3]} for entry in array_entries},
         "scalars": scalar_entries,
     }
@@ -81,6 +91,7 @@ def deserialize_observation(data: bytes) -> TimedObservation:
 
     raw_obs: dict[str, Any] = dict(header.get("scalars", {}))
     offset = 0
+    prev_chunk_left_over = None
 
     for key, meta in header.get("arrays", {}).items():
         dtype_str = meta["dtype"]
@@ -95,13 +106,20 @@ def deserialize_observation(data: bytes) -> TimedObservation:
             nbytes = int(np.prod(shape)) * dt.itemsize
             arr = np.frombuffer(body[offset : offset + nbytes], dtype=dt).reshape(shape)
             offset += nbytes
-            raw_obs[key] = arr
+            if key == "_rtc_prev_chunk_left_over":
+                prev_chunk_left_over = arr.copy()
+            else:
+                raw_obs[key] = arr
+
+    inference_delay = header.get("inference_delay", raw_obs.pop("inference_delay", 0))
 
     return TimedObservation(
         timestamp=header.get("timestamp", 0.0),
         timestep=header.get("timestep", 0),
         observation=raw_obs,
         must_go=header.get("must_go", False),
+        inference_delay=inference_delay,
+        prev_chunk_left_over=prev_chunk_left_over,
     )
 
 
@@ -271,7 +289,17 @@ class ZmqPolicyTransport(PolicyTransport):
     def infer(self, observation: TimedObservation) -> Optional[list[TimedAction]]:
         """Sends binary observation frame and parses predicted action horizon chunk."""
         obs_bytes = serialize_observation(observation)
-        req = {"type": "infer", "data": obs_bytes}
+        req: dict[str, Any] = {
+            "type": "infer",
+            "data": obs_bytes,
+            "inference_delay": int(getattr(observation, "inference_delay", 0)),
+        }
+        prev_leftover = getattr(observation, "prev_chunk_left_over", None)
+        if prev_leftover is not None:
+            req["prev_chunk_left_over"] = (
+                prev_leftover.tolist() if isinstance(prev_leftover, np.ndarray) else prev_leftover
+            )
+
         t0 = time.perf_counter()
         resp = self._send_request(req)
         if resp is None:
