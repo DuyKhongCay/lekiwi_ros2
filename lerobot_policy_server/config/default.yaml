@@ -17,7 +17,7 @@ engine:
   warmup: true
   rtc:
     enabled: true
-    execution_horizon: 10
+    execution_horizon: 18
     max_guidance_weight: 10.0
     prefix_attention_schedule: "linear"
 

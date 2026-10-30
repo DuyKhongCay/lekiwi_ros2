@@ -51,7 +51,7 @@ class RTCServerConfig:
     """Real-Time Chunking (RTC) guidance configuration."""
 
     enabled: bool = False
-    execution_horizon: int = 10
+    execution_horizon: int = 18
     max_guidance_weight: float = 10.0
     prefix_attention_schedule: str = "linear"  # "linear", "exp", "ones", "zeros"
 

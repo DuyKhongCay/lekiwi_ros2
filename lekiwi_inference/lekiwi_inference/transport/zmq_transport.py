@@ -58,23 +58,26 @@ def serialize_observation(obs: TimedObservation) -> bytes:
         else:
             scalar_entries[key] = value
 
-    # RTC: Serialize prev_chunk_left_over into array_entries if present
+    # RTC: Serialize prev_chunk_left_over into canonical array_entries
     prev_left_over = getattr(obs, "prev_chunk_left_over", None)
     if prev_left_over is not None:
         arr = np.ascontiguousarray(prev_left_over, dtype=np.float32)
-        array_entries.append(("_rtc_prev_chunk_left_over", arr.tobytes(), list(arr.shape), "float32"))
+        array_entries.append(("prev_chunk_left_over", arr.tobytes(), list(arr.shape), "float32"))
 
-    delay_steps = getattr(obs, "inference_delay", 0)
-    scalar_entries["inference_delay"] = int(delay_steps)
+    delay_steps = getattr(obs, "inference_delay", None)
+    horizon_steps = getattr(obs, "execution_horizon", None)
 
     header = {
         "type": "observation",
         "timestep": obs.get_timestep(),
         "timestamp": obs.get_timestamp(),
         "must_go": getattr(obs, "must_go", False),
-        "inference_delay": int(delay_steps),
         "arrays": {entry[0]: {"shape": entry[2], "dtype": entry[3]} for entry in array_entries},
         "scalars": scalar_entries,
+        "rtc": {
+            "inference_delay": int(delay_steps) if delay_steps is not None else None,
+            "execution_horizon": int(horizon_steps) if horizon_steps is not None else None,
+        },
     }
 
     header_bytes = msgpack.packb(header, use_bin_type=True)
@@ -106,19 +109,23 @@ def deserialize_observation(data: bytes) -> TimedObservation:
             nbytes = int(np.prod(shape)) * dt.itemsize
             arr = np.frombuffer(body[offset : offset + nbytes], dtype=dt).reshape(shape)
             offset += nbytes
-            if key == "_rtc_prev_chunk_left_over":
+            if key == "prev_chunk_left_over":
                 prev_chunk_left_over = arr.copy()
             else:
                 raw_obs[key] = arr
 
-    inference_delay = header.get("inference_delay", raw_obs.pop("inference_delay", 0))
+    # Extract RTC metadata
+    rtc_meta = header.get("rtc", {})
+    inference_delay = rtc_meta.get("inference_delay")
+    execution_horizon = rtc_meta.get("execution_horizon")
 
     return TimedObservation(
-        timestamp=header.get("timestamp", 0.0),
-        timestep=header.get("timestep", 0),
+        timestamp=float(header.get("timestamp", 0.0)),
+        timestep=int(header.get("timestep", 0)),
         observation=raw_obs,
-        must_go=header.get("must_go", False),
-        inference_delay=inference_delay,
+        must_go=bool(header.get("must_go", False)),
+        inference_delay=int(inference_delay) if inference_delay is not None else 14,
+        execution_horizon=int(execution_horizon) if execution_horizon is not None else 18,
         prev_chunk_left_over=prev_chunk_left_over,
     )
 
@@ -292,13 +299,7 @@ class ZmqPolicyTransport(PolicyTransport):
         req: dict[str, Any] = {
             "type": "infer",
             "data": obs_bytes,
-            "inference_delay": int(getattr(observation, "inference_delay", 0)),
         }
-        prev_leftover = getattr(observation, "prev_chunk_left_over", None)
-        if prev_leftover is not None:
-            req["prev_chunk_left_over"] = (
-                prev_leftover.tolist() if isinstance(prev_leftover, np.ndarray) else prev_leftover
-            )
 
         t0 = time.perf_counter()
         resp = self._send_request(req)

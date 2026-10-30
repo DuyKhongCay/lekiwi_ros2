@@ -248,7 +248,7 @@ class InferenceEngine:
                 schedule_enum = getattr(RTCAttentionSchedule, schedule_str, RTCAttentionSchedule.LINEAR)
                 self.policy.config.rtc_config = RTCConfig(
                     enabled=True,
-                    execution_horizon=getattr(rtc_cfg, "execution_horizon", 10),
+                    execution_horizon=getattr(rtc_cfg, "execution_horizon", 18),
                     max_guidance_weight=getattr(rtc_cfg, "max_guidance_weight", 10.0),
                     prefix_attention_schedule=schedule_enum,
                 )
@@ -318,10 +318,6 @@ class InferenceEngine:
             return {}
 
         leftover_raw = getattr(obs_t, "prev_chunk_left_over", None)
-        if leftover_raw is None and hasattr(obs_t, "get_observation"):
-            raw_obs = obs_t.get_observation()
-            leftover_raw = raw_obs.get("prev_chunk_left_over") or raw_obs.get("rtc.prev_chunk_left_over")
-
         if leftover_raw is None:
             return {}
 
@@ -338,14 +334,7 @@ class InferenceEngine:
             normed_leftover = normed_leftover.unsqueeze(0)  # (1, T, action_dim)
 
         inference_delay = getattr(obs_t, "inference_delay", None)
-        if inference_delay is None and hasattr(obs_t, "get_observation"):
-            raw_obs = obs_t.get_observation()
-            inference_delay = raw_obs.get("inference_delay") or raw_obs.get("rtc.inference_delay")
-
         execution_horizon = getattr(obs_t, "execution_horizon", None)
-        if execution_horizon is None and hasattr(obs_t, "get_observation"):
-            raw_obs = obs_t.get_observation()
-            execution_horizon = raw_obs.get("execution_horizon") or raw_obs.get("rtc.execution_horizon")
 
         rtc_kwargs: dict[str, Any] = {"prev_chunk_left_over": normed_leftover}
         if inference_delay is not None:

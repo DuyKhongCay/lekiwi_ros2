@@ -43,7 +43,7 @@ def test_default_yaml_loading():
     assert config.engine.preload is True
     assert config.engine.warmup is True
     assert config.engine.rtc.enabled is True
-    assert config.engine.rtc.execution_horizon == 10
+    assert config.engine.rtc.execution_horizon == 18
     assert config.engine.rtc.max_guidance_weight == 10.0
     assert config.engine.rtc.prefix_attention_schedule == "linear"
 

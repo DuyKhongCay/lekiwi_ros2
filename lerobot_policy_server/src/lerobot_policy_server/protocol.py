@@ -53,31 +53,17 @@ def serialize_observation(obs: TimedObservation) -> bytes:
     array_entries: list[tuple[str, bytes, list[int], str]] = []
     scalar_entries: dict[str, Any] = {}
 
-    # Extract RTC fields from observation dict or attributes
+    # Canonical RTC parameters from TimedObservation attributes
     rtc_leftover = getattr(obs, "prev_chunk_left_over", None)
-    if rtc_leftover is None:
-        rtc_leftover = raw_obs.pop("prev_chunk_left_over", None)
-    if rtc_leftover is None:
-        rtc_leftover = raw_obs.pop("rtc.prev_chunk_left_over", None)
-
     rtc_delay = getattr(obs, "inference_delay", None)
-    if rtc_delay is None:
-        rtc_delay = raw_obs.pop("inference_delay", None)
-    if rtc_delay is None:
-        rtc_delay = raw_obs.pop("rtc.inference_delay", None)
-
     rtc_horizon = getattr(obs, "execution_horizon", None)
-    if rtc_horizon is None:
-        rtc_horizon = raw_obs.pop("execution_horizon", None)
-    if rtc_horizon is None:
-        rtc_horizon = raw_obs.pop("rtc.execution_horizon", None)
 
     if rtc_leftover is not None:
         if hasattr(rtc_leftover, "detach"):
             rtc_leftover = rtc_leftover.detach().cpu().numpy()
         elif not isinstance(rtc_leftover, np.ndarray):
             rtc_leftover = np.asarray(rtc_leftover, dtype=np.float32)
-        raw_obs["rtc.prev_chunk_left_over"] = rtc_leftover
+        raw_obs["prev_chunk_left_over"] = np.ascontiguousarray(rtc_leftover, dtype=np.float32)
 
     for key, value in raw_obs.items():
         if isinstance(value, np.ndarray):
@@ -145,18 +131,11 @@ def deserialize_observation(data: bytes) -> TimedObservation:
             offset += nbytes
             raw_obs[key] = arr
 
-    # Extract RTC metadata
+    # Extract canonical RTC metadata (Zero backward-compatibility fallback)
     rtc_meta = header.get("rtc", {})
-    prev_leftover = raw_obs.pop("rtc.prev_chunk_left_over", None)
-    if prev_leftover is None:
-        prev_leftover = raw_obs.pop("prev_chunk_left_over", None)
+    prev_leftover = raw_obs.pop("prev_chunk_left_over", None)
     inference_delay = rtc_meta.get("inference_delay")
-    if inference_delay is None:
-        inference_delay = raw_obs.pop("inference_delay", None)
-
     execution_horizon = rtc_meta.get("execution_horizon")
-    if execution_horizon is None:
-        execution_horizon = raw_obs.pop("execution_horizon", None)
 
     obs = TimedObservation(
         timestamp=header.get("timestamp", 0.0),

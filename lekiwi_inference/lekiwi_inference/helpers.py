@@ -65,6 +65,7 @@ class TimedObservation(TimedData):
     observation: dict[str, Any]
     must_go: bool = False
     inference_delay: int = 14
+    execution_horizon: int = 18
     prev_chunk_left_over: Optional[np.ndarray] = None
 
     def get_observation(self) -> dict[str, Any]:

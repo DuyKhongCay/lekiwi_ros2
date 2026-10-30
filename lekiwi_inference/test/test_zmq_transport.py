@@ -76,6 +76,7 @@ def test_observation_roundtrip_with_rtc():
         observation={"observation.state": state},
         must_go=False,
         inference_delay=14,
+        execution_horizon=18,
         prev_chunk_left_over=leftover,
     )
 
@@ -86,9 +87,93 @@ def test_observation_roundtrip_with_rtc():
     assert decoded.get_timestamp() == pytest.approx(999.0)
     assert decoded.get_timestep() == 10
     assert decoded.inference_delay == 14
+    assert decoded.execution_horizon == 18
     assert decoded.prev_chunk_left_over is not None
     assert decoded.prev_chunk_left_over.shape == (18, 6)
     assert np.allclose(decoded.prev_chunk_left_over, leftover)
+
+
+def test_cross_package_wire_interoperability():
+    """Validates byte-level wire interoperability between lekiwi_inference and lerobot_policy_server."""
+    import importlib.util
+    import sys
+    import types
+
+    # Mock server dependencies
+    lerobot_mod = types.ModuleType("lerobot")
+    async_inf_mod = types.ModuleType("lerobot.async_inference")
+    helpers_mod = types.ModuleType("lerobot.async_inference.helpers")
+
+    class ServerTimedObservation:
+        def __init__(self, timestamp, timestep, observation, must_go):
+            self.timestamp = timestamp
+            self.timestep = timestep
+            self.observation = observation
+            self.must_go = must_go
+
+        def get_timestamp(self):
+            return self.timestamp
+
+        def get_timestep(self):
+            return self.timestep
+
+        def get_observation(self):
+            return self.observation
+
+    helpers_mod.TimedObservation = ServerTimedObservation
+    helpers_mod.TimedAction = type("TimedAction", (), {})
+    helpers_mod.RemotePolicyConfig = type("RemotePolicyConfig", (), {})
+    async_inf_mod.helpers = helpers_mod
+    lerobot_mod.async_inference = async_inf_mod
+    sys.modules["lerobot"] = lerobot_mod
+    sys.modules["lerobot.async_inference"] = async_inf_mod
+    sys.modules["lerobot.async_inference.helpers"] = helpers_mod
+
+    spec = importlib.util.spec_from_file_location(
+        "server_protocol",
+        "/root/docker_ws/lekiwi_ros2/lerobot_policy_server/src/lerobot_policy_server/protocol.py",
+    )
+    server_proto = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(server_proto)
+
+    leftover = np.random.randn(18, 6).astype(np.float32)
+    state = np.random.randn(6).astype(np.float32)
+    client_obs = TimedObservation(
+        timestamp=123.456,
+        timestep=42,
+        observation={"observation.state": state},
+        must_go=True,
+        inference_delay=13,
+        execution_horizon=18,
+        prev_chunk_left_over=leftover,
+    )
+
+    # 1. Client serializes -> Server deserializes
+    wire_bytes = serialize_observation(client_obs)
+    server_obs = server_proto.deserialize_observation(wire_bytes)
+
+    assert server_obs.get_timestamp() == pytest.approx(123.456)
+    assert server_obs.get_timestep() == 42
+    assert server_obs.must_go is True
+    assert server_obs.inference_delay == 13
+    assert server_obs.execution_horizon == 18
+    assert server_obs.prev_chunk_left_over is not None
+    assert np.allclose(server_obs.prev_chunk_left_over, leftover)
+    assert "prev_chunk_left_over" not in server_obs.get_observation()
+    assert "rtc.prev_chunk_left_over" not in server_obs.get_observation()
+
+    # 2. Server serializes -> Client deserializes
+    wire_bytes_from_server = server_proto.serialize_observation(server_obs)
+    client_decoded = deserialize_observation(wire_bytes_from_server)
+
+    assert client_decoded.get_timestamp() == pytest.approx(123.456)
+    assert client_decoded.get_timestep() == 42
+    assert client_decoded.must_go is True
+    assert client_decoded.inference_delay == 13
+    assert client_decoded.execution_horizon == 18
+    assert client_decoded.prev_chunk_left_over is not None
+    assert np.allclose(client_decoded.prev_chunk_left_over, leftover)
+    assert "prev_chunk_left_over" not in client_decoded.get_observation()
 
 
 def test_actions_roundtrip():

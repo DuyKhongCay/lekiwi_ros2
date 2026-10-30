@@ -261,6 +261,7 @@ class AsyncInferenceClient:
             observation=raw_obs,
             must_go=must_go_val,
             inference_delay=delay_steps,
+            execution_horizon=self.config.rtc_execution_horizon,
             prev_chunk_left_over=prev_chunk,
         )
 
