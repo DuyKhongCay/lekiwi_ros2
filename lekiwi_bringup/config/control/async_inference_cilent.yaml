@@ -7,22 +7,43 @@
 async_ros2_inference_client:
   ros__parameters:
     # Remote ZMQ Policy Server endpoint
-    server_address: "192.168.1.9:8090"
+    server_address: "192.168.1.8:8090"
 
-    # Model Configuration (LeRobot Dataset v3.0 SSOT - SmolVLA)
+    # Model Configuration (LeRobot Dataset v3.0 SSOT - SmolVLA Checkpoint 010000)
     policy_type: "smolvla"
-    repo_id: "DuyKhongCay/smolvla_lekiwi_chess"
-    actions_per_chunk: 40
-    chunk_size_threshold: 0.15
-    observation_filter_epsilon: 0.05
+    repo_id: "/home/duykhongcay/lerobot_ws/lekiwi_chess_smolvla/checkpoints/010000/pretrained_model"
+    actions_per_chunk: 30
+    chunk_size_threshold: 0.60
+    observation_filter_epsilon: 0.01
 
-    # Rate and Freshness Parameters (25 Hz)
+    # Frames and Spatial Guidance
+    tool_frame: "gripperframe"
+    base_frame: "base_footprint"
+    delta_reach_threshold_m: 0.0475
+    xy_reach_threshold_m: 0.035
+    z_reach_threshold_m: 0.08
+    dwell_time_s: 0.24
+    gripper_close_threshold: 0.15
+    delta_deadband_m: 0.012
+    landmarks:
+      stow: [0.0704, -0.1882, 0.1757]
+      clear_left: [-0.0029, 0.1435, 0.1702]
+      clear_right: [-0.0027, -0.1451, 0.1633]
+
+    # Rate and Freshness Parameters
     control_rate: 25.0
-    max_age_s: 0.04
+    actuation_rate: 50.0
+    ema_alpha: 0.75
+    max_age_s: 0.08
 
     # Smoothing & Auto-start
     aggregation_fn: "weighted_average"
     auto_start: true
+
+    # Real-Time Chunking (RTC) Configuration
+    enable_rtc: true
+    default_inference_delay: 14
+    rtc_execution_horizon: 18
 
     # Camera & Joint Topics (3 compressed streams 384x384 @ 25Hz)
     wrist_cam_topic: "/cameras/usb_wrist/image_raw/compressed"
@@ -35,7 +56,7 @@ async_ros2_inference_client:
     # Network Transport Timeouts
     transport:
       config_timeout_s: 60.0
-      infer_timeout_ms: 500
+      infer_timeout_ms: 1200
 
     # Stream Integrity Watchdog
     stream_timeout_s: 2.0
@@ -46,6 +67,6 @@ async_ros2_inference_client:
       min_actions: 50             # Minimum executed policy actions before checking stow (2.0s @ 25Hz)
       stow_tolerance_rad: 0.20    # Max joint error to calibrated named_poses.stow
       settle_steps: 25            # Steps robot must remain settled at stow (25 @ 25Hz = 1.0s)
-      starvation_timeout_s: 2.0   # Stream starvation timeout
+      starvation_timeout_s: 4.0   # Stream starvation timeout
 
 

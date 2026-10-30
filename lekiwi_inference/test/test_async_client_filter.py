@@ -92,8 +92,8 @@ def test_must_go_bypass():
     assert client.ready_to_send(dummy_state) is True
 
 
-def test_queue_threshold_and_observation_filtering():
-    """Validates the 0.15 threshold gating and 0.05 rad similarity filtering."""
+def test_queue_threshold_replenishment_guarantee():
+    """Validates that ratio <= chunk_size_threshold guarantees sending without similarity stalling."""
     cfg = ClientConfig(actions_per_chunk=40, chunk_size_threshold=0.15, observation_filter_epsilon=0.05)
     client = AsyncInferenceClient(MockTransport(), cfg)
     client.must_go.clear()
@@ -110,8 +110,7 @@ def test_queue_threshold_and_observation_filtering():
         client.pop_action()
     assert client.get_queue_size() == 5
 
-    # First send with no _last_sent_state: ready_to_send returns True
-    assert client.get_last_sent_state() is None
+    # Gating check: ready_to_send returns True to replenish queue
     assert client.ready_to_send(state1) is True
 
     # Simulate submit_observation
@@ -120,19 +119,21 @@ def test_queue_threshold_and_observation_filtering():
     # Simulate worker consuming the pending observation
     client._pending_obs_queue.get_nowait()
 
-    # Second check with stationary state (zero movement): should be filtered out
-    initial_filtered = client.get_obs_filtered_count()
-    assert client.ready_to_send(state1) is False
-    assert client.get_obs_filtered_count() == initial_filtered + 1
+    # Even if stationary, as long as queue is at or below threshold, replenishment is guaranteed
+    assert client.ready_to_send(state1) is True
 
-    # Check with small perturbation (0.02 rad < 0.05 rad epsilon): should also be filtered
-    close_state = np.array([0.02, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
-    assert client.ready_to_send(close_state) is False
-    assert client.get_obs_filtered_count() == initial_filtered + 2
 
-    # Check with significant displacement (0.08 rad > 0.05 rad epsilon): should pass
-    moved_state = np.array([0.08, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
-    assert client.ready_to_send(moved_state) is True
+def test_flush_action_queue():
+    """Verify flush_action_queue retains exactly keep_steps actions."""
+    cfg = ClientConfig()
+    client = AsyncInferenceClient(MockTransport(), cfg)
+
+    for i in range(10):
+        client.action_queue.put(TimedAction(timestep=i, timestamp=time.time(), action=np.zeros(6)))
+
+    assert client.get_queue_size() == 10
+    client.flush_action_queue(keep_steps=2)
+    assert client.get_queue_size() == 2
 
 
 def test_reset_episode_and_transition_clears_last_sent_state():
@@ -152,6 +153,6 @@ def test_reset_episode_and_transition_clears_last_sent_state():
     client.submit_observation({"observation.state": state})
     assert client.get_last_sent_state() is not None
 
-    client.notify_phase_transition(keep_steps=2)
+    client.notify_phase_transition()
     assert client.get_last_sent_state() is None
     assert client.must_go.is_set()
