@@ -83,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
                 RemotePolicyConfig(
                     policy_type=config.engine.policy_type,
                     pretrained_name_or_path=config.engine.pretrained_name_or_path,
+                    lerobot_features={},
                     actions_per_chunk=config.engine.actions_per_chunk,
                     device=config.engine.device,
                 )

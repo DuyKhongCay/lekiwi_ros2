@@ -31,16 +31,21 @@ def test_default_yaml_loading():
     # Server config defaults
     assert config.server.host == "0.0.0.0"
     assert config.server.port == 8090
-    assert config.server.fps == 30
-    assert abs(config.server.environment_dt - (1.0 / 30.0)) < 1e-6
+    assert config.server.fps == 25
+    assert abs(config.server.environment_dt - (1.0 / 25.0)) < 1e-6
 
     # Engine config defaults
-    assert config.engine.fps == 30
+    assert config.engine.fps == 25
     assert config.engine.policy_type == "smolvla"
-    assert "lekiwi_chess_smolvla" in config.engine.pretrained_name_or_path
+    assert "010000/pretrained_model" in config.engine.pretrained_name_or_path
     assert config.engine.actions_per_chunk == 30
     assert config.engine.device in ("cuda", "cpu")
-    assert config.engine.preload is False
+    assert config.engine.preload is True
+    assert config.engine.warmup is True
+    assert config.engine.rtc.enabled is True
+    assert config.engine.rtc.execution_horizon == 10
+    assert config.engine.rtc.max_guidance_weight == 10.0
+    assert config.engine.rtc.prefix_attention_schedule == "linear"
 
     # Top-level defaults
     assert config.log_level == "INFO"

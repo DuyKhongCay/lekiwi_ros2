@@ -16,7 +16,6 @@ from chess_rosbag_to_lerobot.bag_reader import (
 )
 from chess_rosbag_to_lerobot.chess_spatial_bridge import (
     parse_chess_task,
-    resolve_episode_spatial_plan,
     sort_episodes,
 )
 from chess_rosbag_to_lerobot.config import load_config
@@ -59,7 +58,6 @@ def main():
         custom = get_custom_data(ep_dir)
         task_str = custom.get("task", cfg.task)
         parsed = parse_chess_task(task_str)
-        plan = resolve_episode_spatial_plan(task_str, cfg.chessboard)
         print(
             f"[{idx + 1}] {ep_dir.name}: Task={parsed.task_type.value}, "
             f"Piece={parsed.piece_type}, Color={parsed.piece_color}"

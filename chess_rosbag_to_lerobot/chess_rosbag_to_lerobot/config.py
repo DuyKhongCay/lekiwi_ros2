@@ -30,17 +30,20 @@ class LandmarksConfig:
     clear_right: List[float] = field(default_factory=lambda: [-0.0027, -0.1451, 0.1633])
 
 
-@dataclass
-class ChessboardConfig:
-    """Chessboard geometry, landmark targets, and nominal transform seeding."""
-    board_frame: str = "chessboard_frame"
-    base_frame: str = "base_footprint"
-    map_frame: str = "map"
-    square_size_m: float = 0.037
-    grasp_clearance_z_m: float = 0.035
-    landmarks: LandmarksConfig = field(default_factory=LandmarksConfig)
-    chessboard_pose_in_map: Optional[List[float]] = field(
-        default_factory=lambda: [0.0, 0.0, 0.006, 0.0, 0.0, 0.0]
+@dataclass(frozen=True)
+class ToolTransformConfig:
+    """Calibrated static transform from parent link to child TCP frame."""
+    parent_frame: str = "gripper"
+    child_frame: str = "gripperframe"
+    pose_6d: List[float] = field(
+        default_factory=lambda: [
+            -0.0079,
+            -0.000218214,
+            -0.103424,
+            -1.57079632679,
+            0.0,
+            -1.57079632679,
+        ]
     )
 
 
@@ -64,7 +67,8 @@ class Config:
     reference_topic: str
     default_max_age_s: float
     task: str
-    chessboard: ChessboardConfig = field(default_factory=ChessboardConfig)
+    landmarks: LandmarksConfig = field(default_factory=LandmarksConfig)
+    tool_transform: ToolTransformConfig = field(default_factory=ToolTransformConfig)
     teleop_filter: TeleopFilterConfig = field(default_factory=TeleopFilterConfig)
     features: List[FeatureSpec] = field(default_factory=list)
     include_task_types: List[str] = field(
@@ -84,9 +88,8 @@ def load_config(path: Path | str) -> Config:
     if not isinstance(data, dict):
         raise ValueError(f"Config root must be a mapping, got {type(data)}")
 
-    # Chessboard section
-    cb_data = data.get("chessboard", {})
-    lm_data = cb_data.get("landmarks", {})
+    # Landmarks section (top-level)
+    lm_data = data.get("landmarks", {})
     default_lm = LandmarksConfig()
     landmarks = LandmarksConfig(
         stow=[float(x) for x in lm_data.get("stow", default_lm.stow)],
@@ -94,17 +97,14 @@ def load_config(path: Path | str) -> Config:
         clear_right=[float(x) for x in lm_data.get("clear_right", default_lm.clear_right)],
     )
 
-    raw_cb_pose = cb_data.get("chessboard_pose_in_map")
-    cb_pose_in_map = [float(x) for x in raw_cb_pose] if raw_cb_pose is not None else [0.0, 0.0, 0.006, 0.0, 0.0, 0.0]
-
-    cb_cfg = ChessboardConfig(
-        board_frame=str(cb_data.get("board_frame", "chessboard_frame")),
-        base_frame=str(cb_data.get("base_frame", "base_footprint")),
-        map_frame=str(cb_data.get("map_frame", "map")),
-        square_size_m=float(cb_data.get("square_size_m", 0.037)),
-        grasp_clearance_z_m=float(cb_data.get("grasp_clearance_z_m", 0.035)),
-        landmarks=landmarks,
-        chessboard_pose_in_map=cb_pose_in_map,
+    # Tool Transform section
+    tt_data = data.get("tool_transform", {})
+    default_tt = ToolTransformConfig()
+    raw_pose = tt_data.get("pose_6d", default_tt.pose_6d)
+    tool_transform = ToolTransformConfig(
+        parent_frame=str(tt_data.get("parent_frame", default_tt.parent_frame)),
+        child_frame=str(tt_data.get("child_frame", default_tt.child_frame)),
+        pose_6d=[float(x) for x in raw_pose],
     )
 
     # Teleop Filter section
@@ -150,7 +150,8 @@ def load_config(path: Path | str) -> Config:
         reference_topic=str(data.get("reference_topic", "")),
         default_max_age_s=float(data.get("default_max_age_s", 0.08)),
         task=str(data.get("task", "Chess pick and place")),
-        chessboard=cb_cfg,
+        landmarks=landmarks,
+        tool_transform=tool_transform,
         teleop_filter=teleop_filter,
         features=features,
         include_task_types=include_task_types,

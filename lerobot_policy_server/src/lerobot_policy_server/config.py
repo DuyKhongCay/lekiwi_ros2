@@ -38,7 +38,7 @@ class ZmqServerConfig:
 
     host: str = "0.0.0.0"
     port: int = 8090
-    fps: int = 30
+    fps: int = 25
 
     @property
     def environment_dt(self) -> float:
@@ -47,15 +47,29 @@ class ZmqServerConfig:
 
 
 @dataclass
+class RTCServerConfig:
+    """Real-Time Chunking (RTC) guidance configuration."""
+
+    enabled: bool = False
+    execution_horizon: int = 10
+    max_guidance_weight: float = 10.0
+    prefix_attention_schedule: str = "linear"  # "linear", "exp", "ones", "zeros"
+
+
+@dataclass
 class InferenceEngineConfig:
     """Configuration parameters for the policy inference pipeline."""
 
-    fps: int = 30
+    fps: int = 25
     policy_type: str = "smolvla"
-    pretrained_name_or_path: str = "/home/duykhongcay/lerobot_ws/lekiwi_chess_smolvla"
+    pretrained_name_or_path: str = (
+        "/home/duykhongcay/lerobot_ws/lekiwi_chess_smolvla/checkpoints/010000/pretrained_model"
+    )
     actions_per_chunk: int = 30
     device: str = "cuda"
-    preload: bool = False
+    preload: bool = True
+    warmup: bool = True
+    rtc: RTCServerConfig = field(default_factory=RTCServerConfig)
 
     @property
     def environment_dt(self) -> float:

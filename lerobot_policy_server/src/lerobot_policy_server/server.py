@@ -90,7 +90,6 @@ class ZmqPolicyServer:
 
         if msg_type == "handshake":
             logger.info("Handshake received from client.")
-            self.engine.clear_session()
             rep_socket.send(msgpack.packb({"status": "ok"}, use_bin_type=True))
 
         elif msg_type == "policy_config":
@@ -99,8 +98,22 @@ class ZmqPolicyServer:
                 if not isinstance(cfg_payload, (bytes, bytearray)):
                     cfg_payload = msgpack.packb(cfg_payload, use_bin_type=True)
                 config = deserialize_policy_config(cfg_payload)
-                self.engine.load_policy(config)
-                logger.info("Policy config successfully applied.")
+
+                # Reuse warm preloaded policy if matching requested configuration
+                if (
+                    self.engine.policy is not None
+                    and self.engine.policy_config is not None
+                    and self.engine.policy_config.policy_type == config.policy_type
+                    and self.engine.policy_config.pretrained_name_or_path == config.pretrained_name_or_path
+                ):
+                    logger.info(
+                        "Policy '%s' is already loaded and warmed up. Reusing session.",
+                        config.pretrained_name_or_path,
+                    )
+                else:
+                    self.engine.load_policy(config)
+                    logger.info("Policy config successfully applied.")
+
                 rep_socket.send(msgpack.packb({"status": "ok"}, use_bin_type=True))
             except Exception as exc:
                 logger.error("Error applying policy config: %s", exc, exc_info=True)

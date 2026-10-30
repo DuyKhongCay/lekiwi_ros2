@@ -22,21 +22,18 @@ def test_load_config_lekiwi_chess():
     assert cfg.default_max_age_s == 0.05
     assert cfg.include_task_types == ["move", "clear", "pick", "place"]
 
-    # Chessboard check
-    assert cfg.chessboard.board_frame == "chessboard_frame"
-    assert cfg.chessboard.base_frame == "base_footprint"
-    assert cfg.chessboard.map_frame == "map"
-    assert cfg.chessboard.chessboard_pose_in_map == [0.0, 0.0, 0.006, 0.0, 0.0, 0.0]
-    assert cfg.chessboard.square_size_m == 0.0475
-    assert cfg.chessboard.grasp_clearance_z_m == 0.035
-
     # Landmarks check (XYZ in base_footprint)
-    assert len(cfg.chessboard.landmarks.stow) == 3
-    assert len(cfg.chessboard.landmarks.clear_left) == 3
-    assert len(cfg.chessboard.landmarks.clear_right) == 3
+    assert len(cfg.landmarks.stow) == 3
+    assert len(cfg.landmarks.clear_left) == 3
+    assert len(cfg.landmarks.clear_right) == 3
+
+    # Tool transform check
+    assert cfg.tool_transform.parent_frame == "gripper"
+    assert cfg.tool_transform.child_frame == "gripperframe"
+    assert len(cfg.tool_transform.pose_6d) == 6
 
     # Teleop filter check
-    assert cfg.teleop_filter.tool_frame == "gripper"
+    assert cfg.teleop_filter.tool_frame == "gripperframe"
     assert cfg.teleop_filter.base_frame == "base_footprint"
     assert cfg.teleop_filter.z_threshold_m == 0.15
     assert cfg.teleop_filter.dwell_time_s == 0.5
