@@ -563,13 +563,13 @@ def test_import_fen_service_rejected_during_motion(ros_context):
         assert node.mission_state == MacroMissionState.CHECKING_REACHABILITY
 
         # Empty FEN should be rejected immediately
-        req_empty_fen = SetFen.Request(fen="", robot_color="")
+        req_empty_fen = SetFen.Request(fen="")
         resp_empty_fen = SetFen.Response()
         res_empty_fen = node._handle_import_fen_service(req_empty_fen, resp_empty_fen)
         assert not res_empty_fen.success
         assert "Missing required FEN" in res_empty_fen.message
 
-        req = SetFen.Request(fen="8/8/8/4k3/8/8/4K3/8 w - - 0 1", robot_color="b")
+        req = SetFen.Request(fen="8/8/8/4k3/8/8/4K3/8 w - - 0 1")
         resp = SetFen.Response()
         res = node._handle_import_fen_service(req, resp)
 
@@ -585,6 +585,8 @@ def test_import_fen_service_accepted_and_sync_workflow(ros_context):
     from rclpy.task import Future
 
     node = ChessMissionOrchestrator()
+    node.game_status_handler.set_robot_color("b")
+    node._health_supervisor.set_robot_color("b")
     try:
         node._on_nav_ready(Bool(data=True))
         assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
@@ -602,7 +604,6 @@ def test_import_fen_service_accepted_and_sync_workflow(ros_context):
                     success=True,
                     canonical_fen=target_fen,
                     active_color="w",
-                    robot_color="b",
                     message="OK",
                 )
             )
@@ -610,13 +611,12 @@ def test_import_fen_service_accepted_and_sync_workflow(ros_context):
 
         node._chess_set_fen_client.call_async = mock_call_async
 
-        req = SetFen.Request(fen=target_fen, robot_color="black")
+        req = SetFen.Request(fen=target_fen)
         resp = SetFen.Response()
         res = node._handle_import_fen_service(req, resp)
 
         assert res.success
         assert res.canonical_fen == target_fen
-        assert res.robot_color == "b"
         assert node.mission_state == MacroMissionState.AWAITING_BOARD_SYNC
         assert node.perception_context == PerceptionContext.BOARD_STATE_SCAN
         assert node._execute_collection_task_server is not None
@@ -660,7 +660,6 @@ def test_import_fen_service_accepted_during_waiting_for_tf_ready(ros_context):
                     success=True,
                     canonical_fen=target_fen,
                     active_color="w",
-                    robot_color="b",
                     message="OK",
                 )
             )
@@ -668,7 +667,7 @@ def test_import_fen_service_accepted_during_waiting_for_tf_ready(ros_context):
 
         node._chess_set_fen_client.call_async = mock_call_async
 
-        req = SetFen.Request(fen=target_fen, robot_color="")
+        req = SetFen.Request(fen=target_fen)
         resp = SetFen.Response()
         res = node._handle_import_fen_service(req, resp)
 
@@ -939,6 +938,8 @@ def test_action_server_lifecycle_and_service_timeout_board_sync(ros_context):
     from rclpy.action import GoalResponse
 
     node = ChessMissionOrchestrator()
+    node.game_status_handler.set_robot_color("b")
+    node._health_supervisor.set_robot_color("b")
     try:
         # Check service_timeout_sec parameter loaded
         assert hasattr(node.parameters, "service_timeout_sec")
@@ -965,14 +966,13 @@ def test_action_server_lifecycle_and_service_timeout_board_sync(ros_context):
                     success=True,
                     canonical_fen=target_fen,
                     active_color="w",
-                    robot_color="b",
                     message="OK",
                 )
             )
             return fut
 
         node._chess_set_fen_client.call_async = mock_call_async
-        req = SetFen.Request(fen=target_fen, robot_color="black")
+        req = SetFen.Request(fen=target_fen)
         resp = SetFen.Response()
         res = node._handle_import_fen_service(req, resp)
         assert res.success

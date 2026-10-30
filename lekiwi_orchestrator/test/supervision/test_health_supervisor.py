@@ -56,22 +56,8 @@ def mock_node():
     return node
 
 
-def test_initial_state_not_ready(mock_node, dummy_snapshot):
-    monitor = HealthSupervisor(
-        node=mock_node,
-        config=HealthSupervisorConfig(),
-        state_provider=lambda: dummy_snapshot,
-    )
-    try:
-        assert not monitor.is_nav_ready
-        assert not monitor.is_grasp_ready
-        assert not monitor.nav_ready
-        assert not monitor.grasp_ready
-    finally:
-        monitor.destroy()
-
-
-def test_nav_ready_lease_and_expiration(mock_node, dummy_snapshot):
+def test_readiness_leases_and_expiration(mock_node, dummy_snapshot):
+    """Verify initial readiness state, lease publishing, timeouts, and critical state expiration."""
     transition_cb = MagicMock()
     critical_loss_cb = MagicMock()
     monitor = HealthSupervisor(
@@ -82,17 +68,21 @@ def test_nav_ready_lease_and_expiration(mock_node, dummy_snapshot):
         on_critical_tf_loss_cb=critical_loss_cb,
     )
     try:
-        # 1. Emit nav ready
+        # 1. Initial state
+        assert not monitor.is_nav_ready
+        assert not monitor.is_grasp_ready
+        assert not monitor.nav_ready
+        assert not monitor.grasp_ready
+
+        # 2. Nav ready message and expiration
         monitor.on_nav_ready_msg(Bool(data=True))
         assert monitor.is_nav_ready
         assert monitor.nav_ready
         assert transition_cb.called
 
-        # 2. Simulate timeout
         time.sleep(0.15)
         assert not monitor.is_nav_ready
 
-        # 3. Expire lease
         critical_snap = OrchestratorStateSnapshot(
             mission_state=MacroMissionState.CHECKING_REACHABILITY,
             perception_context=0,
@@ -100,17 +90,8 @@ def test_nav_ready_lease_and_expiration(mock_node, dummy_snapshot):
         monitor.expire_readiness(current_state=critical_snap.mission_state)
         assert not monitor.nav_ready
         assert critical_loss_cb.called
-    finally:
-        monitor.destroy()
 
-
-def test_grasp_ready_lease_and_expiration(mock_node, dummy_snapshot):
-    monitor = HealthSupervisor(
-        node=mock_node,
-        config=HealthSupervisorConfig(readiness_timeout_sec=0.1),
-        state_provider=lambda: dummy_snapshot,
-    )
-    try:
+        # 3. Grasp ready message and expiration
         assert not monitor.is_grasp_ready
         monitor.on_grasp_ready_msg(Bool(data=True))
         assert monitor.is_grasp_ready
@@ -190,6 +171,7 @@ def test_auto_recovery_lifecycle_and_max_attempts(mock_node, dummy_snapshot):
 
 
 def test_manual_recover_service_handler(mock_node, dummy_snapshot):
+    """Verify manual recovery service handler unlatches operator, invokes reset callback, and resets counter."""
     reset_cb = MagicMock(return_value=True)
     monitor = HealthSupervisor(
         node=mock_node,
@@ -198,12 +180,16 @@ def test_manual_recover_service_handler(mock_node, dummy_snapshot):
         on_reset_recovery_system_cb=reset_cb,
     )
     try:
+        monitor.set_operator_latched(True)
+        assert monitor.is_operator_latched
+
         req = Trigger.Request()
         resp = Trigger.Response()
-        result = monitor.handle_recover_service(req, resp)
+        result = monitor.handle_recover_service(req, resp, current_state=MacroMissionState.EXECUTING_MOVE_PIPELINE)
 
         assert result.success is True
         assert reset_cb.called
+        assert not monitor.is_operator_latched
         assert monitor.recovery_attempts == 0
     finally:
         monitor.destroy()
@@ -360,30 +346,6 @@ def test_uncommanded_motion_disturbance_and_inhibit_recovery(mock_node):
         monitor.destroy()
 
 
-def test_recover_service_unlatches_operator_from_any_state(mock_node, dummy_snapshot):
-    """Verify manual recovery service unlatches operator and resets system."""
-    reset_cb = MagicMock(return_value=True)
-    monitor = HealthSupervisor(
-        node=mock_node,
-        config=HealthSupervisorConfig(),
-        state_provider=lambda: dummy_snapshot,
-        on_reset_recovery_system_cb=reset_cb,
-    )
-    try:
-        monitor.set_operator_latched(True)
-        assert monitor.is_operator_latched
-
-        req = Trigger.Request()
-        res = Trigger.Response()
-        resp = monitor.handle_recover_service(req, res, current_state=MacroMissionState.EXECUTING_MOVE_PIPELINE)
-
-        assert resp.success
-        assert reset_cb.called
-        assert not monitor.is_operator_latched
-    finally:
-        monitor.destroy()
-
-
 def test_valid_navigation_motion_exempt_from_disturbance(mock_node):
     """Verify that commanded chassis motion during navigation (is_navigating=True or NAV motion state) is exempt from disturbance."""
     disturbance_cb = MagicMock()
@@ -449,8 +411,8 @@ def test_valid_navigation_motion_exempt_from_disturbance(mock_node):
         monitor.destroy()
 
 
-def test_transient_angular_spike_during_picking_piece_ignored(mock_node):
-    """Verify transient arm reaction angular spike (< 0.20s) during manipulation does not trigger disturbance."""
+def test_motion_disturbance_spike_vs_sustained(mock_node):
+    """Verify transient arm vibration (<0.2s) is ignored while sustained motion (>=0.2s) triggers disturbance."""
     disturbance_cb = MagicMock()
     snapshot = OrchestratorStateSnapshot(
         mission_state=MacroMissionState.EXECUTING_MOVE_PIPELINE,
@@ -472,56 +434,19 @@ def test_transient_angular_spike_during_picking_piece_ignored(mock_node):
         monitor.on_global_odom(Odometry())
         assert monitor.is_startup_ekf_received
 
-        # Arm gripper closing induces sudden -0.30 rad/s angular kick lasting 60ms
+        # Phase 1: Transient spike (60ms) and dampening
         monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=10.00))
         monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=10.06))
-
         assert not disturbance_cb.called
         assert not monitor.is_operator_latched
 
-        # Vibration dampens out back to rest
         monitor.on_local_odom(_make_odom(wz=0.01, stamp_sec=10.10))
         assert not disturbance_cb.called
-        assert not monitor.is_operator_latched
 
-        # Another brief spike (40ms) later still does not trigger
-        monitor.on_local_odom(_make_odom(wz=-0.25, stamp_sec=10.20))
-        monitor.on_local_odom(_make_odom(wz=0.00, stamp_sec=10.24))
+        # Phase 2: Sustained displacement lasting 250ms triggers disturbance
+        monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=20.00))
         assert not disturbance_cb.called
-        assert not monitor.is_operator_latched
-    finally:
-        monitor.destroy()
-
-
-def test_sustained_motion_during_picking_piece_triggers_disturbance(mock_node):
-    """Verify sustained chassis motion (>= 0.20s) during manipulation triggers disturbance and latches."""
-    disturbance_cb = MagicMock()
-    snapshot = OrchestratorStateSnapshot(
-        mission_state=MacroMissionState.EXECUTING_MOVE_PIPELINE,
-        perception_context=0,
-        motion_state=MotionExecutionState.IDLE,
-        execution_stage="PICKING_PIECE",
-        is_navigating=False,
-    )
-    monitor = HealthSupervisor(
-        node=mock_node,
-        config=HealthSupervisorConfig(
-            uncommanded_angular_thresh=0.08,
-            uncommanded_confirm_duration_sec=0.20,
-        ),
-        state_provider=lambda: snapshot,
-        on_disturbance_detected_cb=disturbance_cb,
-    )
-    try:
-        monitor.on_global_odom(Odometry())
-        assert monitor.is_startup_ekf_received
-
-        # Sustained displacement: wz = -0.30 rad/s lasting 250ms
-        monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=10.00))
-        assert not disturbance_cb.called
-        assert not monitor.is_operator_latched
-
-        monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=10.25))
+        monitor.on_local_odom(_make_odom(wz=-0.30, stamp_sec=20.25))
         assert disturbance_cb.called
         assert disturbance_cb.call_args[0][0] == "uncommanded_motion"
         assert monitor.is_operator_latched

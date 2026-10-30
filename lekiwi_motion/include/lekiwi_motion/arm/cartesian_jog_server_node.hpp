@@ -143,6 +143,7 @@ private:
 
   // Callback Groups & ROS Interfaces
   rclcpp::CallbackGroup::SharedPtr cb_group_services_;
+  rclcpp::CallbackGroup::SharedPtr cb_group_timer_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_vel_;
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr pub_trajectory_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_forward_cmd_;
@@ -155,16 +156,14 @@ private:
 
   // Kinematic & Control Components (Jogger)
   mutable std::mutex kinematics_mutex_;
-  std::shared_ptr<workspace::SO101AnalyticalSolver> ik_solver_{nullptr};
-  workspace::KinematicsModel kinematics_model_{};
   std::unique_ptr<CartesianJogger> jogger_{nullptr};
   JointMotionFilter<5> motion_filter_{0.85};
 
   // State Tracking
   mutable std::mutex state_mutex_;
-  rclcpp::Time last_twist_time_{0, 0, RCL_ROS_TIME};
+  std::optional<rclcpp::Time> last_twist_time_{std::nullopt};
   geometry_msgs::msg::Twist latest_twist_{};
-  bool active_jogging_{false};
+  std::atomic<bool> active_jogging_{false};
 };
 
 }  // namespace lekiwi_motion::arm

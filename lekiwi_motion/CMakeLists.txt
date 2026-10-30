@@ -79,7 +79,7 @@ target_link_libraries(workspace_checker_component
   ${geometry_msgs_TARGETS}
   ${visualization_msgs_TARGETS}
   tf2_ros::tf2_ros
-  ${tf2_geometry_msgs_TARGETS}
+  tf2_geometry_msgs::tf2_geometry_msgs
   ${lekiwi_interfaces_TARGETS}
 )
 rclcpp_components_register_node(workspace_checker_component
@@ -232,7 +232,7 @@ target_link_libraries(system_readiness_component
   ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
   tf2_ros::tf2_ros
-  ${tf2_geometry_msgs_TARGETS}
+  tf2_geometry_msgs::tf2_geometry_msgs
 )
 rclcpp_components_register_node(system_readiness_component
   PLUGIN "lekiwi_motion::SystemReadinessNode"
@@ -512,7 +512,14 @@ ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(
   Eigen3
   urdf
+  rclcpp
+  rclcpp_action
+  tf2_ros
+  tf2_geometry_msgs
+  control_msgs
   geometry_msgs
+  std_msgs
+  std_srvs
   trajectory_msgs
   sensor_msgs
   visualization_msgs

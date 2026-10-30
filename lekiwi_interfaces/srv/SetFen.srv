@@ -3,12 +3,10 @@
 
 # Request: Standard 6-field FEN or 1-field piece placement string
 string fen
-string robot_color                 # Robot player color: "w", "b", "white", "black"
 ---
 # Response
 bool success
 string canonical_fen
 string active_color
-string robot_color                 # Normalized robot color: "w" or "b"
 string message
 

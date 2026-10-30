@@ -15,7 +15,6 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
-#include <rosbag2_cpp/writer.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
@@ -27,8 +26,10 @@
 #include <lekiwi_interfaces/srv/check_move_feasibility.hpp>
 #include <lekiwi_interfaces/srv/set_fen.hpp>
 
-#include "chess_episode_recorder/collection_planner_domain.hpp"
-#include "chess_episode_recorder/recorder_diagnostics.hpp"
+#include "chess_episode_recorder/campaign_quota_domain.hpp"
+#include "chess_episode_recorder/move_planning_domain.hpp"
+#include "chess_episode_recorder/dataset_storage.hpp"
+#include "chess_episode_recorder/campaign_conductor.hpp"
 
 namespace chess_episode_recorder
 {
@@ -49,11 +50,12 @@ public:
   bool discard_episode();
 
   [[nodiscard]] EpisodeState get_state() const { return current_state_.load(); }
-  [[nodiscard]] CampaignState get_campaign_state() const { return campaign_state_.load(); }
+  [[nodiscard]] CampaignState get_campaign_state() const;
   [[nodiscard]] bool is_action_server_connected() const;
-  [[nodiscard]] bool is_board_synced() const { return is_board_synced_.load(); }
+  [[nodiscard]] bool is_board_synced() const;
   [[nodiscard]] bool has_active_goal() const;
-  [[nodiscard]] const domain::QuotaTracker &get_quota_tracker() const { return *quota_tracker_; }
+  [[nodiscard]] const CampaignConductor * get_conductor() const { return conductor_.get(); }
+  [[nodiscard]] domain::SessionState get_session_state() const;
 
   // Diagnostics callbacks & snapshot
   void produce_recorder_diagnostics(diagnostic_updater::DiagnosticStatusWrapper &stat);
@@ -80,22 +82,8 @@ private:
     const std::string &topic_type,
     std::shared_ptr<const rclcpp::SerializedMessage> msg);
 
-  uint32_t scan_next_episode_index(const std::filesystem::path &dir);
-  std::filesystem::path make_episode_dir(uint32_t index);
-  bool write_episode_info_yaml(
-    const std::filesystem::path &episode_dir,
-    uint32_t episode_index,
-    double duration_sec,
-    const rclcpp::Time &start_time,
-    const rclcpp::Time &end_time);
-
-  // Campaign Conductor Logic
+  // Campaign Conductor Logic & Dispatch
   bool send_fen_sync_request();
-  uint32_t calculate_expected_episodes(const domain::MoveCandidate &cand) const;
-  bool query_move_feasibility_sync(
-    const domain::MoveCandidate &cand,
-    const chess::Board &board,
-    uint8_t &out_plan_type);
   void check_action_server_and_dispatch();
   void on_game_status_received(const lekiwi_interfaces::msg::ChessGameStatus::ConstSharedPtr msg);
 
@@ -139,32 +127,23 @@ private:
   std::string check_feasibility_srv_name_{"/workspace/check_move_feasibility"};
   std::string execute_collection_task_action_name_{"/orchestrator/execute_collection_task"};
 
-  // Episode state & storage
+  // Storage & Writer
+  storage::McapEpisodeWriter writer_;
   std::atomic<EpisodeState> current_state_{EpisodeState::IDLE};
-  std::atomic<CampaignState> campaign_state_{CampaignState::DISABLED};
-  std::atomic<bool> is_board_synced_{false};
-  std::atomic<bool> fen_sync_acknowledged_{false};
-  std::atomic<bool> fen_sync_in_flight_{false};
-  std::atomic<bool> last_feasibility_query_succeeded_{true};
-  std::string target_session_fen_;
   uint32_t current_episode_index_{0};
   std::filesystem::path current_episode_dir_;
   rclcpp::Time episode_start_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time episode_stop_time_{0, 0, RCL_ROS_TIME};
 
-  std::unique_ptr<rosbag2_cpp::Writer> writer_;
-  std::mutex writer_mutex_;
-
   // Topic discovery and subscription maps
   std::map<std::string, std::string> topic_type_map_;
   std::map<std::string, std::shared_ptr<rclcpp::GenericSubscription>> subscriptions_;
-  std::map<std::string, uint64_t> message_counts_;
   rclcpp::TimerBase::SharedPtr discovery_timer_;
 
   // Feedback Context
   rclcpp::Subscription<lekiwi_interfaces::action::ExecuteChessMove_FeedbackMessage>::SharedPtr feedback_sub_;
   rclcpp::Subscription<lekiwi_interfaces::msg::ChessGameStatus>::SharedPtr game_status_sub_;
-  std::mutex instruction_mutex_;
+  mutable std::mutex instruction_mutex_;
   std::string current_instruction_{""};
 
   // ROS 2 Trigger services
@@ -173,24 +152,17 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_discard_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_campaign_status_;
 
-  // Campaign Conductor Domain & Clients
-  std::unique_ptr<domain::QuotaTracker> quota_tracker_;
-  std::unique_ptr<domain::FenSynthesizer> fen_synthesizer_;
-  std::unique_ptr<domain::MoveCandidateSelector> move_selector_;
-  mutable std::recursive_mutex domain_mutex_;
-
-  // Active Move Tracking (for multi-episode atomic chess moves)
-  std::optional<domain::MoveCandidate> active_move_candidate_;
-  uint32_t active_move_expected_episodes_{0};
-  uint32_t active_move_recorded_episodes_{0};
+  // Campaign Conductor
+  std::unique_ptr<CampaignConductor> conductor_;
 
   rclcpp::CallbackGroup::SharedPtr cb_group_clients_;
   rclcpp::Client<lekiwi_interfaces::srv::SetFen>::SharedPtr import_fen_client_;
   rclcpp::Client<lekiwi_interfaces::srv::CheckMoveFeasibility>::SharedPtr check_feasibility_client_;
   rclcpp_action::Client<ExecuteCollectionTask>::SharedPtr action_client_;
   std::shared_ptr<GoalHandleCollectionTask> active_goal_handle_;
-  std::mutex goal_mutex_;
+  mutable std::mutex goal_mutex_;
 
+  std::atomic<bool> fen_sync_in_flight_{false};
   rclcpp::TimerBase::SharedPtr action_server_check_timer_;
   rclcpp::TimerBase::SharedPtr defer_dispatch_timer_;
   std::atomic<bool> is_running_{true};

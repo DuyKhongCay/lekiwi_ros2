@@ -134,10 +134,7 @@ namespace lekiwi_chess_master::domain
     }
 
     // 2. Validate placement token syntax (8 ranks, each summing to 8 squares)
-    auto space_idx = fen_str.find(' ');
-    std::string_view placement = (space_idx != std::string_view::npos)
-                                     ? fen_str.substr(0, space_idx)
-                                     : fen_str;
+    std::string_view placement = extract_placement_token(fen_str);
 
     int rank_count = 1;
     int current_rank_squares = 0;

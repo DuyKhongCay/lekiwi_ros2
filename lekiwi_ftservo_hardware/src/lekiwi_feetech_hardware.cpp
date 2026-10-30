@@ -8,10 +8,13 @@
 
 #include "lekiwi_ftservo_hardware/lekiwi_feetech_hardware.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/rclcpp.hpp>
+
+#include "lekiwi_ftservo_hardware/joint_codec.hpp"
 
 namespace lekiwi_ftservo_hardware
 {
@@ -296,12 +299,21 @@ namespace lekiwi_ftservo_hardware
 
       if (joint.velocity_command)
       {
-        const double cmd = get_command(joint.command_interface_name);
-        worker_->push_command(i, std::isfinite(cmd) ? cmd : 0.0);
+        double cmd = get_command(joint.command_interface_name);
+        if (!std::isfinite(cmd))
+        {
+          cmd = 0.0;
+        }
+        else if (joint.max_velocity_radians_per_second > 0.0)
+        {
+          cmd = std::clamp(cmd, -joint.max_velocity_radians_per_second, joint.max_velocity_radians_per_second);
+        }
+        set_command(joint.command_interface_name, cmd);
+        worker_->push_command(i, cmd);
       }
       else
       {
-        // Position-controlled joint: Anti-Jerk & Lead-Through synchronization
+        // Position-controlled joint: Anti-Jerk & Lead-Through synchronization with physical limit clamping
         const bool torque_enabled = (t_cmd >= 0.5);
         if (!torque_enabled || just_enabled_torque)
         {
@@ -310,8 +322,11 @@ namespace lekiwi_ftservo_hardware
           const double current_pos = get_state(joint.position_state_name);
           if (std::isfinite(current_pos))
           {
-            set_command(joint.command_interface_name, current_pos);
-            worker_->push_command(i, current_pos);
+            const double safe_pos = joint.has_position_limits
+                ? clamp_position_radians(current_pos, joint.min_position_radians, joint.max_position_radians)
+                : current_pos;
+            set_command(joint.command_interface_name, safe_pos);
+            worker_->push_command(i, safe_pos);
           }
         }
         else
@@ -319,7 +334,11 @@ namespace lekiwi_ftservo_hardware
           const double cmd = get_command(joint.command_interface_name);
           if (std::isfinite(cmd))
           {
-            worker_->push_command(i, cmd);
+            const double clamped_cmd = joint.has_position_limits
+                ? clamp_position_radians(cmd, joint.min_position_radians, joint.max_position_radians)
+                : cmd;
+            set_command(joint.command_interface_name, clamped_cmd);
+            worker_->push_command(i, clamped_cmd);
           }
         }
       }

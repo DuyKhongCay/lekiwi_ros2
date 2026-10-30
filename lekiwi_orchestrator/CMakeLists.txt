@@ -15,6 +15,7 @@ install(
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   # Core layer tests
+  ament_add_pytest_test(test_chess_move_goal test/core/test_chess_move_goal.py)
   ament_add_pytest_test(test_fsm test/core/test_fsm.py)
 
   # Planning layer tests

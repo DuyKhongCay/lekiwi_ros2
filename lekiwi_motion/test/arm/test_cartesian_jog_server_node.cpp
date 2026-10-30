@@ -67,21 +67,6 @@ protected:
   }
 };
 
-TEST_F(CartesianJogServerTest, NodeCreationAndParameterLoading)
-{
-  rclcpp::NodeOptions opts;
-  opts.append_parameter_override("publish_rate_hz", 60.0);
-  opts.append_parameter_override("base_frame", "base_footprint");
-  opts.append_parameter_override("tip_frame", "gripperframe");
-  opts.append_parameter_override("mock_execution", true);
-
-  auto node = std::make_shared<CartesianJogServerNode>(opts);
-  ASSERT_NE(node, nullptr);
-  EXPECT_FALSE(node->is_kinematics_initialized());
-  EXPECT_FALSE(node->is_active());
-  EXPECT_FALSE(node->is_executing_trajectory());
-}
-
 TEST_F(CartesianJogServerTest, KinematicsInitializationAndBumplessJogging)
 {
   const std::string urdf_xml = load_test_urdf();
@@ -166,17 +151,31 @@ TEST_F(CartesianJogServerTest, KinematicsInitializationAndBumplessJogging)
   EXPECT_FALSE(jog_node->is_active());
 }
 
-TEST_F(CartesianJogServerTest, InvalidControllerModeThrowsFailFast)
+TEST_F(CartesianJogServerTest, InvalidParametersThrowFailFastOnConstruction)
 {
-  rclcpp::NodeOptions opts;
-  opts.append_parameter_override("controller_mode", "non_existent_mode");
+  // 1. Invalid controller mode
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("controller_mode", "non_existent_mode");
+    EXPECT_THROW(
+      {
+        auto node = std::make_shared<CartesianJogServerNode>(opts);
+        (void)node;
+      },
+      std::invalid_argument);
+  }
 
-  EXPECT_THROW(
-    {
-      auto node = std::make_shared<CartesianJogServerNode>(opts);
-      (void)node;
-    },
-    std::invalid_argument);
+  // 2. Invalid URDF parameter
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("robot_description", "<invalid>broken urdf xml</invalid>");
+    EXPECT_THROW(
+      {
+        auto node = std::make_shared<CartesianJogServerNode>(opts);
+        (void)node;
+      },
+      std::runtime_error);
+  }
 }
 
 TEST_F(CartesianJogServerTest, ForwardControllerModeJogging)
@@ -256,25 +255,19 @@ TEST_F(CartesianJogServerTest, ForwardControllerModeJogging)
   EXPECT_NEAR(last_cmd.data.back(), 0.42, 1e-4);
 }
 
-TEST_F(CartesianJogServerTest, InvalidUrdfParameterThrowsFailFast)
-{
-  rclcpp::NodeOptions opts;
-  opts.append_parameter_override("robot_description", "<invalid>broken urdf xml</invalid>");
-
-  EXPECT_THROW(
-    {
-      auto node = std::make_shared<CartesianJogServerNode>(opts);
-      (void)node;
-    },
-    std::runtime_error);
-}
-
 TEST_F(CartesianJogServerTest, InvalidUrdfFromTopicEntersFailSafeState)
 {
   rclcpp::NodeOptions opts;
-  auto jog_node = std::make_shared<CartesianJogServerNode>(opts);
+  opts.append_parameter_override("publish_rate_hz", 60.0);
+  opts.append_parameter_override("base_frame", "base_footprint");
+  opts.append_parameter_override("tip_frame", "gripperframe");
+  opts.append_parameter_override("mock_execution", true);
 
+  auto jog_node = std::make_shared<CartesianJogServerNode>(opts);
+  ASSERT_NE(jog_node, nullptr);
   EXPECT_FALSE(jog_node->is_kinematics_initialized());
+  EXPECT_FALSE(jog_node->is_active());
+  EXPECT_FALSE(jog_node->is_executing_trajectory());
   EXPECT_FALSE(jog_node->has_kinematics_failed());
 
   auto test_node = std::make_shared<rclcpp::Node>("test_desc_pub_node");

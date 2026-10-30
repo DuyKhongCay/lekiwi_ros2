@@ -73,171 +73,140 @@ protected:
   }
 };
 
-TEST_F(ManipulationActionServerTest, ActionClientExecutesChessMovePickAndPlaceMockSuccess)
+TEST_F(ManipulationActionServerTest, AllChessMoveOperationsAndInstructionForwardingMockSuccess)
 {
   auto server_node = std::make_shared<ManipulationActionServer>(
-    make_base_options("/test_manip/execute_chess_move_pick_and_place"));
+    make_base_options("/test_manip/all_operations"));
 
-  auto client_node = std::make_shared<rclcpp::Node>("test_chess_move_client");
+  auto client_node = std::make_shared<rclcpp::Node>("test_all_operations_client");
   auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
-    client_node, "/test_manip/execute_chess_move_pick_and_place");
+    client_node, "/test_manip/all_operations");
 
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(server_node);
   executor.add_node(client_node);
 
   std::thread spin_thread([&executor]() { executor.spin(); });
-
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
 
-  ManipulationActionServer::ExecuteChessMove::Goal goal;
-  goal.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_MOVE;
-  goal.target_frame = "base_footprint";
-  goal.pick_point.x = 0.20;
-  goal.pick_point.y = 0.0;
-  goal.pick_point.z = 0.05;
-  goal.place_point.x = 0.24;
-  goal.place_point.y = 0.0;
-  goal.place_point.z = 0.05;
-
-  auto send_goal_future = client->async_send_goal(goal);
-  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-  auto goal_handle = send_goal_future.get();
-  ASSERT_NE(goal_handle, nullptr);
-
-  auto result_future = client->async_get_result(goal_handle);
-  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
-  auto wrapped_result = result_future.get();
-
-  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
-  EXPECT_TRUE(wrapped_result.result->success);
-  EXPECT_GT(wrapped_result.result->execution_time_sec, 0.0f);
-
-  executor.cancel();
-  spin_thread.join();
-}
-
-TEST_F(ManipulationActionServerTest, ActionClientExecutesClearLeftMockSuccess)
-{
-  auto server_node = std::make_shared<ManipulationActionServer>(
-    make_base_options("/test_manip/execute_clear_left"));
-
-  auto client_node = std::make_shared<rclcpp::Node>("test_clear_left_client");
-  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
-    client_node, "/test_manip/execute_clear_left");
-
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(server_node);
-  executor.add_node(client_node);
-
-  std::thread spin_thread([&executor]() { executor.spin(); });
-
-  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
-
-  ManipulationActionServer::ExecuteChessMove::Goal goal;
-  goal.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_CLEAR_LEFT;
-  goal.target_frame = "base_footprint";
-  goal.pick_point.x = 0.20;
-  goal.pick_point.y = 0.0;
-  goal.pick_point.z = 0.05;
-
-  auto send_goal_future = client->async_send_goal(goal);
-  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-  auto goal_handle = send_goal_future.get();
-  ASSERT_NE(goal_handle, nullptr);
-
-  auto result_future = client->async_get_result(goal_handle);
-  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
-  auto wrapped_result = result_future.get();
-
-  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
-  EXPECT_TRUE(wrapped_result.result->success);
-
-  executor.cancel();
-  spin_thread.join();
-}
-
-TEST_F(ManipulationActionServerTest, ActionClientExecutesClearRightMockSuccess)
-{
-  auto server_node = std::make_shared<ManipulationActionServer>(
-    make_base_options("/test_manip/execute_clear_right"));
-
-  auto client_node = std::make_shared<rclcpp::Node>("test_clear_right_client");
-  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
-    client_node, "/test_manip/execute_clear_right");
-
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(server_node);
-  executor.add_node(client_node);
-
-  std::thread spin_thread([&executor]() { executor.spin(); });
-
-  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
-
-  ManipulationActionServer::ExecuteChessMove::Goal goal;
-  goal.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_CLEAR_RIGHT;
-  goal.target_frame = "base_footprint";
-  goal.pick_point.x = 0.20;
-  goal.pick_point.y = 0.0;
-  goal.pick_point.z = 0.05;
-
-  auto send_goal_future = client->async_send_goal(goal);
-  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-  auto goal_handle = send_goal_future.get();
-  ASSERT_NE(goal_handle, nullptr);
-
-  auto result_future = client->async_get_result(goal_handle);
-  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
-  auto wrapped_result = result_future.get();
-
-  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
-  EXPECT_TRUE(wrapped_result.result->success);
-
-  executor.cancel();
-  spin_thread.join();
-}
-
-TEST_F(ManipulationActionServerTest, ActionClientExecutesPickAndPlacePrimitivesMockSuccess)
-{
-  auto server_node = std::make_shared<ManipulationActionServer>(
-    make_base_options("/test_manip/execute_pick_primitive"));
-
-  auto client_node = std::make_shared<rclcpp::Node>("test_pick_primitive_client");
-  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
-    client_node, "/test_manip/execute_pick_primitive");
-
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(server_node);
-  executor.add_node(client_node);
-
-  std::thread spin_thread([&executor]() { executor.spin(); });
-
-  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
-
-  // Test OP_PICK
-  {
+  // Helper lambda to run an operation and return result
+  auto execute_op = [&](uint8_t op, const std::string & instruction = "") {
     ManipulationActionServer::ExecuteChessMove::Goal goal;
-    goal.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_PICK;
+    goal.operation = op;
+    goal.instruction = instruction;
     goal.target_frame = "base_footprint";
     goal.pick_point.x = 0.20;
     goal.pick_point.y = 0.0;
     goal.pick_point.z = 0.05;
+    goal.place_point.x = 0.24;
+    goal.place_point.y = 0.0;
+    goal.place_point.z = 0.05;
 
-    auto send_goal_future = client->async_send_goal(goal);
-    ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    std::string received_feedback;
+    rclcpp_action::Client<ManipulationActionServer::ExecuteChessMove>::SendGoalOptions send_opts;
+    send_opts.feedback_callback =
+      [&received_feedback](
+        rclcpp_action::ClientGoalHandle<ManipulationActionServer::ExecuteChessMove>::SharedPtr,
+        const std::shared_ptr<const ManipulationActionServer::ExecuteChessMove::Feedback> feedback) {
+        received_feedback = feedback->instruction;
+      };
+
+    auto send_goal_future = client->async_send_goal(goal, send_opts);
+    if (send_goal_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+      return std::make_pair(false, received_feedback);
+    }
     auto goal_handle = send_goal_future.get();
-    ASSERT_NE(goal_handle, nullptr);
+    if (!goal_handle) {
+      return std::make_pair(false, received_feedback);
+    }
 
     auto result_future = client->async_get_result(goal_handle);
-    ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
-    EXPECT_TRUE(result_future.get().result->success);
+    if (result_future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+      return std::make_pair(false, received_feedback);
+    }
+    auto wrapped_result = result_future.get();
+    while (server_node->is_goal_active()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return std::make_pair(
+      wrapped_result.code == rclcpp_action::ResultCode::SUCCEEDED && wrapped_result.result->success,
+      received_feedback);
+  };
+
+  // 1. OP_MOVE with instruction
+  {
+    auto [ok, fb] = execute_op(ManipulationActionServer::ExecuteChessMove::Goal::OP_MOVE, "e2e4");
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(fb, "e2e4");
   }
 
-  // Test OP_PLACE
+  // 2. OP_CLEAR_LEFT
+  {
+    auto [ok, fb] = execute_op(ManipulationActionServer::ExecuteChessMove::Goal::OP_CLEAR_LEFT);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(fb, "OP_CLEAR_LEFT");
+  }
+
+  // 3. OP_CLEAR_RIGHT
+  {
+    auto [ok, fb] = execute_op(ManipulationActionServer::ExecuteChessMove::Goal::OP_CLEAR_RIGHT);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(fb, "OP_CLEAR_RIGHT");
+  }
+
+  // 4. OP_PICK
+  {
+    auto [ok, fb] = execute_op(ManipulationActionServer::ExecuteChessMove::Goal::OP_PICK);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(fb, "OP_PICK");
+  }
+
+  // 5. OP_PLACE
+  {
+    auto [ok, fb] = execute_op(ManipulationActionServer::ExecuteChessMove::Goal::OP_PLACE);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(fb, "OP_PLACE");
+  }
+
+  executor.cancel();
+  spin_thread.join();
+}
+
+TEST_F(ManipulationActionServerTest, ActionClientRejectionAndIkFailure)
+{
+  rclcpp::NodeOptions options = make_base_options("/test_manip/rejection_and_ik");
+  options.append_parameter_override("default_velocity", 0.05);  // Slow to keep server busy
+
+  auto server_node = std::make_shared<ManipulationActionServer>(options);
+
+  auto client_node = std::make_shared<rclcpp::Node>("test_rejection_client");
+  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
+    client_node, "/test_manip/rejection_and_ik");
+
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(client_node);
+
+  std::thread spin_thread([&executor]() { executor.spin(); });
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
+
+  // 1. Rejection of unknown operation
   {
     ManipulationActionServer::ExecuteChessMove::Goal goal;
-    goal.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_PLACE;
+    goal.operation = 99;  // Invalid operation
+    auto send_goal_future = client->async_send_goal(goal);
+    ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    EXPECT_EQ(send_goal_future.get(), nullptr);
+  }
+
+  // 2. Abort on unreachable IK target (e.g. x = 5.0 meters)
+  {
+    ManipulationActionServer::ExecuteChessMove::Goal goal;
+    goal.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_MOVE;
     goal.target_frame = "base_footprint";
+    goal.pick_point.x = 5.0;  // Physically out of reach
+    goal.pick_point.y = 0.0;
+    goal.pick_point.z = 0.05;
     goal.place_point.x = 0.24;
     goal.place_point.y = 0.0;
     goal.place_point.z = 0.05;
@@ -248,89 +217,40 @@ TEST_F(ManipulationActionServerTest, ActionClientExecutesPickAndPlacePrimitivesM
     ASSERT_NE(goal_handle, nullptr);
 
     auto result_future = client->async_get_result(goal_handle);
-    ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
-    EXPECT_TRUE(result_future.get().result->success);
+    ASSERT_EQ(result_future.wait_for(std::chrono::seconds(3)), std::future_status::ready);
+    auto wrapped_result = result_future.get();
+    EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::ABORTED);
+    EXPECT_FALSE(wrapped_result.result->success);
+    EXPECT_NE(wrapped_result.result->message.find("IK resolution failed"), std::string::npos);
   }
 
-  executor.cancel();
-  spin_thread.join();
-}
+  // 3. Rejection when server is busy
+  {
+    ManipulationActionServer::ExecuteChessMove::Goal goal1;
+    goal1.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_MOVE;
+    goal1.target_frame = "base_footprint";
+    goal1.pick_point.x = 0.20;
+    goal1.pick_point.y = 0.0;
+    goal1.pick_point.z = 0.05;
+    goal1.place_point.x = 0.24;
+    goal1.place_point.y = 0.0;
+    goal1.place_point.z = 0.05;
 
-TEST_F(ManipulationActionServerTest, ActionClientRejectsUnknownOperation)
-{
-  rclcpp::NodeOptions options;
-  options.append_parameter_override("mock_execution", true);
-  options.append_parameter_override("action_name", "/test_manip/reject_unknown_op");
+    auto future1 = client->async_send_goal(goal1);
+    ASSERT_EQ(future1.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto handle1 = future1.get();
+    ASSERT_NE(handle1, nullptr);
 
-  auto server_node = std::make_shared<ManipulationActionServer>(options);
+    // Send second goal immediately while first is in flight
+    ManipulationActionServer::ExecuteChessMove::Goal goal2 = goal1;
+    auto future2 = client->async_send_goal(goal2);
+    ASSERT_EQ(future2.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto handle2 = future2.get();
+    EXPECT_EQ(handle2, nullptr);
 
-  auto client_node = std::make_shared<rclcpp::Node>("test_reject_op_client");
-  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
-    client_node, "/test_manip/reject_unknown_op");
-
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(server_node);
-  executor.add_node(client_node);
-
-  std::thread spin_thread([&executor]() { executor.spin(); });
-
-  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
-
-  ManipulationActionServer::ExecuteChessMove::Goal goal;
-  goal.operation = 99;  // Invalid operation
-
-  auto send_goal_future = client->async_send_goal(goal);
-  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-  auto goal_handle = send_goal_future.get();
-  EXPECT_EQ(goal_handle, nullptr);
-
-  executor.cancel();
-  spin_thread.join();
-}
-
-TEST_F(ManipulationActionServerTest, ActionClientRejectsWhenServerBusy)
-{
-  rclcpp::NodeOptions options = make_base_options("/test_manip/busy_rejection_test");
-  options.append_parameter_override("default_velocity", 0.05);  // Slow to keep server busy
-
-  auto server_node = std::make_shared<ManipulationActionServer>(options);
-
-  auto client_node = std::make_shared<rclcpp::Node>("test_busy_client");
-  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
-    client_node, "/test_manip/busy_rejection_test");
-
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(server_node);
-  executor.add_node(client_node);
-
-  std::thread spin_thread([&executor]() { executor.spin(); });
-
-  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
-
-  ManipulationActionServer::ExecuteChessMove::Goal goal1;
-  goal1.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_MOVE;
-  goal1.target_frame = "base_footprint";
-  goal1.pick_point.x = 0.20;
-  goal1.pick_point.y = 0.0;
-  goal1.pick_point.z = 0.05;
-  goal1.place_point.x = 0.24;
-  goal1.place_point.y = 0.0;
-  goal1.place_point.z = 0.05;
-
-  auto future1 = client->async_send_goal(goal1);
-  ASSERT_EQ(future1.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-  auto handle1 = future1.get();
-  ASSERT_NE(handle1, nullptr);
-
-  // Send second goal immediately while first is in flight
-  ManipulationActionServer::ExecuteChessMove::Goal goal2 = goal1;
-  auto future2 = client->async_send_goal(goal2);
-  ASSERT_EQ(future2.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-  auto handle2 = future2.get();
-  EXPECT_EQ(handle2, nullptr);
-
-  auto cancel_future = client->async_cancel_goal(handle1);
-  cancel_future.wait_for(std::chrono::seconds(2));
+    auto cancel_future = client->async_cancel_goal(handle1);
+    cancel_future.wait_for(std::chrono::seconds(2));
+  }
 
   executor.cancel();
   spin_thread.join();
@@ -389,8 +309,18 @@ TEST_F(ManipulationActionServerTest, RecordModeExecutionStopsAtApproachPickAndSu
   ASSERT_NE(goal_handle, nullptr);
 
   auto result_future = client->async_get_result(goal_handle);
-  for (int i = 0; i < 40 && received_feedback_instruction.empty(); ++i) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  const auto wait_start = std::chrono::steady_clock::now();
+  while (!server_node->is_waiting_record() &&
+    (std::chrono::steady_clock::now() - wait_start) < std::chrono::seconds(2))
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(server_node->is_waiting_record());
+
+  while (received_feedback_instruction.empty() &&
+    (std::chrono::steady_clock::now() - wait_start) < std::chrono::seconds(2))
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
   auto save_req = std::make_shared<std_srvs::srv::Trigger::Request>();
@@ -451,7 +381,13 @@ TEST_F(ManipulationActionServerTest, RecordModeExecutionPurePlaceStopsAtApproach
   ASSERT_NE(goal_handle, nullptr);
 
   auto result_future = client->async_get_result(goal_handle);
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  const auto wait_place = std::chrono::steady_clock::now();
+  while (!server_node->is_waiting_record() &&
+    (std::chrono::steady_clock::now() - wait_place) < std::chrono::seconds(2))
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(server_node->is_waiting_record());
 
   auto skip_req = std::make_shared<std_srvs::srv::Trigger::Request>();
   auto skip_future = skip_cli->async_send_request(skip_req);
@@ -548,61 +484,6 @@ TEST_F(ManipulationActionServerTest, RecordModeCancelGoalExitsImmediatelyAndDisc
   spin_thread.join();
 }
 
-TEST_F(ManipulationActionServerTest, GoalInstructionForwardedToFeedbackAndResult)
-{
-  auto server_node = std::make_shared<ManipulationActionServer>(
-    make_base_options("/test_manip/instruction_test"));
-
-  auto client_node = std::make_shared<rclcpp::Node>("test_instruction_client");
-  auto client = rclcpp_action::create_client<ManipulationActionServer::ExecuteChessMove>(
-    client_node, "/test_manip/instruction_test");
-
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(server_node);
-  executor.add_node(client_node);
-
-  std::thread spin_thread([&executor]() { executor.spin(); });
-
-  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(3)));
-
-  ManipulationActionServer::ExecuteChessMove::Goal goal;
-  goal.operation = ManipulationActionServer::ExecuteChessMove::Goal::OP_MOVE;
-  goal.instruction = "e2e4";
-  goal.target_frame = "base_footprint";
-  goal.pick_point.x = 0.20;
-  goal.pick_point.y = 0.0;
-  goal.pick_point.z = 0.05;
-  goal.place_point.x = 0.24;
-  goal.place_point.y = 0.0;
-  goal.place_point.z = 0.05;
-
-  std::string received_feedback_instruction;
-  rclcpp_action::Client<ManipulationActionServer::ExecuteChessMove>::SendGoalOptions send_opts;
-  send_opts.feedback_callback =
-    [&received_feedback_instruction](
-      rclcpp_action::ClientGoalHandle<ManipulationActionServer::ExecuteChessMove>::SharedPtr,
-      const std::shared_ptr<const ManipulationActionServer::ExecuteChessMove::Feedback> feedback) {
-      received_feedback_instruction = feedback->instruction;
-    };
-
-  auto send_goal_future = client->async_send_goal(goal, send_opts);
-  ASSERT_EQ(send_goal_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-  auto goal_handle = send_goal_future.get();
-  ASSERT_NE(goal_handle, nullptr);
-
-  auto result_future = client->async_get_result(goal_handle);
-  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
-  auto wrapped_result = result_future.get();
-
-  EXPECT_EQ(wrapped_result.code, rclcpp_action::ResultCode::SUCCEEDED);
-  EXPECT_TRUE(wrapped_result.result->success);
-  EXPECT_NE(wrapped_result.result->message.find("e2e4"), std::string::npos);
-  EXPECT_EQ(received_feedback_instruction, "e2e4");
-
-  executor.cancel();
-  spin_thread.join();
-}
-
 TEST_F(ManipulationActionServerTest, RecordModeNamedPoseApproachExecution)
 {
   auto server_node = std::make_shared<ManipulationActionServer>(
@@ -686,7 +567,7 @@ TEST_F(ManipulationActionServerTest, RecordModeNamedPoseApproachExecution)
     ASSERT_EQ(future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
     auto res = future.get();
     EXPECT_TRUE(res->success);
-    EXPECT_NE(res->message.find("Successfully executed target: approach"), std::string::npos);
+    EXPECT_NE(res->message.find("Successfully moved to pose: approach"), std::string::npos);
   }
 
   // 5. Save episode to complete

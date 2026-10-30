@@ -24,9 +24,11 @@
 #define LEKIWI_MOTION__ARM_MOTION_PLANNER_HPP_
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -82,10 +84,27 @@ struct GripperConfig
 };
 
 /**
+ * @brief Utility function to trim whitespace and safely convert a string to lower-case.
+ */
+inline std::string to_lower_trimmed(std::string_view str)
+{
+  constexpr std::string_view ws = " \t\n\r";
+  const auto start = str.find_first_not_of(ws);
+  if (start == std::string_view::npos) {
+    return {};
+  }
+  const auto end = str.find_last_not_of(ws);
+  std::string res(str.substr(start, end - start + 1));
+  std::transform(res.begin(), res.end(), res.begin(),
+    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return res;
+}
+
+/**
  * @struct NamedPosesConfig
  * @brief Landmark joint target configurations loaded from YAML.
  *
- * - approach: Standby / neutral waypoint pose or dynamic pre-grasp approach target.
+ * - approach: Dynamic pre-grasp approach target (empty sentinel until calculated).
  * - stow: Dual-purpose compact transit pose during Nav2 and board observation pose.
  * - clear_left: Drop location into left onboard chess piece bin.
  * - clear_right: Drop location into right onboard chess piece bin.
@@ -97,15 +116,14 @@ struct NamedPosesConfig
   std::vector<double> clear_left{};
   std::vector<double> clear_right{};
 
-  [[nodiscard]] std::optional<std::vector<double>> get(const std::string & name) const
+  [[nodiscard]] bool is_approach_set() const noexcept
   {
-    const size_t first = name.find_first_not_of(" \t\n\r");
-    if (first == std::string::npos) {
-      return std::nullopt;
-    }
-    const size_t last = name.find_last_not_of(" \t\n\r");
-    std::string key = name.substr(first, last - first + 1);
-    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+    return !approach.empty();
+  }
+
+  [[nodiscard]] std::optional<std::vector<double>> get(std::string_view name) const
+  {
+    const std::string key = to_lower_trimmed(name);
     if (key == "approach") return approach;
     if (key == "stow") return stow;
     if (key == "clear_left") return clear_left;
@@ -113,15 +131,9 @@ struct NamedPosesConfig
     return std::nullopt;
   }
 
-  bool set(const std::string & name, std::vector<double> joints)
+  bool set(std::string_view name, std::vector<double> joints)
   {
-    const size_t first = name.find_first_not_of(" \t\n\r");
-    if (first == std::string::npos) {
-      return false;
-    }
-    const size_t last = name.find_last_not_of(" \t\n\r");
-    std::string key = name.substr(first, last - first + 1);
-    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+    const std::string key = to_lower_trimmed(name);
     if (key == "approach") { approach = std::move(joints); return true; }
     if (key == "stow") { stow = std::move(joints); return true; }
     if (key == "clear_left") { clear_left = std::move(joints); return true; }
@@ -294,6 +306,10 @@ private:
   }
 
   [[nodiscard]] std::vector<double> get_stow_pose_internal() const;
+
+  void validate_joint_vectors(
+    const std::vector<double> & start_positions,
+    const std::vector<double> & target_positions) const;
 
   std::vector<std::string> arm_joints_;
   GripperConfig gripper_cfg_{};

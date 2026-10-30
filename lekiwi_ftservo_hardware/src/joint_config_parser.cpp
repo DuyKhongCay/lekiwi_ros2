@@ -260,6 +260,61 @@ namespace lekiwi_ftservo_hardware
           }
         }
       }
+      else
+      {
+        // Position-controlled joint: extract min/max limits in radians from command_interface parameters
+        for (const auto &cmd_if : joint_info.command_interfaces)
+        {
+          if (cmd_if.name == hardware_interface::HW_IF_POSITION)
+          {
+            const auto it_min = cmd_if.parameters.find("min");
+            const auto it_max = cmd_if.parameters.find("max");
+            const bool has_min = (it_min != cmd_if.parameters.end() && !it_min->second.empty());
+            const bool has_max = (it_max != cmd_if.parameters.end() && !it_max->second.empty());
+
+            if (has_min != has_max)
+            {
+              set_parse_error(error, "Joint " + joint_info.name +
+                                         " specifies only one of position limits 'min'/'max'; both must be present");
+              return false;
+            }
+
+            if (has_min && has_max)
+            {
+              try
+              {
+                const double min_rad = std::stod(it_min->second);
+                const double max_rad = std::stod(it_max->second);
+
+                if (!std::isfinite(min_rad) || !std::isfinite(max_rad))
+                {
+                  set_parse_error(error, "Position limits for joint " + joint_info.name +
+                                             " must be finite numbers");
+                  return false;
+                }
+
+                if (min_rad > max_rad)
+                {
+                  set_parse_error(error, "Inverted position limits on joint " + joint_info.name +
+                                             ": min (" + it_min->second + ") > max (" + it_max->second + ")");
+                  return false;
+                }
+
+                runtime.min_position_radians = min_rad;
+                runtime.max_position_radians = max_rad;
+                runtime.has_position_limits = true;
+              }
+              catch (const std::exception &exception)
+              {
+                set_parse_error(error, "Invalid position limit parameter on joint " +
+                                           joint_info.name + ": " + exception.what());
+                return false;
+              }
+            }
+            break;
+          }
+        }
+      }
 
       // Pre-cache string interface names to guarantee zero heap allocation in real-time read/write loops
       runtime.position_state_name = runtime.name + "/" + hardware_interface::HW_IF_POSITION;

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from lekiwi_interfaces.msg import ChessMoveDetails
@@ -60,6 +60,13 @@ _CASTLING_ROOK_MAP: Final[dict[str, tuple[str, str]]] = {
     "e8g8": ("h8", "f8"),
     "e8c8": ("a8", "d8"),
 }
+
+
+def _normalize_bin_side(clear_bin_side: str) -> str:
+    """Normalize discard bin side to canonical 'left' or 'right'."""
+    if isinstance(clear_bin_side, str) and clear_bin_side.strip().lower() == "left":
+        return "left"
+    return "right"
 
 
 @dataclass(frozen=True)
@@ -181,12 +188,7 @@ class ChessMoveGoal:
             return None
 
         norm_bypass = tuple(bypass_steps)
-        if isinstance(clear_bin_side, int):
-            norm_bin = "left" if clear_bin_side == 0 else "right"
-        elif isinstance(clear_bin_side, str) and clear_bin_side:
-            norm_bin = clear_bin_side.lower()
-        else:
-            norm_bin = "right"
+        norm_bin = _normalize_bin_side(clear_bin_side)
 
         p_type = "pawn"
         p_color = "w"

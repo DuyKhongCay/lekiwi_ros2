@@ -16,10 +16,13 @@
 namespace lekiwi_ftservo_hardware
 {
 
-  static hardware_interface::InterfaceInfo make_interface(const std::string &name)
+  static hardware_interface::InterfaceInfo make_interface(
+      const std::string &name,
+      const std::unordered_map<std::string, std::string> &params = {})
   {
     hardware_interface::InterfaceInfo info;
     info.name = name;
+    info.parameters = params;
     return info;
   }
 
@@ -231,6 +234,7 @@ namespace lekiwi_ftservo_hardware
     EXPECT_EQ(topology.joints[0].id, 1);
     EXPECT_FALSE(topology.joints[0].velocity_command);
     EXPECT_EQ(topology.joints[0].acceleration, 50);
+    EXPECT_FALSE(topology.joints[0].has_position_limits);
     EXPECT_TRUE(topology.joints[0].has_torque_enable_command);
     EXPECT_EQ(topology.joints[0].command_interface_name, "arm_shoulder_pan/position");
     EXPECT_EQ(topology.joints[0].torque_enable_command_name, "arm_shoulder_pan/torque_enable");
@@ -244,6 +248,70 @@ namespace lekiwi_ftservo_hardware
     EXPECT_DOUBLE_EQ(topology.joints[1].max_velocity_radians_per_second, 4.5);
     EXPECT_TRUE(topology.joints[1].has_torque_enable_command);
     EXPECT_EQ(topology.joints[1].command_interface_name, "base_left_wheel/velocity");
+  }
+
+  TEST(JointConfigParserTest, ParsesPositionLimitsInRadians)
+  {
+    hardware_interface::HardwareInfo info;
+    hardware_interface::ComponentInfo arm_joint;
+    arm_joint.name = "arm_shoulder_lift";
+    arm_joint.parameters["id"] = "2";
+    arm_joint.state_interfaces.push_back(make_interface(hardware_interface::HW_IF_POSITION));
+    arm_joint.state_interfaces.push_back(make_interface(hardware_interface::HW_IF_VELOCITY));
+
+    // Valid min and max in radians
+    arm_joint.command_interfaces.push_back(
+        make_interface(hardware_interface::HW_IF_POSITION, {{"min", "-1.75"}, {"max", "1.84"}}));
+
+    info.joints = {arm_joint};
+    JointTopology topology;
+    std::string error;
+
+    ASSERT_TRUE(JointConfigParser::parse(info, topology, &error)) << error;
+    ASSERT_EQ(topology.size(), 1U);
+    EXPECT_TRUE(topology.joints[0].has_position_limits);
+    EXPECT_DOUBLE_EQ(topology.joints[0].min_position_radians, -1.75);
+    EXPECT_DOUBLE_EQ(topology.joints[0].max_position_radians, 1.84);
+  }
+
+  TEST(JointConfigParserTest, RejectsInvalidPositionLimitsInRadians)
+  {
+    hardware_interface::HardwareInfo info;
+    hardware_interface::ComponentInfo arm_joint;
+    arm_joint.name = "arm_shoulder_lift";
+    arm_joint.parameters["id"] = "2";
+    arm_joint.state_interfaces.push_back(make_interface(hardware_interface::HW_IF_POSITION));
+    arm_joint.state_interfaces.push_back(make_interface(hardware_interface::HW_IF_VELOCITY));
+
+    // 1. Inverted limits (min > max)
+    arm_joint.command_interfaces = {
+        make_interface(hardware_interface::HW_IF_POSITION, {{"min", "2.0"}, {"max", "-1.0"}})};
+    info.joints = {arm_joint};
+    JointTopology topology;
+    std::string error;
+    EXPECT_FALSE(JointConfigParser::parse(info, topology, &error));
+    EXPECT_NE(error.find("Inverted position limits"), std::string::npos);
+
+    // 2. Only min declared without max
+    arm_joint.command_interfaces = {
+        make_interface(hardware_interface::HW_IF_POSITION, {{"min", "-1.0"}})};
+    info.joints = {arm_joint};
+    EXPECT_FALSE(JointConfigParser::parse(info, topology, &error));
+    EXPECT_NE(error.find("specifies only one of position limits"), std::string::npos);
+
+    // 3. Only max declared without min
+    arm_joint.command_interfaces = {
+        make_interface(hardware_interface::HW_IF_POSITION, {{"max", "1.0"}})};
+    info.joints = {arm_joint};
+    EXPECT_FALSE(JointConfigParser::parse(info, topology, &error));
+    EXPECT_NE(error.find("specifies only one of position limits"), std::string::npos);
+
+    // 4. Non-numeric limit
+    arm_joint.command_interfaces = {
+        make_interface(hardware_interface::HW_IF_POSITION, {{"min", "low"}, {"max", "1.0"}})};
+    info.joints = {arm_joint};
+    EXPECT_FALSE(JointConfigParser::parse(info, topology, &error));
+    EXPECT_NE(error.find("Invalid position limit parameter"), std::string::npos);
   }
 
 } // namespace lekiwi_ftservo_hardware

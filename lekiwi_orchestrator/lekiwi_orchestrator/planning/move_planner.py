@@ -56,11 +56,9 @@ class MoveStep:
 
 
 def _resolve_clear_bin_side(details: ChessMoveGoal, message: str = "") -> str:
-    """Extract discard bin side prioritizing explicit goal directive over feasibility message."""
+    """Extract discard bin side from explicit goal directive."""
     if details.clear_bin_side:
         return details.clear_bin_side.lower()
-    if "clear_left" in message.lower():
-        return "left"
     return "right"
 
 
@@ -193,15 +191,46 @@ StepBuilderFunc = Callable[
 ]
 
 
+def _build_pick_place_or_move(
+    resp: CheckMoveFeasibility.Response,
+    details: ChessMoveGoal,
+    target_pose: PoseStamped | None = None,
+    nav_state: MotionExecutionState | None = None,
+    requires_pre_grasp_gate: bool = True,
+) -> list[MoveStep]:
+    if details.force_pick_place:
+        return [
+            _pick_step(
+                details=details,
+                from_square=details.from_square,
+                pick_point=resp.pick_point,
+                target_pose=target_pose,
+                nav_state=nav_state,
+                requires_pre_grasp_gate=requires_pre_grasp_gate,
+            ),
+            _place_step(
+                details=details,
+                to_square=details.to_square,
+                place_point=resp.place_point,
+                requires_pre_grasp_gate=False,
+            ),
+        ]
+    return [
+        _move_step(
+            details=details,
+            from_square=details.from_square,
+            to_square=details.to_square,
+            pick_point=resp.pick_point,
+            place_point=resp.place_point,
+            target_pose=target_pose,
+            nav_state=nav_state,
+            requires_pre_grasp_gate=requires_pre_grasp_gate,
+        )
+    ]
+
+
 class MovePlanBuilder:
     """Transforms feasibility calculation results into an ordered list of MoveSteps."""
-
-    _BUILDERS: ClassVar[dict[int, StepBuilderFunc]] = {}
-
-    @classmethod
-    def register_builder(cls, plan_type: int, builder: StepBuilderFunc) -> None:
-        """Register or override a step builder for a specific plan type."""
-        cls._BUILDERS[plan_type] = builder
 
     @classmethod
     def build_steps(
@@ -234,62 +263,19 @@ class MovePlanBuilder:
         resp: CheckMoveFeasibility.Response,
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
-        if details.force_pick_place:
-            return [
-                _pick_step(
-                    details=details,
-                    from_square=details.from_square,
-                    pick_point=resp.pick_point,
-                ),
-                _place_step(
-                    details=details,
-                    to_square=details.to_square,
-                    place_point=resp.place_point,
-                    requires_pre_grasp_gate=False,
-                ),
-            ]
-        return [
-            _move_step(
-                details=details,
-                from_square=details.from_square,
-                to_square=details.to_square,
-                pick_point=resp.pick_point,
-                place_point=resp.place_point,
-            )
-        ]
+        return _build_pick_place_or_move(resp, details)
 
     @staticmethod
     def _build_single_base(
         resp: CheckMoveFeasibility.Response,
         details: ChessMoveGoal,
     ) -> list[MoveStep]:
-        if details.force_pick_place:
-            return [
-                _pick_step(
-                    details=details,
-                    from_square=details.from_square,
-                    pick_point=resp.pick_point,
-                    target_pose=resp.pick_base_pose,
-                    nav_state=MotionExecutionState.NAV_TO_PICK,
-                ),
-                _place_step(
-                    details=details,
-                    to_square=details.to_square,
-                    place_point=resp.place_point,
-                    requires_pre_grasp_gate=False,
-                ),
-            ]
-        return [
-            _move_step(
-                details=details,
-                from_square=details.from_square,
-                to_square=details.to_square,
-                pick_point=resp.pick_point,
-                place_point=resp.place_point,
-                target_pose=resp.pick_base_pose,
-                nav_state=MotionExecutionState.NAV_TO_PICK,
-            )
-        ]
+        return _build_pick_place_or_move(
+            resp,
+            details,
+            target_pose=resp.pick_base_pose,
+            nav_state=MotionExecutionState.NAV_TO_PICK,
+        )
 
     @staticmethod
     def _build_dual_base(
@@ -327,33 +313,9 @@ class MovePlanBuilder:
             pick_point=resp.clear_point,
             bin_side=bin_side,
         )
-        if details.force_pick_place:
-            return [
-                clear_st,
-                _pick_step(
-                    details=details,
-                    from_square=details.from_square,
-                    pick_point=resp.pick_point,
-                    requires_pre_grasp_gate=False,
-                ),
-                _place_step(
-                    details=details,
-                    to_square=details.to_square,
-                    place_point=resp.place_point,
-                    requires_pre_grasp_gate=False,
-                ),
-            ]
-        return [
-            clear_st,
-            _move_step(
-                details=details,
-                from_square=details.from_square,
-                to_square=details.to_square,
-                pick_point=resp.pick_point,
-                place_point=resp.place_point,
-                requires_pre_grasp_gate=False,
-            ),
-        ]
+        return [clear_st] + _build_pick_place_or_move(
+            resp, details, requires_pre_grasp_gate=False
+        )
 
     @classmethod
     def _build_capture_single_base(
@@ -371,33 +333,9 @@ class MovePlanBuilder:
             target_pose=resp.clear_base_pose,
             nav_state=MotionExecutionState.NAV_TO_CLEAR,
         )
-        if details.force_pick_place:
-            return [
-                clear_st,
-                _pick_step(
-                    details=details,
-                    from_square=details.from_square,
-                    pick_point=resp.pick_point,
-                    requires_pre_grasp_gate=False,
-                ),
-                _place_step(
-                    details=details,
-                    to_square=details.to_square,
-                    place_point=resp.place_point,
-                    requires_pre_grasp_gate=False,
-                ),
-            ]
-        return [
-            clear_st,
-            _move_step(
-                details=details,
-                from_square=details.from_square,
-                to_square=details.to_square,
-                pick_point=resp.pick_point,
-                place_point=resp.place_point,
-                requires_pre_grasp_gate=False,
-            ),
-        ]
+        return [clear_st] + _build_pick_place_or_move(
+            resp, details, requires_pre_grasp_gate=False
+        )
 
     @classmethod
     def _build_capture_dual_base(

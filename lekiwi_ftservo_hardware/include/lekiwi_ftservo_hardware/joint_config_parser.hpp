@@ -36,6 +36,11 @@ namespace lekiwi_ftservo_hardware
     int velocity_direction{1};
     uint8_t acceleration{sts::default_config::kDefaultAcceleration};
 
+    /// Position limit enforcement in radians (from URDF command_interface params)
+    bool has_position_limits{false};
+    double min_position_radians{-M_PI};
+    double max_position_radians{M_PI};
+
     /// Pre-cached interface names to guarantee zero heap allocations in read() and write() loops.
     std::string position_state_name;
     std::string velocity_state_name;

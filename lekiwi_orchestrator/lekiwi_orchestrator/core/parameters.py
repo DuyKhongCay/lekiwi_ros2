@@ -11,8 +11,6 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from rcl_interfaces.msg import ParameterDescriptor
-
 if TYPE_CHECKING:
     from rclpy.node import Node
 
@@ -31,12 +29,8 @@ class OrchestratorParameters:
         node.declare_parameter("action_timeout_sec", 60.0)
         node.declare_parameter("readiness_timeout_sec", 1.0)
         node.declare_parameter("chassis_settle_timeout_sec", 2.0)
-        node.declare_parameter(
-            "navigation", True, ParameterDescriptor(dynamic_typing=True)
-        )
-        node.declare_parameter(
-            "record", False, ParameterDescriptor(dynamic_typing=True)
-        )
+        node.declare_parameter("navigation", True)
+        node.declare_parameter("record", False)
         node.declare_parameter("robot_color", "white")
         node.declare_parameter("think_time_ms", 1000)
 
@@ -72,10 +66,6 @@ class OrchestratorParameters:
         node.declare_parameter(
             "services.system_reset_readiness",
             "/system/reset_readiness",
-        )
-        node.declare_parameter(
-            "services.ekf_reset",
-            "/ekf_filter_node_map/reset",
         )
 
         node.declare_parameter("disturbance.local_odom_topic", "/odometry/local")
@@ -119,18 +109,8 @@ class OrchestratorParameters:
         self.chassis_settle_timeout_sec = float(
             node.get_parameter("chassis_settle_timeout_sec").value
         )
-        raw_nav = node.get_parameter("navigation").value
-        self.navigation = (
-            str(raw_nav).strip().lower() in ("true", "1", "yes")
-            if isinstance(raw_nav, str)
-            else bool(raw_nav)
-        )
-        raw_record = node.get_parameter("record").value
-        self.record = (
-            str(raw_record).strip().lower() in ("true", "1", "yes")
-            if isinstance(raw_record, str)
-            else bool(raw_record)
-        )
+        self.navigation = bool(node.get_parameter("navigation").value)
+        self.record = bool(node.get_parameter("record").value)
         raw_color = str(node.get_parameter("robot_color").value).strip().lower()
         self.robot_color = "b" if raw_color in ("b", "black") else "w"
         self.think_time_ms = int(node.get_parameter("think_time_ms").value)
@@ -173,7 +153,6 @@ class OrchestratorParameters:
         self.system_reset_readiness_srv = str(
             node.get_parameter("services.system_reset_readiness").value
         )
-        self.ekf_reset_srv = str(node.get_parameter("services.ekf_reset").value)
 
         self.disturbance_local_odom_topic = str(
             node.get_parameter("disturbance.local_odom_topic").value

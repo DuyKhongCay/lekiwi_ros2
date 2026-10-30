@@ -103,12 +103,33 @@ ManipulationActionServer::~ManipulationActionServer()
   }
 }
 
+namespace
+{
+template <typename T>
+T get_or_declare_server_param(
+  rclcpp::Node * node,
+  const std::string & name,
+  const T & default_val,
+  const std::string & description = "")
+{
+  if (!node->has_parameter(name)) {
+    rcl_interfaces::msg::ParameterDescriptor desc;
+    desc.description = description;
+    desc.read_only = true;
+    return node->declare_parameter<T>(name, default_val, desc);
+  }
+  return node->get_parameter(name).get_value<T>();
+}
+}  // namespace
+
 void ManipulationActionServer::declare_and_init_parameters()
 {
-  action_name_ = arm::declare_or_get_param<std::string>(
-    this, "action_name", "/manipulation/execute_chess_move");
-  approach_z_offset_ = arm::declare_or_get_param<double>(this, "approach_z_offset", 0.05);
-  record_ = arm::declare_or_get_param<bool>(this, "record", false);
+  action_name_ = get_or_declare_server_param<std::string>(
+    this, "action_name", "/manipulation/execute_chess_move", "Manipulation action server endpoint name");
+  approach_z_offset_ = get_or_declare_server_param<double>(
+    this, "approach_z_offset", 0.05, "Vertical Z offset for pre-grasp approach phase (meters)");
+  record_ = get_or_declare_server_param<bool>(
+    this, "record", false, "Record mode flag: stops at approach pick/place without descending");
   if (record_) {
     RCLCPP_INFO(
       get_logger(),
@@ -117,18 +138,6 @@ void ManipulationActionServer::declare_and_init_parameters()
 
   arm::ArmTrajectoryExecutorConfig exec_cfg;
   executor_ = std::make_unique<arm::ArmTrajectoryExecutor>(this, std::move(exec_cfg));
-}
-
-std::optional<std::vector<double>> ManipulationActionServer::resolve_point_ik(
-  const geometry_msgs::msg::Point & point,
-  const std::string & target_frame,
-  double gripper_state) const
-{
-  if (!executor_) {
-    return std::nullopt;
-  }
-  const double clamped_gripper = executor_->clamp_gripper(gripper_state);
-  return executor_->resolve_point_ik(point, target_frame, clamped_gripper);
 }
 
 void ManipulationActionServer::notify_record_signal(RecordCoordinationSignal signal) noexcept
@@ -220,8 +229,7 @@ void ManipulationActionServer::handle_named_pose_request(
     return;
   }
 
-  std::string key = request->pose_name;
-  std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+  const std::string key = arm::to_lower_trimmed(request->pose_name);
   if (key != "approach") {
     response->success = false;
     response->message =
@@ -230,26 +238,21 @@ void ManipulationActionServer::handle_named_pose_request(
     return;
   }
 
-  std::vector<double> target_joints;
-  {
-    std::lock_guard<std::mutex> lock(approach_mutex_);
-    if (!cached_approach_joints_.has_value()) {
-      response->success = false;
-      response->message = "No dynamic approach pose has been calculated yet in record mode.";
-      RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
-      return;
-    }
-    target_joints = *cached_approach_joints_;
-  }
-
   if (!executor_) {
     response->success = false;
     response->message = "ArmTrajectoryExecutor not available";
     return;
   }
 
+  if (!executor_->has_named_pose("approach")) {
+    response->success = false;
+    response->message = "No dynamic approach pose has been calculated yet in record mode.";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
   RCLCPP_INFO(get_logger(), "Executing dynamic approach pose transition...");
-  auto [ok, msg] = executor_->execute_joint_target(target_joints, "approach");
+  auto [ok, msg] = executor_->execute_named_pose("approach");
   response->success = ok;
   response->message = msg;
   if (!ok) {
@@ -269,9 +272,15 @@ rclcpp_action::GoalResponse ManipulationActionServer::handle_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  if (is_goal_active_.load(std::memory_order_relaxed) ||
-      (executor_ && executor_->is_trajectory_busy()))
-  {
+  bool expected = false;
+  if (!is_goal_active_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+    RCLCPP_WARN(
+      get_logger(), "Rejecting goal: Arm is currently busy executing a trajectory");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
+  if (executor_ && executor_->is_trajectory_busy()) {
+    is_goal_active_.store(false, std::memory_order_release);
     RCLCPP_WARN(
       get_logger(), "Rejecting goal: Arm is currently busy executing a trajectory");
     return rclcpp_action::GoalResponse::REJECT;
@@ -322,7 +331,6 @@ void ManipulationActionServer::execute_move(
   const std::shared_ptr<GoalHandleChessMove> goal_handle)
 {
   try {
-    is_goal_active_.store(true, std::memory_order_release);
     struct GoalActiveScopeGuard
     {
       std::atomic<bool> & flag;
@@ -404,6 +412,9 @@ std::optional<std::vector<double>> ManipulationActionServer::compute_approach_jo
   const MoveExecutionContext & ctx,
   bool is_pure_place)
 {
+  if (!executor_) {
+    return std::nullopt;
+  }
   const auto & target_pt = is_pure_place ? ctx.goal->place_point : ctx.goal->pick_point;
   const double gripper_rad = is_pure_place ?
     executor_->gripper_closed_rad() : executor_->gripper_open_rad();
@@ -411,7 +422,7 @@ std::optional<std::vector<double>> ManipulationActionServer::compute_approach_jo
   geometry_msgs::msg::Point approach_pt = target_pt;
   approach_pt.z += approach_z_offset_;
 
-  return resolve_point_ik(approach_pt, ctx.goal->target_frame, gripper_rad);
+  return executor_->resolve_point_ik(approach_pt, ctx.goal->target_frame, gripper_rad);
 }
 
 void ManipulationActionServer::execute_record_mode(
@@ -427,10 +438,6 @@ void ManipulationActionServer::execute_record_mode(
     return;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(approach_mutex_);
-    cached_approach_joints_ = *approach_joints;
-  }
   executor_->set_named_pose("approach", *approach_joints);
 
   publish_phase_feedback(ctx, "WAITING_RECORD_TRIGGER", 25.0, instruction_label);
@@ -481,6 +488,7 @@ ManipulationActionServer::RecordCoordinationSignal ManipulationActionServer::wai
     if (record_signal_ != RecordCoordinationSignal::NONE) {
       return record_signal_;
     }
+    publish_phase_feedback(ctx, "WAITING_RECORD_TRIGGER", 25.0, resolve_instruction_label(*ctx.goal));
     record_cv_.wait_for(lock, std::chrono::milliseconds(50));
   }
   return RecordCoordinationSignal::CANCEL;
@@ -524,16 +532,19 @@ ManipulationActionServer::resolve_approach_and_descend(
   double gripper_rad,
   const std::string & stage_name)
 {
+  if (!executor_) {
+    return std::nullopt;
+  }
   geometry_msgs::msg::Point approach_pt = target_pt;
   approach_pt.z += approach_z_offset_;
 
-  const auto approach_opt = resolve_point_ik(approach_pt, ctx.goal->target_frame, gripper_rad);
+  const auto approach_opt = executor_->resolve_point_ik(approach_pt, ctx.goal->target_frame, gripper_rad);
   if (!approach_opt.has_value()) {
     abort_move(ctx, "IK resolution failed for APPROACH_" + stage_name, 0.0);
     return std::nullopt;
   }
 
-  const auto descend_opt = resolve_point_ik(target_pt, ctx.goal->target_frame, gripper_rad);
+  const auto descend_opt = executor_->resolve_point_ik(target_pt, ctx.goal->target_frame, gripper_rad);
   if (!descend_opt.has_value()) {
     abort_move(ctx, "IK resolution failed for DESCEND_" + stage_name, 0.0);
     return std::nullopt;
@@ -667,20 +678,49 @@ void ManipulationActionServer::publish_phase_feedback(
   ctx.goal_handle->publish_feedback(ctx.feedback);
 }
 
+void ManipulationActionServer::finalize_move(
+  const MoveExecutionContext & ctx,
+  ActionTerminalState term_state,
+  const std::string & message,
+  double progress)
+{
+  const double duration = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - ctx.start_time).count();
+  const std::string instruction = resolve_instruction_label(*ctx.goal);
+  ctx.result->message = message;
+  ctx.result->execution_time_sec = static_cast<float>(duration);
+
+  switch (term_state) {
+    case ActionTerminalState::SUCCEEDED:
+      set_snapshot("COMPLETED", 100.0, instruction);
+      ctx.result->success = true;
+      ctx.goal_handle->succeed(ctx.result);
+      RCLCPP_INFO(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
+      break;
+    case ActionTerminalState::CANCELED:
+      set_snapshot("CANCELED", progress, instruction);
+      ctx.result->success = false;
+      if (ctx.goal_handle->is_canceling()) {
+        ctx.goal_handle->canceled(ctx.result);
+      } else {
+        ctx.goal_handle->abort(ctx.result);
+      }
+      RCLCPP_WARN(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
+      break;
+    case ActionTerminalState::ABORTED:
+      set_snapshot("ABORTED", progress, instruction);
+      ctx.result->success = false;
+      ctx.goal_handle->abort(ctx.result);
+      RCLCPP_ERROR(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
+      break;
+  }
+}
+
 void ManipulationActionServer::succeed_move(
   const MoveExecutionContext & ctx,
   const std::string & message)
 {
-  const double duration = std::chrono::duration<double>(
-    std::chrono::steady_clock::now() - ctx.start_time).count();
-  set_snapshot("COMPLETED", 100.0, resolve_instruction_label(*ctx.goal));
-
-  ctx.result->success = true;
-  ctx.result->message = message;
-  ctx.result->execution_time_sec = static_cast<float>(duration);
-  is_goal_active_.store(false, std::memory_order_release);
-  ctx.goal_handle->succeed(ctx.result);
-  RCLCPP_INFO(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
+  finalize_move(ctx, ActionTerminalState::SUCCEEDED, message, 100.0);
 }
 
 void ManipulationActionServer::cancel_move(
@@ -688,20 +728,7 @@ void ManipulationActionServer::cancel_move(
   const std::string & message,
   double progress)
 {
-  const double duration = std::chrono::duration<double>(
-    std::chrono::steady_clock::now() - ctx.start_time).count();
-  set_snapshot("CANCELED", progress, resolve_instruction_label(*ctx.goal));
-
-  ctx.result->success = false;
-  ctx.result->message = message;
-  ctx.result->execution_time_sec = static_cast<float>(duration);
-  is_goal_active_.store(false, std::memory_order_release);
-  if (ctx.goal_handle->is_canceling()) {
-    ctx.goal_handle->canceled(ctx.result);
-  } else {
-    ctx.goal_handle->abort(ctx.result);
-  }
-  RCLCPP_WARN(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
+  finalize_move(ctx, ActionTerminalState::CANCELED, message, progress);
 }
 
 void ManipulationActionServer::abort_move(
@@ -709,16 +736,7 @@ void ManipulationActionServer::abort_move(
   const std::string & message,
   double progress)
 {
-  const double duration = std::chrono::duration<double>(
-    std::chrono::steady_clock::now() - ctx.start_time).count();
-  set_snapshot("ABORTED", progress, resolve_instruction_label(*ctx.goal));
-
-  ctx.result->success = false;
-  ctx.result->message = message;
-  ctx.result->execution_time_sec = static_cast<float>(duration);
-  is_goal_active_.store(false, std::memory_order_release);
-  ctx.goal_handle->abort(ctx.result);
-  RCLCPP_ERROR(get_logger(), "%s (Duration: %.2fs)", message.c_str(), duration);
+  finalize_move(ctx, ActionTerminalState::ABORTED, message, progress);
 }
 
 void ManipulationActionServer::set_snapshot(

@@ -67,11 +67,19 @@ namespace lekiwi_chess_master
      */
     void reset_game();
 
-    /** @brief Accesses internal board representation (for testing). */
-    [[nodiscard]] const chess::Board &get_board() const { return board_; }
+    /** @brief Accesses internal board representation (for testing, thread-safe copy). */
+    [[nodiscard]] chess::Board get_board() const
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      return board_;
+    }
 
-    /** @brief Retrieves rich last executed move details message. */
-    [[nodiscard]] const lekiwi_interfaces::msg::ChessMoveDetails &get_last_move_details() const { return last_move_details_; }
+    /** @brief Retrieves rich last executed move details message (thread-safe copy). */
+    [[nodiscard]] lekiwi_interfaces::msg::ChessMoveDetails get_last_move_details() const
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      return last_move_details_;
+    }
 
     /** @brief Checks if tracker is currently awaiting physical board sync with imported FEN. */
     [[nodiscard]] bool is_awaiting_physical_sync() const
@@ -102,6 +110,16 @@ namespace lekiwi_chess_master
      * @param[in] msg Incoming raw FEN string message from camera pipeline.
      */
     void raw_fen_callback(const std_msgs::msg::String::ConstSharedPtr msg);
+
+    /**
+     * @brief Debounces detected placement, returning true when stable.
+     */
+    bool update_debounce_filter(std::string_view placement);
+
+    /**
+     * @brief Processes a newly stabilized board placement.
+     */
+    void process_stable_placement(const std::string &placement);
 
     /**
      * @brief Service handler resetting game board to starting position upon external trigger.

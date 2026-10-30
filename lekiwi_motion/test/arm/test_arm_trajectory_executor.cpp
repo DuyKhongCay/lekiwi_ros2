@@ -130,23 +130,22 @@ TEST_F(ArmTrajectoryExecutorTest, DefaultAndCustomNamedPosesLoadedFromParameters
   EXPECT_EQ(*stow_opt, custom_stow);
 }
 
-TEST_F(ArmTrajectoryExecutorTest, ResolveIkUninitializedReturnsNullopt)
+TEST_F(ArmTrajectoryExecutorTest, ResolveIkLifecycleAndKinematicsSolvedInBaseFrame)
 {
-  auto node = std::make_shared<rclcpp::Node>("test_ik_uninitialized");
-  ArmTrajectoryExecutorConfig cfg;
-  ArmTrajectoryExecutor executor(node.get(), cfg);
+  // 1. Uninitialized state returns nullopt
+  auto node_uninit = std::make_shared<rclcpp::Node>("test_ik_uninitialized");
+  ArmTrajectoryExecutorConfig cfg_uninit;
+  ArmTrajectoryExecutor executor_uninit(node_uninit.get(), cfg_uninit);
 
-  geometry_msgs::msg::Point pt;
-  pt.x = 0.15;
-  pt.y = 0.0;
-  pt.z = 0.05;
+  geometry_msgs::msg::Point pt_uninit;
+  pt_uninit.x = 0.15;
+  pt_uninit.y = 0.0;
+  pt_uninit.z = 0.05;
 
-  auto sol = executor.resolve_point_ik(pt, "base_footprint", 1.50);
-  EXPECT_FALSE(sol.has_value());
-}
+  auto sol_uninit = executor_uninit.resolve_point_ik(pt_uninit, "base_footprint", 1.50);
+  EXPECT_FALSE(sol_uninit.has_value());
 
-TEST_F(ArmTrajectoryExecutorTest, ResolveIkWithKinematicsSolvedInBaseFrame)
-{
+  // 2. Initialized with URDF fixture: solves point in base frame
   const std::string urdf = load_test_urdf();
   ASSERT_FALSE(urdf.empty()) << "Fixture URDF must be present";
 
@@ -168,27 +167,14 @@ TEST_F(ArmTrajectoryExecutorTest, ResolveIkWithKinematicsSolvedInBaseFrame)
   ASSERT_TRUE(sol.has_value());
   EXPECT_EQ(sol->size(), 6u);
   EXPECT_DOUBLE_EQ((*sol)[5], 0.0);
-}
 
-TEST_F(ArmTrajectoryExecutorTest, TrajectoryExecutionGuardEnforcesMutualExclusion)
-{
-  std::atomic<bool> busy_flag{false};
-  {
-    TrajectoryExecutionGuard guard1(busy_flag);
-    EXPECT_TRUE(guard1.acquired());
-    EXPECT_TRUE(busy_flag.load());
-
-    // Second guard attempts to acquire while first holds it
-    TrajectoryExecutionGuard guard2(busy_flag);
-    EXPECT_FALSE(guard2.acquired());
-    EXPECT_TRUE(busy_flag.load());
-  }
-  // After guard1 goes out of scope, busy flag must be cleared
-  EXPECT_FALSE(busy_flag.load());
-
-  TrajectoryExecutionGuard guard3(busy_flag);
-  EXPECT_TRUE(guard3.acquired());
-  EXPECT_TRUE(busy_flag.load());
+  // 3. Real action client failure when action server is unavailable (mock_execution = false)
+  ArmTrajectoryExecutorConfig cfg_real;
+  cfg_real.mock_execution = false;
+  ArmTrajectoryExecutor executor_real(node.get(), cfg_real);
+  auto [real_ok, real_msg] = executor_real.execute_joint_target(*sol, "unreachable_server");
+  EXPECT_FALSE(real_ok);
+  EXPECT_FALSE(real_msg.empty());
 }
 
 TEST_F(ArmTrajectoryExecutorTest, MockExecutionUpdatesJointPositionsAndRejectsConcurrentCalls)

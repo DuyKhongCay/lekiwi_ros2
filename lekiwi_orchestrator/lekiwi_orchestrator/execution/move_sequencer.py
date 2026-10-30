@@ -15,11 +15,12 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from geometry_msgs.msg import Point, PoseStamped
+from geometry_msgs.msg import Point, PointStamped, PoseStamped
 from lekiwi_interfaces.action import ExecuteChessMove
 from lekiwi_interfaces.msg import PerceptionContext
 from lekiwi_interfaces.srv import CheckMoveFeasibility
 import rclpy
+import tf2_geometry_msgs
 from rclpy.callback_groups import CallbackGroup
 from rclpy.node import Node
 
@@ -533,28 +534,11 @@ class MoveSequencer:
                 f"Cannot build manipulation goal: TF transform from '{target_frame}' to 'base_footprint' unavailable: {exc}"
             ) from exc
 
-        tx = tf_stamped.transform.translation.x
-        ty = tf_stamped.transform.translation.y
-        tz = tf_stamped.transform.translation.z
-        qx = tf_stamped.transform.rotation.x
-        qy = tf_stamped.transform.rotation.y
-        qz = tf_stamped.transform.rotation.z
-        qw = tf_stamped.transform.rotation.w
-
-        r00 = 1.0 - 2.0 * (qy * qy + qz * qz)
-        r01 = 2.0 * (qx * qy - qz * qw)
-        r02 = 2.0 * (qx * qz + qy * qw)
-        r10 = 2.0 * (qx * qy + qz * qw)
-        r11 = 1.0 - 2.0 * (qx * qx + qz * qz)
-        r12 = 2.0 * (qy * qz - qx * qw)
-        r20 = 2.0 * (qx * qz - qy * qw)
-        r21 = 2.0 * (qy * qz + qx * qw)
-        r22 = 1.0 - 2.0 * (qx * qx + qy * qy)
-
-        x = r00 * point.x + r01 * point.y + r02 * point.z + tx
-        y = r10 * point.x + r11 * point.y + r12 * point.z + ty
-        z = r20 * point.x + r21 * point.y + r22 * point.z + tz
-        return [float(x), float(y), float(z)]
+        pt_stamped = PointStamped()
+        pt_stamped.header.frame_id = target_frame
+        pt_stamped.point = point
+        transformed = tf2_geometry_msgs.do_transform_point(pt_stamped, tf_stamped)
+        return [float(transformed.point.x), float(transformed.point.y), float(transformed.point.z)]
 
     def _build_manipulation_goal(self, stage: MoveStep) -> ExecuteChessMove.Goal:
         """Build ExecuteChessMove.Goal message with 10D environment_state from a MoveStep domain object."""

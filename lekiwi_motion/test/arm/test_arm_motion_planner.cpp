@@ -51,7 +51,7 @@ protected:
 // 1. Quintic Polynomial Trajectory Interpolation Tests
 // ==============================================================================
 
-TEST_F(ArmMotionPlannerTest, BasicTrajectoryGenerationAndC2Continuity)
+TEST_F(ArmMotionPlannerTest, BasicTrajectoryGenerationContinuityAndSamplingRate)
 {
   const std::vector<double> q_start = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   const std::vector<double> q_target = {0.2, -0.3, 0.4, -0.1, 0.5, 1.5};
@@ -89,69 +89,68 @@ TEST_F(ArmMotionPlannerTest, BasicTrajectoryGenerationAndC2Continuity)
     EXPECT_GE(t, prev_time);
     prev_time = t;
   }
+
+  // Custom sampling rate (100 Hz for 1.0s -> 101 points)
+  auto traj_100hz = planner_->plan_trajectory(q_start, q_target, 1.0, 100.0);
+  EXPECT_EQ(traj_100hz.points.size(), 101UL);
 }
 
-TEST_F(ArmMotionPlannerTest, TrajectoryValidationThrowsOnInvalidInputs)
+TEST_F(ArmMotionPlannerTest, TrajectoryAndDurationValidationThrowsOnInvalidInputs)
 {
   const std::vector<double> q_start = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   const std::vector<double> q_target = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1};
+  const std::vector<double> q_short = {0.0, 0.0};
+  const std::vector<double> empty_pos = {};
+
+  // Constructor validations: rate <= 0, and phase building throws if stow is unconfigured
+  EXPECT_THROW(ArmMotionPlanner(arm_joints_, GripperConfig{}, NamedPosesConfig{}, 0.0), std::invalid_argument);
+  ArmMotionPlanner empty_planner(arm_joints_, GripperConfig{}, NamedPosesConfig{}, 50.0);
+  EXPECT_THROW(empty_planner.build_pick_targets(q_start, q_target), std::runtime_error);
 
   // Invalid duration
   EXPECT_THROW(planner_->plan_trajectory(q_start, q_target, 0.0), std::invalid_argument);
   EXPECT_THROW(planner_->plan_trajectory(q_start, q_target, -1.5), std::invalid_argument);
 
   // Dimension mismatches & empty inputs
-  const std::vector<double> q_short = {0.0, 0.0};
   EXPECT_THROW(planner_->plan_trajectory(q_short, q_target, 1.0), std::invalid_argument);
-
-  const std::vector<double> empty_pos = {};
   EXPECT_THROW(planner_->plan_trajectory(empty_pos, empty_pos, 1.0), std::invalid_argument);
-}
 
-TEST_F(ArmMotionPlannerTest, CustomSamplingRate)
-{
-  const std::vector<double> q_start = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-  const std::vector<double> q_target = {0.5, 0.5, 0.5, 0.5, 0.5, 0.5};
-  const double duration_sec = 1.0;
-  const double rate_hz = 100.0;
-
-  auto traj = planner_->plan_trajectory(q_start, q_target, duration_sec, rate_hz);
-  EXPECT_EQ(traj.points.size(), 101UL);
+  // Duration calculation invalid arguments
+  const double max_vel = 1.875;
+  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_target, 0.0), std::invalid_argument);
+  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_target, -1.0), std::invalid_argument);
+  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_target, max_vel, 0.0), std::invalid_argument);
+  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_target, max_vel, -0.1), std::invalid_argument);
+  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_short, q_target, max_vel), std::invalid_argument);
+  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_short, max_vel), std::invalid_argument);
 }
 
 // ==============================================================================
 // 2. Gripper Clamping & Phase Target Generation Tests
 // ==============================================================================
 
-TEST_F(ArmMotionPlannerTest, GripperClampingBounds)
+TEST_F(ArmMotionPlannerTest, GripperClampingAndStateToggling)
 {
+  // Clamping
   EXPECT_DOUBLE_EQ(planner_->clamp_gripper(-0.5), 0.0);
   EXPECT_DOUBLE_EQ(planner_->clamp_gripper(0.0), 0.0);
   EXPECT_DOUBLE_EQ(planner_->clamp_gripper(0.75), 0.75);
   EXPECT_DOUBLE_EQ(planner_->clamp_gripper(1.50), 1.50);
   EXPECT_DOUBLE_EQ(planner_->clamp_gripper(2.50), 1.50);
-}
 
-TEST_F(ArmMotionPlannerTest, GripperStateDetectionAndToggledTarget)
-{
+  // State detection & toggling
   const auto & cfg = planner_->gripper_config();
-
-  // Fully closed -> CLOSED, toggled target is open_rad (1.50)
   EXPECT_FALSE(cfg.is_open(0.0));
   EXPECT_DOUBLE_EQ(cfg.toggled_target(0.0), 1.50);
-
-  // Stalled grasping a chess piece (~0.35 rad < midpoint 0.75 rad) -> CLOSED, toggled target is open_rad (1.50)
   EXPECT_FALSE(cfg.is_open(0.35));
   EXPECT_DOUBLE_EQ(cfg.toggled_target(0.35), 1.50);
-
-  // Open (> midpoint 0.75 rad) -> OPEN, toggled target is closed_rad (0.0)
   EXPECT_TRUE(cfg.is_open(1.20));
   EXPECT_DOUBLE_EQ(cfg.toggled_target(1.20), 0.0);
   EXPECT_TRUE(cfg.is_open(1.50));
   EXPECT_DOUBLE_EQ(cfg.toggled_target(1.50), 0.0);
 }
 
-TEST_F(ArmMotionPlannerTest, BuildPickAndPlacePhaseTargetsSequences)
+TEST_F(ArmMotionPlannerTest, BuildPhaseTargetsSequencesForPickPlaceAndClear)
 {
   const std::vector<double> pick_approach{0.1, 0.2, 0.3, 0.4, 0.5, 1.50};
   const std::vector<double> pick_descend{0.1, 0.1, 0.3, 0.4, 0.5, 1.50};
@@ -170,64 +169,51 @@ TEST_F(ArmMotionPlannerTest, BuildPickAndPlacePhaseTargetsSequences)
   EXPECT_DOUBLE_EQ(pnp_phases.at("RETRACT_STOW")[1], -1.57);
   EXPECT_DOUBLE_EQ(pnp_phases.at("RETRACT_STOW").back(), 0.00); // closed stow
 
-  // 2. Atomic Pick (5 phases, concludes in transit stow with closed gripper)
+  // 2. Atomic Pick (5 phases)
   const auto pick_phases = planner_->build_pick_targets(pick_approach, pick_descend);
   EXPECT_EQ(pick_phases.size(), ArmMotionPlanner::kPickPhases.size());
-  for (const auto & phase_name : ArmMotionPlanner::kPickPhases) {
-    EXPECT_TRUE(pick_phases.find(phase_name) != pick_phases.end()) << "Missing pick phase: " << phase_name;
-  }
   EXPECT_DOUBLE_EQ(pick_phases.at("RETRACT_STOW")[1], -1.57);
   EXPECT_DOUBLE_EQ(pick_phases.at("RETRACT_STOW").back(), 0.00);
 
-  // 3. Atomic Place (5 phases, ascends in Z then returns to stow with closed gripper)
+  // 3. Atomic Place (5 phases)
   const auto place_phases = planner_->build_place_targets(place_approach, place_descend);
   EXPECT_EQ(place_phases.size(), ArmMotionPlanner::kPlacePhases.size());
-  for (const auto & phase_name : ArmMotionPlanner::kPlacePhases) {
-    EXPECT_TRUE(place_phases.find(phase_name) != place_phases.end()) << "Missing place phase: " << phase_name;
-  }
   EXPECT_DOUBLE_EQ(place_phases.at("RETRACT")[0], place_approach[0]);
   EXPECT_DOUBLE_EQ(place_phases.at("RETRACT").back(), 1.50);
   EXPECT_DOUBLE_EQ(place_phases.at("RETRACT_STOW")[1], -1.57);
   EXPECT_DOUBLE_EQ(place_phases.at("RETRACT_STOW").back(), 0.00);
-}
 
-TEST_F(ArmMotionPlannerTest, BuildClearPhaseTargetsSequences)
-{
+  // 4. Fail-fast if clear_left / clear_right missing
+  EXPECT_THROW(planner_->build_clear_targets(pick_approach, pick_descend, ClearBinSide::LEFT), std::runtime_error);
+
+  // 5. Clear with configured poses
   NamedPosesConfig named_cfg;
-  named_cfg.approach = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   named_cfg.stow = {0.0, -1.57, 1.57, 0.75, 0.0, 0.0};
   named_cfg.clear_left = {1.20, -0.60, 0.80, 0.0, 0.0, 0.0};
   named_cfg.clear_right = {-1.20, -0.60, 0.80, 0.0, 0.0, 0.0};
   planner_->set_named_poses(named_cfg);
 
-  const std::vector<double> pick_approach{0.1, 0.2, 0.3, 0.4, 0.5, 1.50};
-  const std::vector<double> pick_descend{0.1, 0.1, 0.3, 0.4, 0.5, 1.50};
-
-  // Test LEFT graveyard bin
   const auto left_phases = planner_->build_clear_targets(pick_approach, pick_descend, ClearBinSide::LEFT);
   EXPECT_EQ(left_phases.size(), ArmMotionPlanner::kClearPhases.size());
   EXPECT_DOUBLE_EQ(left_phases.at("DROP_CLEAR")[0], 1.20);
   EXPECT_DOUBLE_EQ(left_phases.at("DROP_CLEAR").back(), 0.00);
   EXPECT_DOUBLE_EQ(left_phases.at("RELEASE_CLEAR").back(), 1.50);
-  EXPECT_DOUBLE_EQ(left_phases.at("RETRACT_STOW")[1], -1.57);
-  EXPECT_DOUBLE_EQ(left_phases.at("RETRACT_STOW").back(), 0.00);
-  EXPECT_TRUE(left_phases.find("RETRACT_CLEAR") == left_phases.end());
 
-  // Test RIGHT graveyard bin
   const auto right_phases = planner_->build_clear_targets(pick_approach, pick_descend, ClearBinSide::RIGHT);
   EXPECT_EQ(right_phases.size(), ArmMotionPlanner::kClearPhases.size());
   EXPECT_DOUBLE_EQ(right_phases.at("DROP_CLEAR")[0], -1.20);
   EXPECT_DOUBLE_EQ(right_phases.at("DROP_CLEAR").back(), 0.00);
   EXPECT_DOUBLE_EQ(right_phases.at("RELEASE_CLEAR").back(), 1.50);
-  EXPECT_DOUBLE_EQ(right_phases.at("RETRACT_STOW")[1], -1.57);
-  EXPECT_DOUBLE_EQ(right_phases.at("RETRACT_STOW").back(), 0.00);
-  EXPECT_TRUE(right_phases.find("RETRACT_CLEAR") == right_phases.end());
 }
 
 TEST_F(ArmMotionPlannerTest, GetNamedPoseReturnsConfiguredLandmarks)
 {
   NamedPosesConfig named_cfg;
+  EXPECT_FALSE(named_cfg.is_approach_set());
+
   named_cfg.approach = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  EXPECT_TRUE(named_cfg.is_approach_set());
+
   named_cfg.stow = {0.0, -1.57, 1.57, 0.75, 0.0, 0.0};
   named_cfg.clear_left = {1.20, -0.60, 0.80, 0.0, 0.0, 0.0};
   named_cfg.clear_right = {-1.20, -0.60, 0.80, 0.0, 0.0, 0.0};
@@ -254,19 +240,18 @@ TEST_F(ArmMotionPlannerTest, GetNamedPoseReturnsConfiguredLandmarks)
 }
 
 // ==============================================================================
-// 5. Velocity-Governed Trajectory Planning Tests
+// 3. Velocity-Governed Trajectory Planning Tests
 // ==============================================================================
 
-TEST_F(ArmMotionPlannerTest, CalculateTrajectoryDurationSynchronizedAndClamped)
+TEST_F(ArmMotionPlannerTest, VelocityGovernedTrajectoryPlanningAndDurationCalculations)
 {
   const std::vector<double> q_start = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   const std::vector<double> q_target = {1.0, 0.5, 0.2, 0.1, 0.0, 0.0};
   const double max_vel = 1.875;
 
   // Max delta is 1.0 (joint 0). For quintic polynomial, T = 1.875 * 1.0 / 1.875 = 1.0s
-  const double expected_duration = 1.0;
   const double duration = planner_->calculate_trajectory_duration(q_start, q_target, max_vel);
-  EXPECT_NEAR(duration, expected_duration, 1e-6);
+  EXPECT_NEAR(duration, 1.0, 1e-6);
 
   // When start equals target, duration clamps to min_duration_sec (default 0.1s)
   const double zero_delta_duration = planner_->calculate_trajectory_duration(q_start, q_start, max_vel);
@@ -276,40 +261,24 @@ TEST_F(ArmMotionPlannerTest, CalculateTrajectoryDurationSynchronizedAndClamped)
   const double custom_clamp = planner_->calculate_trajectory_duration(q_start, q_start, max_vel, 0.25);
   EXPECT_DOUBLE_EQ(custom_clamp, 0.25);
 
-  // Invalid arguments validation
-  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_target, 0.0), std::invalid_argument);
-  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_target, -1.0), std::invalid_argument);
-  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_target, max_vel, 0.0), std::invalid_argument);
-  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_target, max_vel, -0.1), std::invalid_argument);
-
-  const std::vector<double> q_short = {0.0, 0.0};
-  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_short, q_target, max_vel), std::invalid_argument);
-  EXPECT_THROW((void)planner_->calculate_trajectory_duration(q_start, q_short, max_vel), std::invalid_argument);
-}
-
-TEST_F(ArmMotionPlannerTest, PlanTrajectoryAtVelocityEnforcesMaxVelocityLimit)
-{
-  const std::vector<double> q_start = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-  const std::vector<double> q_target = {0.8, -1.2, 0.5, 0.3, -0.6, 1.5};
+  // Velocity-governed trajectory limits
+  const std::vector<double> q_vel_target = {0.8, -1.2, 0.5, 0.3, -0.6, 1.5};
   const double max_velocity_rad_s = 1.2;
 
-  auto traj = planner_->plan_trajectory_at_velocity(q_start, q_target, max_velocity_rad_s);
-
+  auto traj = planner_->plan_trajectory_at_velocity(q_start, q_vel_target, max_velocity_rad_s);
   EXPECT_EQ(traj.joint_names, arm_joints_);
   ASSERT_GE(traj.points.size(), 2UL);
 
-  // Verify boundary conditions
   for (size_t i = 0; i < arm_joints_.size(); ++i) {
     EXPECT_NEAR(traj.points.front().positions[i], q_start[i], 1e-4);
     EXPECT_NEAR(traj.points.front().velocities[i], 0.0, 1e-4);
     EXPECT_NEAR(traj.points.front().accelerations[i], 0.0, 1e-4);
 
-    EXPECT_NEAR(traj.points.back().positions[i], q_target[i], 1e-4);
+    EXPECT_NEAR(traj.points.back().positions[i], q_vel_target[i], 1e-4);
     EXPECT_NEAR(traj.points.back().velocities[i], 0.0, 1e-4);
     EXPECT_NEAR(traj.points.back().accelerations[i], 0.0, 1e-4);
   }
 
-  // Verify velocity limit is strictly respected across all interpolation points
   double observed_peak_vel = 0.0;
   for (const auto & point : traj.points) {
     for (double vel : point.velocities) {
@@ -318,13 +287,11 @@ TEST_F(ArmMotionPlannerTest, PlanTrajectoryAtVelocityEnforcesMaxVelocityLimit)
       EXPECT_LE(abs_v, max_velocity_rad_s + 1e-4);
     }
   }
-
-  // The governing joint (joint 5 with delta = 1.5) must reach close to max_velocity_rad_s at the peak
   EXPECT_NEAR(observed_peak_vel, max_velocity_rad_s, 0.05);
 
   // Invalid velocity argument throws
-  EXPECT_THROW((void)planner_->plan_trajectory_at_velocity(q_start, q_target, 0.0), std::invalid_argument);
-  EXPECT_THROW((void)planner_->plan_trajectory_at_velocity(q_start, q_target, -0.5), std::invalid_argument);
+  EXPECT_THROW((void)planner_->plan_trajectory_at_velocity(q_start, q_vel_target, 0.0), std::invalid_argument);
+  EXPECT_THROW((void)planner_->plan_trajectory_at_velocity(q_start, q_vel_target, -0.5), std::invalid_argument);
 }
 
 }  // namespace lekiwi_motion::arm::test

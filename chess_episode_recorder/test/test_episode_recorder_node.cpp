@@ -357,8 +357,8 @@ TEST_F(EpisodeRecorderNodeTestFixture, CampaignConductor_TracksProgressOnSaveEpi
   EXPECT_TRUE(call_trigger(save_client_, response_msg));
 
   // 4. Verify that QuotaTracker received the episode
-  domain::PieceKey wn{chess::Color::WHITE, chess::PieceType::KNIGHT};
-  EXPECT_EQ(recorder_node_->get_quota_tracker().get_completed(domain::StepKind::MOVE, wn), 1u);
+  ASSERT_NE(recorder_node_->get_conductor(), nullptr);
+  EXPECT_EQ(recorder_node_->get_conductor()->get_quota_summary().completed_by_kind.at(domain::StepKind::MOVE), 1u);
 
   // 5. Query campaign status service again
   EXPECT_TRUE(call_trigger(status_client_, response_msg));
@@ -511,7 +511,7 @@ TEST_F(EpisodeRecorderNodeTestFixture, StateVerificationGate_DivergencePreserves
 
   // 4. Wait for on_result processing (until QuotaTracker adopts diverged FEN)
   for (int i = 0; i < 30; ++i) {
-    if (recorder_node_->get_quota_tracker().get_active_fen() == diverged_fen) {
+    if (recorder_node_->get_session_state().active_fen == diverged_fen) {
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -521,7 +521,7 @@ TEST_F(EpisodeRecorderNodeTestFixture, StateVerificationGate_DivergencePreserves
   EXPECT_TRUE(std::filesystem::exists(ep0_dir));
 
   // 6. Assert: QuotaTracker domain board must have adopted the action server's actual FEN
-  EXPECT_EQ(recorder_node_->get_quota_tracker().get_active_fen(), diverged_fen);
+  EXPECT_EQ(recorder_node_->get_session_state().active_fen, diverged_fen);
 
   // 7. Assert: Node remains healthy in IDLE_READY or re-dispatched state
   EXPECT_TRUE(
@@ -685,11 +685,11 @@ TEST_F(EpisodeRecorderNodeTestFixture, FeasibilityServiceUnavailable_PreventsFal
   }
 
   // 3. Dispatch next task
-  uint32_t current_session = recorder_node_->get_quota_tracker().get_session_state().session_id;
+  uint32_t current_session = recorder_node_->get_session_state().session_id;
   recorder_node_->dispatch_next_task();
 
   // 4. Must NOT advance session, must NOT dispatch goals, must remain IDLE_READY
-  EXPECT_EQ(recorder_node_->get_quota_tracker().get_session_state().session_id, current_session);
+  EXPECT_EQ(recorder_node_->get_session_state().session_id, current_session);
   {
     std::lock_guard<std::mutex> lock(action_server_mutex_);
     EXPECT_TRUE(goals_received_.empty());

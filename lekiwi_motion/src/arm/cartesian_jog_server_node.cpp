@@ -29,16 +29,36 @@
 namespace lekiwi_motion::arm
 {
 
+namespace
+{
+template <typename T>
+T get_or_declare_jog_param(
+  rclcpp::Node * node,
+  const std::string & name,
+  const T & default_val,
+  const std::string & description = "")
+{
+  if (!node->has_parameter(name)) {
+    rcl_interfaces::msg::ParameterDescriptor desc;
+    desc.description = description;
+    desc.read_only = true;
+    return node->declare_parameter<T>(name, default_val, desc);
+  }
+  return node->get_parameter(name).get_value<T>();
+}
+}  // namespace
+
 CartesianJogServerNode::CartesianJogServerNode(const rclcpp::NodeOptions & options)
 : Node("cartesian_jog_server_node", options)
 {
   cb_group_services_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  cb_group_timer_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
   declare_all_parameters();
   init_executor_and_kinematics();
 
   sub_cmd_vel_ = create_subscription<geometry_msgs::msg::TwistStamped>(
-    "~/cmd_vel", rclcpp::SystemDefaultsQoS(),
+    "~/cmd_vel", rclcpp::QoS(1).reliable(),
     std::bind(&CartesianJogServerNode::cmd_vel_callback, this, std::placeholders::_1));
 
   named_pose_srv_ = create_service<GoToNamedPose>(
@@ -59,14 +79,14 @@ CartesianJogServerNode::CartesianJogServerNode(const rclcpp::NodeOptions & optio
 
   if (controller_mode_ == ControllerMode::TRAJECTORY) {
     pub_trajectory_ = create_publisher<trajectory_msgs::msg::JointTrajectory>(
-      arm_trajectory_topic_, rclcpp::SystemDefaultsQoS());
+      arm_trajectory_topic_, rclcpp::QoS(1));
     RCLCPP_INFO(
       get_logger(),
       "CartesianJogServerNode initialized in TRAJECTORY mode at %.1f Hz. Streaming JointTrajectory to '%s'",
       publish_rate_hz_, arm_trajectory_topic_.c_str());
   } else {
     pub_forward_cmd_ = create_publisher<std_msgs::msg::Float64MultiArray>(
-      arm_forward_topic_, rclcpp::SystemDefaultsQoS());
+      arm_forward_topic_, rclcpp::QoS(1));
     RCLCPP_INFO(
       get_logger(),
       "CartesianJogServerNode initialized in FORWARD mode at %.1f Hz. Streaming Float64MultiArray to '%s'",
@@ -74,9 +94,10 @@ CartesianJogServerNode::CartesianJogServerNode(const rclcpp::NodeOptions & optio
   }
 
   const auto period = std::chrono::duration<double>(1.0 / publish_rate_hz_);
-  timer_ = create_wall_timer(
-    std::chrono::duration_cast<std::chrono::nanoseconds>(period),
-    std::bind(&CartesianJogServerNode::control_loop, this));
+  timer_ = create_timer(
+    period,
+    std::bind(&CartesianJogServerNode::control_loop, this),
+    cb_group_timer_);
 }
 
 CartesianJogServerNode::~CartesianJogServerNode()
@@ -88,14 +109,14 @@ CartesianJogServerNode::~CartesianJogServerNode()
 
 void CartesianJogServerNode::declare_all_parameters()
 {
-  publish_rate_hz_ = std::max(1.0, declare_or_get_param<double>(this, "publish_rate_hz", 50.0));
-  point_dt_s_ = std::max(0.01, declare_or_get_param<double>(this, "point_dt_s", 0.08));
-  stale_timeout_s_ = std::max(0.01, declare_or_get_param<double>(this, "stale_timeout_s", 0.25));
-  lpf_alpha_ = std::clamp(declare_or_get_param<double>(this, "lpf_alpha", 0.85), 0.0, 1.0);
-  max_joint_vel_rad_s_ = std::max(0.01, declare_or_get_param<double>(this, "max_joint_vel_rad_s", 2.0));
-  base_frame_ = declare_or_get_param<std::string>(this, "base_frame", "base_footprint");
+  publish_rate_hz_ = std::max(1.0, get_or_declare_jog_param<double>(this, "publish_rate_hz", 50.0, "Publish rate in Hz"));
+  point_dt_s_ = std::max(0.01, get_or_declare_jog_param<double>(this, "point_dt_s", 0.08, "Point delta time in seconds"));
+  stale_timeout_s_ = std::max(0.01, get_or_declare_jog_param<double>(this, "stale_timeout_s", 0.25, "Stale timeout in seconds"));
+  lpf_alpha_ = std::clamp(get_or_declare_jog_param<double>(this, "lpf_alpha", 0.85, "Low-pass filter alpha [0, 1]"), 0.0, 1.0);
+  max_joint_vel_rad_s_ = std::max(0.01, get_or_declare_jog_param<double>(this, "max_joint_vel_rad_s", 2.0, "Max joint velocity in rad/s"));
+  base_frame_ = get_or_declare_jog_param<std::string>(this, "base_frame", "base_footprint", "Base reference frame");
 
-  const std::string mode_str = declare_or_get_param<std::string>(this, "controller_mode", "trajectory");
+  const std::string mode_str = get_or_declare_jog_param<std::string>(this, "controller_mode", "trajectory", "Controller mode: trajectory or forward");
   if (mode_str == "trajectory") {
     controller_mode_ = ControllerMode::TRAJECTORY;
   } else if (mode_str == "forward") {
@@ -105,10 +126,10 @@ void CartesianJogServerNode::declare_all_parameters()
       "Invalid controller_mode: '" + mode_str + "'. Expected 'trajectory' or 'forward'.");
   }
 
-  arm_trajectory_topic_ = declare_or_get_param<std::string>(
-    this, "arm_trajectory_topic", "/arm_trajectory_controller/joint_trajectory");
-  arm_forward_topic_ = declare_or_get_param<std::string>(
-    this, "arm_forward_topic", "/arm_forward_controller/commands");
+  arm_trajectory_topic_ = get_or_declare_jog_param<std::string>(
+    this, "arm_trajectory_topic", "/arm_trajectory_controller/joint_trajectory", "Arm trajectory controller topic");
+  arm_forward_topic_ = get_or_declare_jog_param<std::string>(
+    this, "arm_forward_topic", "/arm_forward_controller/commands", "Arm forward controller topic");
 
   motion_filter_ = JointMotionFilter<5>(lpf_alpha_, max_joint_vel_rad_s_);
 }
@@ -128,9 +149,7 @@ void CartesianJogServerNode::init_executor_and_kinematics()
     [this](const std::shared_ptr<workspace::SO101AnalyticalSolver> & solver,
            const workspace::KinematicsModel & model) {
       std::lock_guard<std::mutex> lock(kinematics_mutex_);
-      ik_solver_ = solver;
-      kinematics_model_ = model;
-      jogger_ = std::make_unique<CartesianJogger>(ik_solver_, kinematics_model_);
+      jogger_ = std::make_unique<CartesianJogger>(solver, model);
     });
 }
 
@@ -151,7 +170,7 @@ std::string CartesianJogServerNode::kinematics_error_msg() const
 
 bool CartesianJogServerNode::is_active() const noexcept
 {
-  return active_jogging_;
+  return active_jogging_.load(std::memory_order_acquire);
 }
 
 bool CartesianJogServerNode::is_executing_trajectory() const noexcept
@@ -207,15 +226,18 @@ void CartesianJogServerNode::control_loop()
   const auto physical_joints = *arm_joints_opt;
 
   geometry_msgs::msg::Twist twist;
-  rclcpp::Time twist_time;
+  std::optional<rclcpp::Time> twist_time;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     twist = latest_twist_;
     twist_time = last_twist_time_;
   }
 
-  const double elapsed_twist_s = (now() - twist_time).seconds();
-  const bool is_twist_fresh = (elapsed_twist_s >= 0.0 && elapsed_twist_s <= stale_timeout_s_);
+  const bool is_twist_fresh = twist_time.has_value() &&
+    [this, &twist_time]() {
+      const double elapsed_twist_s = (now() - *twist_time).seconds();
+      return elapsed_twist_s >= 0.0 && elapsed_twist_s <= stale_timeout_s_;
+    }();
 
   std::lock_guard<std::mutex> lock(kinematics_mutex_);
 
@@ -231,11 +253,11 @@ void CartesianJogServerNode::handle_suppressed_or_idle(
   const std::array<double, 5> & physical_joints,
   bool is_idle_timeout)
 {
-  if (active_jogging_) {
+  if (active_jogging_.load(std::memory_order_relaxed)) {
     if (is_idle_timeout) {
       RCLCPP_INFO(get_logger(), "Cartesian jog stream timed out (> %.2fs). Idle.", stale_timeout_s_);
     }
-    active_jogging_ = false;
+    active_jogging_.store(false, std::memory_order_release);
   }
   if (jogger_) {
     jogger_->sync_from_fk(physical_joints);
@@ -258,10 +280,10 @@ void CartesianJogServerNode::execute_active_jog(
   delta.dpitch = twist.angular.y * dt;
   delta.droll = twist.angular.x * dt;
 
-  if (!active_jogging_) {
+  if (!active_jogging_.load(std::memory_order_relaxed)) {
     jogger_->sync_from_fk(physical_joints);
     motion_filter_.sync(physical_joints);
-    active_jogging_ = true;
+    active_jogging_.store(true, std::memory_order_release);
   }
 
   const auto jog_res = jogger_->process_jog(delta);
@@ -327,8 +349,7 @@ void CartesianJogServerNode::handle_named_pose_request(
     return;
   }
 
-  std::string key = request->pose_name;
-  std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+  const std::string key = to_lower_trimmed(request->pose_name);
   if (key == "approach") {
     response->success = false;
     response->message =
@@ -337,7 +358,14 @@ void CartesianJogServerNode::handle_named_pose_request(
     return;
   }
 
-  auto [ok, msg] = executor_->execute_named_pose(request->pose_name);
+  if (is_executing_trajectory()) {
+    response->success = false;
+    response->message = "Arm is currently busy executing another trajectory";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
+  auto [ok, msg] = executor_->execute_named_pose(key);
   response->success = ok;
   response->message = msg;
   if (!ok) {
@@ -350,6 +378,13 @@ void CartesianJogServerNode::handle_toggle_gripper(
   const std::shared_ptr<Trigger::Request> /*request*/,
   std::shared_ptr<Trigger::Response> response)
 {
+  if (is_executing_trajectory()) {
+    response->success = false;
+    response->message = "Arm is currently busy executing another trajectory";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
   const auto current_pos = executor_->get_current_positions_or_default();
   if (current_pos.empty()) {
     response->success = false;

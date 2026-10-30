@@ -15,9 +15,27 @@ namespace lekiwi_chess_master
   ChessEngineActionComponent::ChessEngineActionComponent(const rclcpp::NodeOptions &options)
       : Node("chess_engine_action_component", options)
   {
-    stockfish_path_ = declare_parameter<std::string>("stockfish_path", "/usr/games/stockfish");
-    default_think_time_ms_ = declare_parameter<int>("think_time_ms", 1000);
-    action_name_ = declare_parameter<std::string>("action_name", "/chess/compute_best_move");
+    rcl_interfaces::msg::ParameterDescriptor stockfish_desc;
+    stockfish_desc.description = "Absolute or PATH executable path to the Stockfish chess engine binary";
+
+    rcl_interfaces::msg::ParameterDescriptor think_desc;
+    think_desc.description = "Default think time for Stockfish engine in milliseconds";
+    think_desc.integer_range.resize(1);
+    think_desc.integer_range[0].from_value = 10;
+    think_desc.integer_range[0].to_value = 60000;
+    think_desc.integer_range[0].step = 1;
+
+    rcl_interfaces::msg::ParameterDescriptor action_desc;
+    action_desc.description = "Action topic name for computing best move";
+
+    stockfish_path_ = declare_parameter<std::string>("stockfish_path", "/usr/games/stockfish", stockfish_desc);
+    default_think_time_ms_ = declare_parameter<int>("think_time_ms", 1000, think_desc);
+    if (default_think_time_ms_ < 10)
+    {
+      RCLCPP_WARN(get_logger(), "think_time_ms (%d) is below minimum (10 ms). Clamping to 10 ms.", default_think_time_ms_);
+      default_think_time_ms_ = 10;
+    }
+    action_name_ = declare_parameter<std::string>("action_name", "/chess/compute_best_move", action_desc);
 
     RCLCPP_INFO(
         get_logger(),
