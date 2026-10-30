@@ -68,15 +68,15 @@ def test_tf_replayer_seed_and_missing_chain_raises():
     if not replayer.enabled:
         return
 
-    # Seed nominal map -> chessboard_frame
-    replayer.seed_static_transform("map", "chessboard_frame", [0.0, 0.0, 0.006, 0.0, 0.0, 0.0])
+    # Seed nominal gripper -> gripperframe
+    replayer.seed_static_transform("gripper", "gripperframe", [-0.0079, -0.000218, -0.103424, -1.5708, 0.0, -1.5708])
 
-    # Trying to transform to base_footprint when map -> odom or odom -> base_footprint is missing
-    # MUST raise RuntimeError, NEVER silently fall back or assume map == odom!
+    # Trying to transform to base_footprint when gripper -> base_footprint chain is missing
+    # MUST raise RuntimeError, NEVER silently fall back!
     with pytest.raises(RuntimeError) as excinfo:
         replayer.transform_point(
             np.array([0.1, 0.2, 0.035]),
-            source_frame="chessboard_frame",
+            source_frame="gripperframe",
             target_frame="base_footprint",
             time_ns=1_000_000_000,
         )

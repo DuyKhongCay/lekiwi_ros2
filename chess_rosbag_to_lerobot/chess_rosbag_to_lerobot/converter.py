@@ -298,12 +298,12 @@ def convert_one_bag(
     tf_msg_cls = get_message("tf2_msgs/msg/TFMessage") if "tf2_msgs/msg/TFMessage" in bag_topic_types.values() else None
     tf_replayer = TfReplayer()
 
-    # Seed nominal static transform (e.g. map -> chessboard_frame) if defined in config
-    if cfg.chessboard.chessboard_pose_in_map:
+    # Seed calibrated static transform for tool frame (e.g. gripper -> gripperframe)
+    if cfg.tool_transform:
         tf_replayer.seed_static_transform(
-            parent_frame=cfg.chessboard.map_frame,
-            child_frame=cfg.chessboard.board_frame,
-            pose_6d=cfg.chessboard.chessboard_pose_in_map,
+            parent_frame=cfg.tool_transform.parent_frame,
+            child_frame=cfg.tool_transform.child_frame,
+            pose_6d=cfg.tool_transform.pose_6d,
         )
 
     # Determine topic delivering joint states for trajectory analysis
@@ -334,7 +334,7 @@ def convert_one_bag(
     analyzer = TrajectoryAnalyzer(
         tf_replayer=tf_replayer,
         filter_cfg=cfg.teleop_filter,
-        landmarks=cfg.chessboard.landmarks,
+        landmarks=cfg.landmarks,
     )
     plan = analyzer.analyze(
         joint_samples=joint_samples,

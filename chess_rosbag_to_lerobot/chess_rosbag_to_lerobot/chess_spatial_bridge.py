@@ -1,12 +1,11 @@
 # Copyright 2026 LeKiwi Labs
 # Licensed under the Apache License, Version 2.0.
 
-"""Chess spatial bridge: maps chess instructions to 3D metric coordinates and task metadata.
+"""Chess spatial bridge: parses chess instructions into task metadata and sorts episodes.
 
 Adheres to Single Source of Truth (SSOT) matching:
 - lekiwi_chess_master::domain
 - lekiwi_orchestrator::MovePlanBuilder
-- chessboard_pose_estimator
 """
 
 from __future__ import annotations
@@ -16,9 +15,6 @@ from enum import Enum
 from pathlib import Path
 import re
 from typing import Callable, List, Optional, Sequence, Tuple
-import numpy as np
-
-from chess_rosbag_to_lerobot.config import ChessboardConfig
 
 
 # -----------------------------------------------------------------------------
@@ -60,24 +56,6 @@ COLOR_ORDER = {
     "black": 1,
     "unknown": 2,
 }
-
-
-@dataclass(frozen=True)
-class SpatialEndpoint:
-    """3D point and its reference frame domain flag."""
-    xyz: np.ndarray  # shape (3,), dtype float32
-    is_board_frame: bool
-
-
-@dataclass(frozen=True)
-class EpisodeSpatialPlan:
-    """Pre-computed spatial plan for an episode to prevent hot-loop branching."""
-    task_type: TaskType
-    canonical_task: str
-    source: Optional[SpatialEndpoint]
-    target: Optional[SpatialEndpoint]
-    task_one_hot: np.ndarray  # shape (4,), [is_move, is_clear, is_pick, is_place]
-    stow_xyz: np.ndarray      # shape (3,), dtype float32 in base_footprint frame
 
 
 @dataclass(frozen=True)
@@ -155,22 +133,6 @@ _MOVE_PICK_PLACE_RE = re.compile(
     r"^\s*pick\s+([a-h][1-8]),?\s+place\s+([a-h][1-8])\s*$",
     re.IGNORECASE,
 )
-
-
-def square_to_metric(square: str, cfg: ChessboardConfig) -> Tuple[float, float, float]:
-    """Convert an algebraic square (e.g. 'e4', 'a1', 'h8') to (x, y, z) in chessboard_frame."""
-    cleaned = square.strip().lower()
-    if len(cleaned) < 2 or not ("a" <= cleaned[0] <= "h" and "1" <= cleaned[1] <= "8"):
-        raise ValueError(f"Invalid chess square notation: '{square}'")
-
-    file_idx = ord(cleaned[0]) - ord("a")  # 0 to 7 (a to h)
-    rank_idx = ord(cleaned[1]) - ord("1")  # 0 to 7 (1 to 8)
-
-    # Origin is strictly at board center (between rank 4 & 5, and file d & e)
-    x = (file_idx - 3.5) * cfg.square_size_m
-    y = (rank_idx - 3.5) * cfg.square_size_m
-    z = cfg.grasp_clearance_z_m
-    return x, y, z
 
 
 def parse_chess_task(task_text: str) -> ParsedChessTask:
@@ -296,69 +258,6 @@ def parse_chess_task(task_text: str) -> ParsedChessTask:
     )
 
 
-def resolve_episode_spatial_plan(
-    task_text: str,
-    cfg: ChessboardConfig,
-) -> EpisodeSpatialPlan:
-    """Resolve an episode's spatial conditioning plan.
-
-    If square notations are absent (e.g. unannotated teleop episodes), source/target endpoints
-    are set to None (no synthetic fallback to stow or grid snapping). The true endpoints
-    must be recovered directly from robot TF trajectories via TrajectoryAnalyzer.
-    """
-    parsed = parse_chess_task(task_text)
-    stow_xyz = np.array(cfg.landmarks.stow, dtype=np.float32)
-
-    source: Optional[SpatialEndpoint] = None
-    target: Optional[SpatialEndpoint] = None
-
-    if parsed.task_type == TaskType.MOVE:
-        if parsed.from_square:
-            from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
-            source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
-        if parsed.to_square:
-            to_xyz = np.array(square_to_metric(parsed.to_square, cfg), dtype=np.float32)
-            target = SpatialEndpoint(xyz=to_xyz, is_board_frame=True)
-        one_hot = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-
-    elif parsed.task_type == TaskType.CLEAR:
-        if parsed.from_square:
-            from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
-            source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
-
-        bin_coords = (
-            cfg.landmarks.clear_left
-            if parsed.clear_bin_side == ClearBinSide.LEFT
-            else cfg.landmarks.clear_right
-        )
-        target = SpatialEndpoint(xyz=np.array(bin_coords, dtype=np.float32), is_board_frame=False)
-        one_hot = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
-
-    elif parsed.task_type == TaskType.PICK:
-        if parsed.from_square:
-            from_xyz = np.array(square_to_metric(parsed.from_square, cfg), dtype=np.float32)
-            source = SpatialEndpoint(xyz=from_xyz, is_board_frame=True)
-        one_hot = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
-
-    elif parsed.task_type == TaskType.PLACE:
-        if parsed.to_square:
-            to_xyz = np.array(square_to_metric(parsed.to_square, cfg), dtype=np.float32)
-            target = SpatialEndpoint(xyz=to_xyz, is_board_frame=True)
-        one_hot = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-
-    else:
-        raise ValueError(f"Unsupported task type: {parsed.task_type}")
-
-    return EpisodeSpatialPlan(
-        task_type=parsed.task_type,
-        canonical_task=task_text,
-        source=source,
-        target=target,
-        task_one_hot=one_hot,
-        stow_xyz=stow_xyz,
-    )
-
-
 def sort_episodes(
     episodes: Sequence[Path],
     task_extractor: Optional[Callable[[Path], str]] = None,
@@ -382,4 +281,3 @@ def sort_episodes(
             return (99, 99, 99, ep_dir.name)
 
     return sorted(episodes, key=_episode_sort_key)
-
