@@ -328,7 +328,6 @@ Visualization Manager:
       Namespaces:
         feasibility/base_footprints: true
         feasibility/hud_status: true
-        feasibility/nav_trajectory: true
         feasibility/reach_envelope: true
         feasibility/target_points: true
       Topic:
@@ -342,7 +341,9 @@ Visualization Manager:
       Enabled: true
       Name: "3D Chessboard & Pieces"
       Namespaces:
-        {}
+        chess/highlights: true
+        chess/move_arrows: true
+        chess/pieces: true
       Topic:
         Depth: 10
         Durability Policy: Transient Local
@@ -492,7 +493,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.7644824981689453
+      Distance: 1.6695525646209717
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
