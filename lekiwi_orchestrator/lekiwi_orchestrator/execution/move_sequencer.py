@@ -31,7 +31,6 @@ from lekiwi_orchestrator.core.fsm import (
 )
 from lekiwi_orchestrator.core.mission_types import (
     ActionResult,
-    ArmLandmarks,
     ObservationIntent,
 )
 from lekiwi_orchestrator.core.utils import get_node_now_sec
@@ -67,7 +66,6 @@ class MoveSequencer:
         callback_group: CallbackGroup | None = None,
         observation_navigator: ObsNavigator | None = None,
         tf_buffer: tf2_ros.Buffer | None = None,
-        landmarks: ArmLandmarks | None = None,
         bypass_pause_sec: float = 3.0,
         max_recovery_attempts: int = 3,
     ) -> None:
@@ -76,7 +74,6 @@ class MoveSequencer:
         self._perception = perception
         self._board_frame = board_frame
         self._action_timeout_sec = action_timeout_sec
-        self._landmarks = landmarks if landmarks is not None else ArmLandmarks()
 
         self._on_pipeline_completed = on_pipeline_completed
         self._on_pipeline_failed = on_pipeline_failed
@@ -503,45 +500,8 @@ class MoveSequencer:
         if not self._cancel_event.is_set():
             self._execute_manip_stage(stage)
 
-    def _transform_point_to_base(
-        self, point: Point | None, target_frame: str
-    ) -> list[float]:
-        """Transforms a geometry_msgs/Point to base_footprint coordinate frame.
-
-        Fail-Fast: Raises RuntimeError if tf_buffer is missing or transform lookup fails.
-        """
-        if point is None:
-            return [0.0, 0.0, 0.0]
-
-        if self._tf_buffer is None:
-            raise RuntimeError(
-                f"MoveSequencer cannot transform point from '{target_frame}' to 'base_footprint': "
-                "tf_buffer was not provided."
-            )
-
-        try:
-            tf_stamped = self._tf_buffer.lookup_transform(
-                "base_footprint",
-                target_frame,
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.2),
-            )
-        except Exception as exc:
-            self._node.get_logger().error(
-                f"MoveSequencer: Failed to lookup transform from '{target_frame}' to 'base_footprint': {exc}"
-            )
-            raise RuntimeError(
-                f"Cannot build manipulation goal: TF transform from '{target_frame}' to 'base_footprint' unavailable: {exc}"
-            ) from exc
-
-        pt_stamped = PointStamped()
-        pt_stamped.header.frame_id = target_frame
-        pt_stamped.point = point
-        transformed = tf2_geometry_msgs.do_transform_point(pt_stamped, tf_stamped)
-        return [float(transformed.point.x), float(transformed.point.y), float(transformed.point.z)]
-
     def _build_manipulation_goal(self, stage: MoveStep) -> ExecuteChessMove.Goal:
-        """Build ExecuteChessMove.Goal message with 10D environment_state from a MoveStep domain object."""
+        """Build ExecuteChessMove.Goal message from a MoveStep domain object."""
         goal = ExecuteChessMove.Goal()
         goal.target_frame = self._board_frame
         goal.pick_point = stage.pick_point
@@ -561,32 +521,6 @@ class MoveSequencer:
             goal.operation = ExecuteChessMove.Goal.OP_PLACE
         else:
             raise ValueError(f"Unsupported stage for manipulation: {stage.name}")
-
-        # Compute 6D spatial conditioning: [src(3), tgt(3)] in base_footprint
-        p_pick = self._transform_point_to_base(stage.pick_point, self._board_frame)
-        p_place = self._transform_point_to_base(stage.place_point, self._board_frame)
-
-        if goal.operation == ExecuteChessMove.Goal.OP_MOVE:
-            src, tgt = p_pick, p_place
-        elif goal.operation == ExecuteChessMove.Goal.OP_CLEAR_LEFT:
-            src, tgt = p_pick, list(self._landmarks.clear_left)
-        elif goal.operation == ExecuteChessMove.Goal.OP_CLEAR_RIGHT:
-            src, tgt = p_pick, list(self._landmarks.clear_right)
-        elif goal.operation == ExecuteChessMove.Goal.OP_PICK:
-            src, tgt = p_pick, list(self._landmarks.stow)
-        elif goal.operation == ExecuteChessMove.Goal.OP_PLACE:
-            src, tgt = list(self._landmarks.stow), p_place
-        else:
-            src, tgt = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
-
-        goal.environment_state = [
-            float(src[0]),
-            float(src[1]),
-            float(src[2]),
-            float(tgt[0]),
-            float(tgt[1]),
-            float(tgt[2]),
-        ]
 
         return goal
 

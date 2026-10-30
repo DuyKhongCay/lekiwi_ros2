@@ -64,7 +64,7 @@ namespace lekiwi_chess_master::domain
     }
 
     details.uci = std::string(uci_move);
-    details.piece_color = (board.sideToMove() == chess::Color::WHITE) ? "w" : "b";
+    details.piece_color = (board.sideToMove() == chess::Color::WHITE) ? "white" : "black";
 
     chess::Move move = chess::uci::uciToMove(board, uci_move);
     if (move == chess::Move::NO_MOVE)

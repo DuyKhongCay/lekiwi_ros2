@@ -21,6 +21,7 @@ from lekiwi_orchestrator.core.mission_types import (
     ActionResult,
     ChessMoveGoal,
     ObservationIntent,
+    parse_piece_from_fen,
 )
 from lekiwi_orchestrator.core.parameters import OrchestratorParameters
 from lekiwi_orchestrator.core.utils import (
@@ -49,6 +50,7 @@ __all__ = [
     "ActionResult",
     "ChessMoveGoal",
     "ObservationIntent",
+    "parse_piece_from_fen",
     # Parameters
     "OrchestratorParameters",
     # Utilities

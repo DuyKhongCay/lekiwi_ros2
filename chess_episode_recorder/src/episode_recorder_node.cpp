@@ -25,7 +25,7 @@ lekiwi_interfaces::msg::ChessMoveDetails to_ros_move_details(
   details.uci = cand.uci;
 
   auto moving = cand.moving_piece(board);
-  details.piece_color = (moving.color == chess::Color::WHITE) ? "w" : "b";
+  details.piece_color = (moving.color == chess::Color::WHITE) ? "white" : "black";
   details.piece_type = moving.piece_name();
 
   details.is_capture = cand.is_capture(board);

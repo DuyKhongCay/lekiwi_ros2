@@ -11,6 +11,7 @@ from unittest.mock import Mock
 import pytest
 import rclpy
 from geometry_msgs.msg import Point, PoseStamped
+from lekiwi_interfaces.action import ExecuteChessMove
 from lekiwi_interfaces.srv import CheckMoveFeasibility
 from lekiwi_orchestrator.core.fsm import MotionExecutionState
 from lekiwi_orchestrator.core.mission_types import (
@@ -256,6 +257,7 @@ def test_move_pipeline_cancellation_scenarios(ros_context):
         assert not executor.is_active
 
         # Scenario 2: Cancellation while waiting for grasp settle aborts without executing manipulation
+        manip_goals_sent.clear()
         executor_settle = None
 
         def _readiness_provider():
@@ -604,11 +606,11 @@ def test_move_sequencer_transforms_and_bin_side_mapping(ros_context):
     )
 
     try:
-        # 1. Transform accuracy to base_footprint
+        # 1. Clean manipulation goal building without spatial environment_state dependency
         stage = MoveStep(
             name=StepKind.MOVE,
             target_pose=None,
-            instruction="Pick c7, place c5",
+            instruction="Move black pawn to target",
             from_square="c7",
             to_square="c5",
             is_capture=False,
@@ -617,18 +619,19 @@ def test_move_sequencer_transforms_and_bin_side_mapping(ros_context):
             motion_state=MotionExecutionState.PICKING_PIECE,
         )
         goal = executor._build_manipulation_goal(stage)
-        expected_src = [0.2680, 0.2183, 0.0310]
-        expected_tgt = [0.3359, 0.1519, 0.0310]
-        assert len(goal.environment_state) == 6
-        for i in range(3):
-            assert math.isclose(goal.environment_state[i], expected_src[i], abs_tol=1e-3)
-            assert math.isclose(goal.environment_state[3 + i], expected_tgt[i], abs_tol=1e-3)
+        assert goal.operation == ExecuteChessMove.Goal.OP_MOVE
+        assert goal.target_frame == "chessboard_frame"
+        assert goal.instruction == "Move black pawn to target"
+        assert math.isclose(goal.pick_point.x, -0.07125)
+        assert math.isclose(goal.pick_point.y, 0.11875)
+        assert math.isclose(goal.place_point.x, -0.07125)
+        assert math.isclose(goal.place_point.y, 0.02375)
 
         # 2. Clear bin side mapping: left vs right
         stage_left = MoveStep(
             name=StepKind.CLEAR,
             target_pose=None,
-            instruction="Clear white pawn to left bin [d4]",
+            instruction="Clear white pawn to left bin",
             from_square="d4",
             to_square="",
             is_capture=True,
@@ -641,7 +644,7 @@ def test_move_sequencer_transforms_and_bin_side_mapping(ros_context):
         stage_right = MoveStep(
             name=StepKind.CLEAR,
             target_pose=None,
-            instruction="Clear white pawn to right bin [d4]",
+            instruction="Clear white pawn to right bin",
             from_square="d4",
             to_square="",
             is_capture=True,
@@ -656,23 +659,20 @@ def test_move_sequencer_transforms_and_bin_side_mapping(ros_context):
         node.destroy_node()
 
 
-def test_move_sequencer_fails_fast_on_missing_or_failed_tf(ros_context):
-    """Verify Fail-Fast behavior: MoveSequencer aborts without dispatching goals when TF is missing or lookup fails."""
-    node = Node("test_fail_fast_tf_node")
+def test_move_sequencer_dispatches_clean_goal(ros_context):
+    """Verify MoveSequencer dispatches clean ExecuteChessMove goal to motion client."""
+    node = Node("test_dispatch_clean_goal_node")
     dispatcher = FakeMotionClient()
     perception = PerceptionContextManager(
         node=node,
-        perception_context_topic="/test/fail_fast/perception_context",
-        set_perception_service_name="/test/fail_fast/set_context",
+        perception_context_topic="/test/dispatch/perception_context",
+        set_perception_service_name="/test/dispatch/set_context",
     )
-    failed_events = []
-
-    from lekiwi_orchestrator.planning.move_planner import MoveStep, StepKind
 
     stage = MoveStep(
         name=StepKind.MOVE,
         target_pose=None,
-        instruction="Pick c7, place c5",
+        instruction="Move black pawn to target",
         from_square="c7",
         to_square="c5",
         is_capture=False,
@@ -681,34 +681,20 @@ def test_move_sequencer_fails_fast_on_missing_or_failed_tf(ros_context):
         motion_state=MotionExecutionState.PICKING_PIECE,
     )
 
-    # Case 1: tf_buffer is None -> must fail fast and not dispatch
-    executor_no_tf = MoveSequencer(
+    executor = MoveSequencer(
         node=node,
         dispatcher=dispatcher,
         perception=perception,
-        tf_buffer=None,
-        on_pipeline_failed=lambda err: failed_events.append(err),
+        board_frame="chessboard_frame",
     )
 
-    executor_no_tf._execute_manip_stage(stage)
-    assert len(failed_events) == 1
-    assert "tf_buffer was not provided" in failed_events[0]
-
-    # Case 2: lookup_transform raises exception -> must fail fast and not dispatch
-    mock_tf_error = Mock()
-    mock_tf_error.lookup_transform.side_effect = RuntimeError("TF lookup timeout")
-
-    executor_lookup_fail = MoveSequencer(
-        node=node,
-        dispatcher=dispatcher,
-        perception=perception,
-        tf_buffer=mock_tf_error,
-        on_pipeline_failed=lambda err: failed_events.append(err),
-    )
-
-    executor_lookup_fail._execute_manip_stage(stage)
-    assert len(failed_events) == 2
-    assert "TF lookup timeout" in failed_events[1]
+    executor._execute_manip_stage(stage)
+    assert len(dispatcher.manip_goals) == 1
+    sent_goal = dispatcher.manip_goals[0]
+    assert sent_goal.operation == ExecuteChessMove.Goal.OP_MOVE
+    assert sent_goal.target_frame == "chessboard_frame"
+    assert sent_goal.instruction == "Move black pawn to target"
+    assert math.isclose(sent_goal.pick_point.x, -0.07125)
 
     perception.destroy()
     dispatcher.destroy()

@@ -30,7 +30,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             "e2",
             "e4",
             "pawn",
-            "w",
+            "white",
             False,
             "",
             "",
@@ -44,7 +44,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             "e7",
             "e8",
             "pawn",
-            "w",
+            "white",
             False,
             "",
             "q",
@@ -57,7 +57,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             ChessMoveDetails(
                 uci="e4d5",
                 piece_type="pawn:knight",
-                piece_color="w",
+                piece_color="white",
                 is_capture=True,
                 is_en_passant=False,
                 is_castling=False,
@@ -65,7 +65,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             "e4",
             "d5",
             "pawn",
-            "w",
+            "white",
             True,
             "d5",
             "",
@@ -78,7 +78,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             ChessMoveDetails(
                 uci="e5f6",
                 piece_type="pawn:pawn",
-                piece_color="w",
+                piece_color="white",
                 is_capture=True,
                 is_en_passant=True,
                 is_castling=False,
@@ -86,7 +86,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             "e5",
             "f6",
             "pawn",
-            "w",
+            "white",
             True,
             "f5",
             "",
@@ -99,7 +99,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             ChessMoveDetails(
                 uci="d4c3",
                 piece_type="pawn:pawn",
-                piece_color="b",
+                piece_color="black",
                 is_capture=True,
                 is_en_passant=True,
                 is_castling=False,
@@ -107,7 +107,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             "d4",
             "c3",
             "pawn",
-            "b",
+            "black",
             True,
             "c4",
             "",
@@ -120,7 +120,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             ChessMoveDetails(
                 uci="e1g1",
                 piece_type="king",
-                piece_color="w",
+                piece_color="white",
                 is_capture=False,
                 is_en_passant=False,
                 is_castling=True,
@@ -128,7 +128,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             "e1",
             "g1",
             "king",
-            "w",
+            "white",
             False,
             "",
             "",
@@ -141,7 +141,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             ChessMoveDetails(
                 uci="e8c8",
                 piece_type="king",
-                piece_color="b",
+                piece_color="black",
                 is_capture=False,
                 is_en_passant=False,
                 is_castling=True,
@@ -149,7 +149,7 @@ from lekiwi_orchestrator.core.mission_types import ChessMoveGoal
             "e8",
             "c8",
             "king",
-            "b",
+            "black",
             False,
             "",
             "",
@@ -232,4 +232,22 @@ def test_goal_from_existing_chess_move_goal_identity_preserved():
     assert parsed.force_pick_place is True
     assert parsed.clear_bin_side == "left"
     assert parsed.bypass_steps == ("PICK", "PLACE")
+
+
+def test_parse_piece_from_fen():
+    """Verify parsing piece type and standardized color ('white'/'black') from FEN."""
+    from lekiwi_orchestrator.core.mission_types import parse_piece_from_fen
+
+    initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    assert parse_piece_from_fen(initial_fen, "c7") == ("pawn", "black")
+    assert parse_piece_from_fen(initial_fen, "e2") == ("pawn", "white")
+    assert parse_piece_from_fen(initial_fen, "g8") == ("knight", "black")
+    assert parse_piece_from_fen(initial_fen, "e4") is None
+
+    midgame_fen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2"
+    assert parse_piece_from_fen(midgame_fen, "c6") == ("knight", "black")
+    assert parse_piece_from_fen(midgame_fen, "f3") == ("knight", "white")
+    assert parse_piece_from_fen(midgame_fen, "invalid") is None
+    assert parse_piece_from_fen("", "c6") is None
+
 

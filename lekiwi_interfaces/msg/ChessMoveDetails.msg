@@ -6,7 +6,7 @@ string uci
 
 # Piece semantics & unified piece type ("<moving>" or "<moving>:<captured>")
 string piece_type              # Moving piece, or "moving:captured" if capture (e.g. "pawn", "pawn:knight")
-string piece_color             # Moving piece color: "w" or "b"
+string piece_color             # Moving piece color: "white" or "black"
 string promotion_piece         # Promoted piece: "queen", "knight", "rook", "bishop", or ""
 
 # Physical manipulation flags

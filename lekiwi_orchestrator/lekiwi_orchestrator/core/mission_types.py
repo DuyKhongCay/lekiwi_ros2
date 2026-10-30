@@ -35,15 +35,6 @@ class ActionResult:
     execution_time_sec: float = 0.0
 
 
-@dataclass(frozen=True)
-class ArmLandmarks:
-    """Pre-calibrated arm landmark Cartesian positions in base_footprint [x, y, z]."""
-
-    clear_left: tuple[float, float, float] = (0.05, 0.20, 0.15)
-    clear_right: tuple[float, float, float] = (0.05, -0.20, 0.15)
-    stow: tuple[float, float, float] = (0.05, 0.0, 0.20)
-
-
 class ObservationIntent(str, Enum):
     """Semantic observation goal for robot base relocation.
 
@@ -75,7 +66,7 @@ class ChessMoveGoal:
 
     uci: str
     piece_type: str = "pawn"
-    piece_color: str = "w"
+    piece_color: str = "white"
     promotion_piece: str = ""
     is_capture: bool = False
     is_en_passant: bool = False
@@ -191,16 +182,24 @@ class ChessMoveGoal:
         norm_bin = _normalize_bin_side(clear_bin_side)
 
         p_type = "pawn"
-        p_color = "w"
+        p_color = "white"
         promo = cleaned_move[4:] if len(cleaned_move) > 4 else ""
         is_cap = False
         is_ep = False
         is_castle = False
 
         if move_details is not None:
-            raw_c = move_details.piece_color.strip().lower()
-            p_color = "b" if raw_c in ("b", "black") else "w"
-            p_type = move_details.piece_type or "pawn"
+            raw_c = move_details.piece_color.strip().lower() if move_details.piece_color else ""
+            if raw_c in ("black", "b"):
+                p_color = "black"
+            elif raw_c in ("white", "w"):
+                p_color = "white"
+            elif raw_c:
+                p_color = raw_c
+            else:
+                p_color = "white"
+
+            p_type = move_details.piece_type.strip().lower() if move_details.piece_type else "pawn"
             promo = move_details.promotion_piece or promo
             is_cap = bool(move_details.is_capture)
             is_ep = bool(move_details.is_en_passant)
@@ -218,3 +217,54 @@ class ChessMoveGoal:
             clear_bin_side=norm_bin,
             bypass_steps=norm_bypass,
         )
+
+
+def parse_piece_from_fen(fen: str, square: str) -> tuple[str, str] | None:
+    """Parse piece type and standardized color ('white'/'black') from FEN board representation.
+
+    Args:
+        fen: Standard FEN string (at least board placement substring).
+        square: 2-character square algebraic notation e.g. 'e2', 'c7'.
+
+    Returns:
+        Tuple of (piece_type, piece_color) e.g. ('pawn', 'black'), or None if square is empty or invalid.
+    """
+    if not fen or len(square) != 2:
+        return None
+    file_char = square[0].lower()
+    rank_char = square[1]
+    if not ("a" <= file_char <= "h") or not ("1" <= rank_char <= "8"):
+        return None
+    file_idx = ord(file_char) - ord("a")
+    rank_idx = 8 - int(rank_char)
+
+    board_str = fen.strip().split()[0]
+    ranks = board_str.split("/")
+    if len(ranks) != 8:
+        return None
+
+    expanded_rank: list[str] = []
+    for ch in ranks[rank_idx]:
+        if ch.isdigit():
+            expanded_rank.extend(["."] * int(ch))
+        else:
+            expanded_rank.append(ch)
+
+    if len(expanded_rank) != 8:
+        return None
+
+    piece_ch = expanded_rank[file_idx]
+    if piece_ch == ".":
+        return None
+
+    piece_color = "white" if piece_ch.isupper() else "black"
+    piece_map = {
+        "p": "pawn",
+        "n": "knight",
+        "b": "bishop",
+        "r": "rook",
+        "q": "queen",
+        "k": "king",
+    }
+    piece_type = piece_map.get(piece_ch.lower(), "pawn")
+    return piece_type, piece_color

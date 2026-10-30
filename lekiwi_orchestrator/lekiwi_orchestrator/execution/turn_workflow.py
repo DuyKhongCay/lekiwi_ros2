@@ -25,7 +25,12 @@ from rclpy.node import Node
 from rclpy.timer import Timer
 
 from lekiwi_orchestrator.core.fsm import MacroMissionState
-from lekiwi_orchestrator.core.mission_types import ActionResult, ChessMoveGoal, ObservationIntent
+from lekiwi_orchestrator.core.mission_types import (
+    ActionResult,
+    ChessMoveGoal,
+    ObservationIntent,
+    parse_piece_from_fen,
+)
 from lekiwi_orchestrator.core.utils import get_node_now_sec
 from lekiwi_orchestrator.planning.move_planner import MovePlanBuilder
 
@@ -348,7 +353,42 @@ class GameStatusHandler:
             f">>> [ORCHESTRATOR] Engine Best Move: '{best_move_uci}'"
         )
         self._reset_obs_viewpoints_fn()
-        goal = ChessMoveGoal.from_uci_or_details(uci_move=best_move_uci)
+
+        # Construct rich ChessMoveDetails from current FEN state
+        move_details = ChessMoveDetails()
+        move_details.uci = best_move_uci
+
+        # Detect moving piece and color from FEN at origin square
+        from_square = best_move_uci[:2]
+        to_square = best_move_uci[2:4]
+        parsed_origin = parse_piece_from_fen(current_fen, from_square)
+        if parsed_origin is not None:
+            move_details.piece_type = parsed_origin[0]
+            move_details.piece_color = parsed_origin[1]
+        else:
+            move_details.piece_color = self._robot_color or "white"
+            move_details.piece_type = "pawn"
+
+        # Detect capture from target square
+        parsed_target = parse_piece_from_fen(current_fen, to_square)
+        if parsed_target is not None and parsed_target[1] != move_details.piece_color:
+            move_details.is_capture = True
+            move_details.piece_type = f"{move_details.piece_type}:{parsed_target[0]}"
+
+        # Promotion
+        if len(best_move_uci) >= 5:
+            promo_ch = best_move_uci[4].lower()
+            promo_map = {"q": "queen", "r": "rook", "b": "bishop", "n": "knight"}
+            move_details.promotion_piece = promo_map.get(promo_ch, "queen")
+
+        # Castling
+        if best_move_uci in ("e1g1", "e1c1", "e8g8", "e8c8") and move_details.piece_type == "king":
+            move_details.is_castling = True
+
+        goal = ChessMoveGoal.from_uci_or_details(
+            uci_move=best_move_uci,
+            move_details=move_details,
+        )
         if goal is None:
             self._node.get_logger().error(
                 f"Failed to create ChessMoveGoal from engine UCI '{best_move_uci}'!"

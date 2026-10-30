@@ -35,19 +35,19 @@ TEST_F(ChessDomainTest, ClassifiesAllLegalMoveCategories)
 
   const std::vector<TestCase> cases = {
     // 1. Quiet pawn
-    {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "e2e4", "pawn", "w", "", false, false, false},
+    {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "e2e4", "pawn", "white", "", false, false, false},
     // 2. Quiet knight
-    {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "g1f3", "knight", "w", "", false, false, false},
+    {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "g1f3", "knight", "white", "", false, false, false},
     // 3. Standard capture (pawn captures pawn)
-    {"rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2", "e4d5", "pawn:pawn", "w", "", true, false, false},
+    {"rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2", "e4d5", "pawn:pawn", "white", "", true, false, false},
     // 4. En-passant capture
-    {"rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", "e5f6", "pawn:pawn", "w", "", true, true, false},
+    {"rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", "e5f6", "pawn:pawn", "white", "", true, true, false},
     // 5. Kingside castling
-    {"r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4", "e1g1", "king", "w", "", false, false, true},
+    {"r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4", "e1g1", "king", "white", "", false, false, true},
     // 6. Pawn promotion to queen
-    {"8/4P3/8/8/8/8/k7/4K3 w - - 0 1", "e7e8q", "pawn", "w", "queen", false, false, false},
+    {"8/4P3/8/8/8/8/k7/4K3 w - - 0 1", "e7e8q", "pawn", "white", "queen", false, false, false},
     // 7. Black piece quiet move
-    {"rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1", "g8f6", "knight", "b", "", false, false, false}
+    {"rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1", "g8f6", "knight", "black", "", false, false, false}
   };
 
   for (const auto &tc : cases)
