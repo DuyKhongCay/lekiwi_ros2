@@ -5,15 +5,21 @@
 server:
   host: "0.0.0.0"
   port: 8090
-  fps: 30
+  fps: 25
 
 engine:
-  fps: 30
+  fps: 25
   policy_type: "smolvla"
-  pretrained_name_or_path: "/home/duykhongcay/lerobot_ws/lekiwi_chess_smolvla"
+  pretrained_name_or_path: "/home/duykhongcay/lerobot_ws/lekiwi_chess_smolvla/checkpoints/010000/pretrained_model"
   actions_per_chunk: 30
   device: "cuda"
-  preload: false
+  preload: true
+  warmup: true
+  rtc:
+    enabled: true
+    execution_horizon: 10
+    max_guidance_weight: 10.0
+    prefix_attention_schedule: "linear"
 
 log_level: "INFO"
 

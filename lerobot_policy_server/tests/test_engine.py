@@ -125,3 +125,56 @@ def test_inference_engine_with_smolvla_lekiwi_chess(dummy_policy_config, dummy_t
     assert engine.policy is None
     engine.stop()
     assert engine.running is False
+
+
+def test_inference_engine_synthesize_dummy_observation():
+    """Verify synthetic warmup observation generation conforms to LeRobot schema."""
+    cfg = InferenceEngineConfig(fps=30, warmup=True)
+    engine = InferenceEngine(cfg)
+
+    # Before policy load
+    obs_uninit = engine._synthesize_dummy_observation()
+    assert obs_uninit.get_observation()["task"] == "warmup"
+    assert obs_uninit.get_observation()["observation.state"].shape == (12,)
+    assert obs_uninit.must_go is True
+
+    # Warmup on uninitialized policy safely logs warning and does not raise
+    engine.warmup()
+
+
+def test_inference_engine_rtc_predict_with_leftover(dummy_policy_config, dummy_timed_observation):
+    """Test full RTC inference flow with leftover actions and inference delay."""
+    from lerobot_policy_server.config import RTCServerConfig
+
+    cfg = InferenceEngineConfig(
+        fps=25,
+        warmup=False,
+        rtc=RTCServerConfig(
+            enabled=True,
+            execution_horizon=10,
+            max_guidance_weight=10.0,
+            prefix_attention_schedule="linear",
+        ),
+    )
+    engine = InferenceEngine(cfg)
+    engine.load_policy(dummy_policy_config)
+
+    assert engine.policy._rtc_enabled() is True
+    assert engine.policy.rtc_processor is not None
+
+    # Attach leftover physical joint actions (10 steps)
+    leftover_phys = np.full((10, 6), fill_value=0.1, dtype=np.float32)
+    dummy_timed_observation.prev_chunk_left_over = leftover_phys
+    dummy_timed_observation.inference_delay = 2
+
+    actions = engine.predict_action_chunk(dummy_timed_observation)
+    assert len(actions) == 30
+    for i, act in enumerate(actions):
+        arr = act.get_action()
+        if hasattr(arr, "cpu"):
+            arr = arr.cpu().numpy()
+        assert arr.shape == (6,)
+        assert not np.isnan(arr).any()
+
+    engine.clear_session()
+    engine.stop()

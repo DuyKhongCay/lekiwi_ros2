@@ -113,3 +113,20 @@ def test_deserialize_truncated_actions():
 
     with pytest.raises(ValueError, match="payload truncated"):
         server_proto.deserialize_actions(b"\x10\x00\x00\x00abc")
+
+
+def test_observation_with_rtc_serialization(dummy_timed_observation):
+    """Verify serialization and deserialization of RTC parameters (prev_chunk_left_over, delay)."""
+    leftover = np.random.randn(10, 6).astype(np.float32)
+    dummy_timed_observation.prev_chunk_left_over = leftover
+    dummy_timed_observation.inference_delay = 2
+    dummy_timed_observation.execution_horizon = 10
+
+    wire_bytes = server_proto.serialize_observation(dummy_timed_observation)
+    decoded = server_proto.deserialize_observation(wire_bytes)
+
+    assert decoded.prev_chunk_left_over is not None
+    assert decoded.prev_chunk_left_over.shape == (10, 6)
+    np.testing.assert_allclose(decoded.prev_chunk_left_over, leftover, atol=1e-5)
+    assert decoded.inference_delay == 2
+    assert decoded.execution_horizon == 10

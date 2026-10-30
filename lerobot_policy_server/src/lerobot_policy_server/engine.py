@@ -40,6 +40,7 @@ from lerobot.async_inference.helpers import (
     is_image_key,
 )
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+from lerobot.policies.rtc.configuration_rtc import RTCAttentionSchedule, RTCConfig
 from lerobot.processor import PolicyProcessorPipeline
 from lerobot.utils.constants import OBS_STATE
 from lerobot_policy_server.config import InferenceEngineConfig
@@ -54,7 +55,7 @@ def _decode_jpeg_to_rgb(jpeg_bytes: bytes) -> np.ndarray:
     bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
     if bgr is None:
         raise ValueError("cv2.imdecode failed: corrupted or invalid image bytes.")
-    return np.ascontiguousarray(bgr[:, :, ::-1], dtype=np.uint8)  # BGR -> RGB
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
 def _raw_observation_to_observation(raw_obs: dict[str, Any]) -> Observation:
@@ -149,7 +150,64 @@ class InferenceEngine:
         if requested_device == "cuda" and not torch.cuda.is_available():
             logger.warning("CUDA requested but not available. Falling back to CPU.")
             return "cpu"
+        if requested_device == "cuda":
+            torch.backends.cudnn.benchmark = True
         return requested_device
+
+    def _synthesize_dummy_observation(self) -> TimedObservation:
+        """Synthesize a dummy TimedObservation matching the policy input specifications."""
+        obs_payload: dict[str, Any] = {"task": "warmup"}
+        input_features = getattr(getattr(self.policy, "config", None), "input_features", {})
+
+        for feat_name, feat in input_features.items():
+            if is_image_key(feat_name):
+                h = feat.shape[1] if hasattr(feat, "shape") and len(feat.shape) >= 2 else 384
+                w = feat.shape[2] if hasattr(feat, "shape") and len(feat.shape) >= 3 else 384
+                dummy_rgb = np.zeros((h, w, 3), dtype=np.uint8)
+                _, enc = cv2.imencode(".jpg", dummy_rgb)
+                obs_payload[feat_name] = enc.tobytes()
+            elif feat_name == OBS_STATE:
+                dim = feat.shape[0] if hasattr(feat, "shape") else 12
+                obs_payload[feat_name] = np.zeros(dim, dtype=np.float32)
+
+        if OBS_STATE not in obs_payload:
+            obs_payload[OBS_STATE] = np.zeros(12, dtype=np.float32)
+
+        return TimedObservation(
+            timestamp=time.perf_counter(),
+            timestep=0,
+            observation=obs_payload,
+            must_go=True,
+        )
+
+    def warmup(self) -> None:
+        """Execute a dummy forward pass to compile CUDA kernels and JIT caches."""
+        if self.policy is None or self.preprocessor is None or self.postprocessor is None:
+            logger.warning("Inference warmup skipped: policy or processors not loaded.")
+            return
+
+        if self.device != "cuda" and not getattr(self.config, "force_warmup", False):
+            logger.debug("Inference warmup skipped: device is '%s' (CUDA warmup only).", self.device)
+            return
+
+        logger.info("Executing inference warmup forward pass on %s...", self.device)
+        t_start = time.perf_counter()
+        dummy_obs = self._synthesize_dummy_observation()
+
+        _ = self.predict_action_chunk(dummy_obs)
+
+        # RTC gradient guidance warmup if RTC is active
+        if self.policy is not None and getattr(self.policy, "_rtc_enabled", lambda: False)():
+            rtc_dummy_obs = self._synthesize_dummy_observation()
+            rtc_dummy_obs.prev_chunk_left_over = np.zeros((10, 6), dtype=np.float32)
+            rtc_dummy_obs.inference_delay = 2
+            _ = self.predict_action_chunk(rtc_dummy_obs)
+
+        if self.device == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+        elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+        logger.info("Inference warmup completed in %.1fms. Ready for client inference.", elapsed_ms)
 
     def load_policy(self, config: RemotePolicyConfig) -> None:
         """Load and warm up a LeRobot policy based on RemotePolicyConfig."""
@@ -178,6 +236,31 @@ class InferenceEngine:
             self.policy.to(self.device)
             self.policy.eval()
 
+            # Configure Real-Time Chunking (RTC) if enabled in config
+            rtc_cfg = getattr(self.config, "rtc", None)
+            if (
+                rtc_cfg
+                and getattr(rtc_cfg, "enabled", False)
+                and hasattr(self.policy, "supports_rtc")
+                and self.policy.supports_rtc()
+            ):
+                schedule_str = str(getattr(rtc_cfg, "prefix_attention_schedule", "linear")).upper()
+                schedule_enum = getattr(RTCAttentionSchedule, schedule_str, RTCAttentionSchedule.LINEAR)
+                self.policy.config.rtc_config = RTCConfig(
+                    enabled=True,
+                    execution_horizon=getattr(rtc_cfg, "execution_horizon", 10),
+                    max_guidance_weight=getattr(rtc_cfg, "max_guidance_weight", 10.0),
+                    prefix_attention_schedule=schedule_enum,
+                )
+                self.policy.init_rtc_processor()
+                logger.info(
+                    "Real-Time Chunking (RTC) enabled on %s: schedule=%s, horizon=%d, max_weight=%.1f",
+                    config.policy_type,
+                    schedule_str,
+                    rtc_cfg.execution_horizon,
+                    rtc_cfg.max_guidance_weight,
+                )
+
             device_override = {"device": self.device}
             preprocessor_overrides: dict[str, Any] = {"device_processor": device_override}
             if config.rename_map:
@@ -194,6 +277,9 @@ class InferenceEngine:
 
             elapsed = time.perf_counter() - start_load
             logger.info("Policy successfully loaded in %.2fs on %s", elapsed, self.device)
+
+            if getattr(self.config, "warmup", True):
+                self.warmup()
 
     def clear_session(self) -> None:
         """Release loaded policy and reclaim GPU memory."""
@@ -215,9 +301,67 @@ class InferenceEngine:
         self.running = False
         self.clear_session()
 
-    def _get_action_chunk(self, observation: dict[str, torch.Tensor]) -> torch.Tensor:
+    def _normalize_action_prefix(self, raw_prefix: torch.Tensor) -> torch.Tensor:
+        """Normalize physical actions (radians) into model latent normalized space."""
+        if self.preprocessor is None:
+            return raw_prefix
+        for step in self.preprocessor.steps:
+            if "Normalizer" in type(step).__name__ and hasattr(step, "features") and "action" in step.features:
+                transition = {"action": raw_prefix}
+                normed = step(transition)
+                return normed["action"]
+        return raw_prefix
+
+    def _prepare_rtc_kwargs(self, obs_t: TimedObservation) -> dict[str, Any]:
+        """Extract and prepare Real-Time Chunking (RTC) arguments for policy inference."""
+        if not (self.policy is not None and getattr(self.policy, "_rtc_enabled", lambda: False)()):
+            return {}
+
+        leftover_raw = getattr(obs_t, "prev_chunk_left_over", None)
+        if leftover_raw is None and hasattr(obs_t, "get_observation"):
+            raw_obs = obs_t.get_observation()
+            leftover_raw = raw_obs.get("prev_chunk_left_over") or raw_obs.get("rtc.prev_chunk_left_over")
+
+        if leftover_raw is None:
+            return {}
+
+        if isinstance(leftover_raw, np.ndarray):
+            leftover_tensor = torch.from_numpy(leftover_raw).to(dtype=torch.float32)
+        elif isinstance(leftover_raw, torch.Tensor):
+            leftover_tensor = leftover_raw.to(dtype=torch.float32)
+        else:
+            leftover_tensor = torch.tensor(leftover_raw, dtype=torch.float32)
+
+        # Normalize physical action prefix using dataset stats on server
+        normed_leftover = self._normalize_action_prefix(leftover_tensor).to(self.device)
+        if normed_leftover.ndim == 2:
+            normed_leftover = normed_leftover.unsqueeze(0)  # (1, T, action_dim)
+
+        inference_delay = getattr(obs_t, "inference_delay", None)
+        if inference_delay is None and hasattr(obs_t, "get_observation"):
+            raw_obs = obs_t.get_observation()
+            inference_delay = raw_obs.get("inference_delay") or raw_obs.get("rtc.inference_delay")
+
+        execution_horizon = getattr(obs_t, "execution_horizon", None)
+        if execution_horizon is None and hasattr(obs_t, "get_observation"):
+            raw_obs = obs_t.get_observation()
+            execution_horizon = raw_obs.get("execution_horizon") or raw_obs.get("rtc.execution_horizon")
+
+        rtc_kwargs: dict[str, Any] = {"prev_chunk_left_over": normed_leftover}
+        if inference_delay is not None:
+            rtc_kwargs["inference_delay"] = int(inference_delay)
+        if execution_horizon is not None:
+            rtc_kwargs["execution_horizon"] = int(execution_horizon)
+
+        return rtc_kwargs
+
+    def _get_action_chunk(
+        self,
+        observation: dict[str, torch.Tensor],
+        **kwargs: Any,
+    ) -> torch.Tensor:
         """Get an action chunk from the policy sliced to actions_per_chunk."""
-        chunk = self.policy.predict_action_chunk(observation)
+        chunk = self.policy.predict_action_chunk(observation, **kwargs)
         if chunk.ndim != 3:
             chunk = chunk.unsqueeze(0)  # (1, chunk_size, action_dim)
         return chunk[:, : self.actions_per_chunk, :]
@@ -228,8 +372,8 @@ class InferenceEngine:
         Pipeline:
         1. Decode JPEG & convert raw observation to LeRobot Observation tensors.
         2. Apply preprocessor (normalization, batching, device placement).
-        3. Run policy.predict_action_chunk() and slice chunk horizon.
-        4. Apply postprocessor step-by-step for each timestep in the chunk.
+        3. Run policy.predict_action_chunk() with optional RTC guidance parameters.
+        4. Apply postprocessor in a single vectorized pass.
         5. Package into list[TimedAction] with environment_dt timestamps.
         """
         with self._lock:
@@ -239,26 +383,20 @@ class InferenceEngine:
             if self.policy is None or self.preprocessor is None or self.postprocessor is None:
                 raise RuntimeError("Policy not loaded. Send policy_config request first.")
 
-            # 1. Prepare observation
+            # 1. Prepare observation & RTC guidance parameters
             observation: Observation = _raw_observation_to_observation(obs_t.get_observation())
+            rtc_kwargs = self._prepare_rtc_kwargs(obs_t)
 
             # 2. Apply preprocessor
             with torch.inference_mode():
                 observation = self.preprocessor(observation)
 
-                # 3. Get action chunk
-                action_tensor = self._get_action_chunk(observation)
+            # 3. Get action chunk
+            with torch.no_grad():
+                action_tensor = self._get_action_chunk(observation, **rtc_kwargs)
 
-                # 4. Apply postprocessor per action step in chunk
-                _, chunk_size, _ = action_tensor.shape
-                processed_actions = []
-                for i in range(chunk_size):
-                    single_action = action_tensor[:, i, :]
-                    processed_action = self.postprocessor(single_action)
-                    processed_actions.append(processed_action)
-
-                # Stack back to (chunk_size, action_dim) on CPU
-                action_tensor = torch.stack(processed_actions, dim=1).squeeze(0).detach().cpu()
+                # 4. Apply postprocessor in a single vectorized pass
+                action_tensor = self.postprocessor(action_tensor).squeeze(0).detach().cpu()
 
             # 5. Convert to TimedAction list
             t_0 = obs_t.get_timestamp()

@@ -49,9 +49,35 @@ __all__ = [
 
 def serialize_observation(obs: TimedObservation) -> bytes:
     """Serializes TimedObservation to wire binary buffer (header_len + msgpack + raw bytes)."""
-    raw_obs = obs.get_observation()
+    raw_obs = dict(obs.get_observation())
     array_entries: list[tuple[str, bytes, list[int], str]] = []
     scalar_entries: dict[str, Any] = {}
+
+    # Extract RTC fields from observation dict or attributes
+    rtc_leftover = getattr(obs, "prev_chunk_left_over", None)
+    if rtc_leftover is None:
+        rtc_leftover = raw_obs.pop("prev_chunk_left_over", None)
+    if rtc_leftover is None:
+        rtc_leftover = raw_obs.pop("rtc.prev_chunk_left_over", None)
+
+    rtc_delay = getattr(obs, "inference_delay", None)
+    if rtc_delay is None:
+        rtc_delay = raw_obs.pop("inference_delay", None)
+    if rtc_delay is None:
+        rtc_delay = raw_obs.pop("rtc.inference_delay", None)
+
+    rtc_horizon = getattr(obs, "execution_horizon", None)
+    if rtc_horizon is None:
+        rtc_horizon = raw_obs.pop("execution_horizon", None)
+    if rtc_horizon is None:
+        rtc_horizon = raw_obs.pop("rtc.execution_horizon", None)
+
+    if rtc_leftover is not None:
+        if hasattr(rtc_leftover, "detach"):
+            rtc_leftover = rtc_leftover.detach().cpu().numpy()
+        elif not isinstance(rtc_leftover, np.ndarray):
+            rtc_leftover = np.asarray(rtc_leftover, dtype=np.float32)
+        raw_obs["rtc.prev_chunk_left_over"] = rtc_leftover
 
     for key, value in raw_obs.items():
         if isinstance(value, np.ndarray):
@@ -70,6 +96,10 @@ def serialize_observation(obs: TimedObservation) -> bytes:
         "must_go": getattr(obs, "must_go", False),
         "arrays": {entry[0]: {"shape": entry[2], "dtype": entry[3]} for entry in array_entries},
         "scalars": scalar_entries,
+        "rtc": {
+            "inference_delay": int(rtc_delay) if rtc_delay is not None else None,
+            "execution_horizon": int(rtc_horizon) if rtc_horizon is not None else None,
+        },
     }
 
     header_bytes = msgpack.packb(header, use_bin_type=True)
@@ -79,7 +109,7 @@ def serialize_observation(obs: TimedObservation) -> bytes:
 
 
 def deserialize_observation(data: bytes) -> TimedObservation:
-    """Deserializes wire buffer into TimedObservation."""
+    """Deserializes wire buffer into TimedObservation with RTC metadata extraction."""
     if len(data) < 4:
         raise ValueError("Invalid observation payload: data length < 4 bytes")
 
@@ -115,12 +145,29 @@ def deserialize_observation(data: bytes) -> TimedObservation:
             offset += nbytes
             raw_obs[key] = arr
 
-    return TimedObservation(
+    # Extract RTC metadata
+    rtc_meta = header.get("rtc", {})
+    prev_leftover = raw_obs.pop("rtc.prev_chunk_left_over", None)
+    if prev_leftover is None:
+        prev_leftover = raw_obs.pop("prev_chunk_left_over", None)
+    inference_delay = rtc_meta.get("inference_delay")
+    if inference_delay is None:
+        inference_delay = raw_obs.pop("inference_delay", None)
+
+    execution_horizon = rtc_meta.get("execution_horizon")
+    if execution_horizon is None:
+        execution_horizon = raw_obs.pop("execution_horizon", None)
+
+    obs = TimedObservation(
         timestamp=header.get("timestamp", 0.0),
         timestep=header.get("timestep", 0),
         observation=raw_obs,
         must_go=header.get("must_go", False),
     )
+    obs.prev_chunk_left_over = prev_leftover
+    obs.inference_delay = inference_delay
+    obs.execution_horizon = execution_horizon
+    return obs
 
 
 def serialize_actions(actions: list[TimedAction]) -> bytes:
