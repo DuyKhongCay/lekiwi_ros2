@@ -47,6 +47,11 @@ def generate_launch_description():
             description="Lekiwi perception: true of false",
         ),
         DeclareLaunchArgument(
+            "calib_mode",
+            default_value="false",
+            description="Forward calib_mode / debug flag to camera streaming pipelines",
+        ),
+        DeclareLaunchArgument(
             "hardware_type",
             default_value="real",
             description="Hardware interface type: real or mock",
@@ -156,6 +161,9 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([bringup_share, "launch", "cameras.launch.py"])
         ),
+        launch_arguments={
+            "calib_mode": LaunchConfiguration("calib_mode"),
+        }.items(),
         condition=IfCondition(LaunchConfiguration("cameras")),
     )
 

@@ -543,41 +543,25 @@
         <mesh filename="package://lekiwi_description/assets/wrist_roll_follower_so101_v1.stl"/>
       </geometry>
     </collision>
-    <!-- Part wrist_camera_mount -->
+    <!-- Part body1 -->
     <visual>
-      <origin xyz="0.0184239 0.301912 -0.17634" rpy="0.523599 0 3.14159"/>
+      <origin xyz="-0.0184 0.0582391 -0.00270401" rpy="-2.61799 -0 -0"/>
       <geometry>
-        <mesh filename="package://lekiwi_description/assets/wrist_camera_mount.stl"/>
+        <mesh filename="package://lekiwi_description/assets/body1.stl"/>
       </geometry>
-      <material name="wrist_camera_mount_material">
+      <material name="body1_material">
         <color rgba="0.5 0.1 0.1 1"/>
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0184239 0.301912 -0.17634" rpy="0.523599 0 3.14159"/>
+      <origin xyz="-0.0184 0.0582391 -0.00270401" rpy="-2.61799 -0 -0"/>
       <geometry>
-        <mesh filename="package://lekiwi_description/assets/wrist_camera_mount.stl"/>
-      </geometry>
-    </collision>
-    <!-- Part wrist_cam_pan_1__body1 -->
-    <visual>
-      <origin xyz="0.016 0.418 -0.0234002" rpy="0 0 3.14159"/>
-      <geometry>
-        <mesh filename="package://lekiwi_description/assets/wrist_cam_pan_1__body1.stl"/>
-      </geometry>
-      <material name="wrist_cam_pan_1__body1_material">
-        <color rgba="0.5 0.1 0.1 1"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0.016 0.418 -0.0234002" rpy="0 0 3.14159"/>
-      <geometry>
-        <mesh filename="package://lekiwi_description/assets/wrist_cam_pan_1__body1.stl"/>
+        <mesh filename="package://lekiwi_description/assets/body1.stl"/>
       </geometry>
     </collision>
     <!-- Part generic_usb_camera_2 -->
     <visual>
-      <origin xyz="-0.001 0.0597827 -0.0379394" rpy="3.14159 0.523599 1.5708"/>
+      <origin xyz="-0.0014 0.0787937 -0.0202125" rpy="-3.14159 0.698132 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/generic_usb_camera.stl"/>
       </geometry>
@@ -586,9 +570,25 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.001 0.0597827 -0.0379394" rpy="3.14159 0.523599 1.5708"/>
+      <origin xyz="-0.0014 0.0787937 -0.0202125" rpy="-3.14159 0.698132 1.5708"/>
       <geometry>
         <mesh filename="package://lekiwi_description/assets/generic_usb_camera.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part part_15 -->
+    <visual>
+      <origin xyz="-0.0208239 0.292569 -0.199322" rpy="0.698132 -0 3.14159"/>
+      <geometry>
+        <mesh filename="package://lekiwi_description/assets/part_15.stl"/>
+      </geometry>
+      <material name="part_15_material">
+        <color rgba="0.5 0.1 0.1 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.0208239 0.292569 -0.199322" rpy="0.698132 -0 3.14159"/>
+      <geometry>
+        <mesh filename="package://lekiwi_description/assets/part_15.stl"/>
       </geometry>
     </collision>
   </link>
@@ -605,21 +605,6 @@
     <origin xyz="-0.0079 -0.000218214 -0.103424" rpy="-1.5708 -0 -1.5708"/>
     <parent link="gripper"/>
     <child link="gripperframe"/>
-    <axis xyz="0 0 0"/>
-  </joint>
-  <!-- Frame wrist_camera_optical (dummy link + fixed joint) -->
-  <link name="wrist_camera_optical">
-    <origin xyz="0 0 0" rpy="0 -0 0"/>
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0"/>
-      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
-    </inertial>
-  </link>
-  <joint name="wrist_camera_optical_frame" type="fixed">
-    <origin xyz="-0.001 0.0511327 -0.0529216" rpy="2.61799 -0 -0"/>
-    <parent link="gripper"/>
-    <child link="wrist_camera_optical"/>
     <axis xyz="0 0 0"/>
   </joint>
   <!-- Link moving_jaw_so101_v1 -->

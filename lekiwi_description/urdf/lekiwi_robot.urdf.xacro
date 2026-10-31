@@ -19,8 +19,9 @@
   <xacro:arg name="imu_auto_calibrate_gyro" default="true"/>
   <xacro:arg name="imu_gyro_calib_samples" default="500"/>
 
-  <!-- Hand-eye camera extrinsics calibration file -->
-  <xacro:arg name="camera_calib_file" default="$(find lekiwi_description)/config/calibration/handeye_calib_stereo_left.yaml"/>
+  <!-- Hand-eye camera extrinsics calibration files -->
+  <xacro:arg name="stereo_left_camera_calib_file" default="$(find lekiwi_description)/config/calibration/handeye_calib_stereo_left.yaml"/>
+  <xacro:arg name="wrist_camera_calib_file" default="$(find lekiwi_description)/config/calibration/handeye_calib_wrist.yaml"/>
 
   <!-- Feetech STS3215 bus servo calibration file -->
   <xacro:arg name="servo_calib_file" default="$(find lekiwi_description)/config/calibration/DuyKhongCay.json"/>
@@ -31,7 +32,10 @@
   <xacro:include filename="$(find lekiwi_description)/urdf/sensors_calibration.xacro"/>
 
   <!-- Apply hand-eye extrinsics calibration for stereo left camera -->
-  <xacro:stereo_camera_calibration calib_file="$(arg camera_calib_file)"/>
+  <xacro:stereo_camera_calibration calib_file="$(arg stereo_left_camera_calib_file)"/>
+
+  <!-- Apply hand-eye extrinsics calibration for wrist camera (Eye-in-Hand) -->
+  <xacro:wrist_camera_calibration calib_file="$(arg wrist_camera_calib_file)"/>
 
   <!-- Instantiate ros2_control actuators and sensor hardware interfaces -->
   <xacro:if value="$(arg use_ros2_control)">

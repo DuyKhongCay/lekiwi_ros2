@@ -68,7 +68,8 @@
     frame_id: "wrist_camera_optical"
     camera_name: "usb_wrist"
     output_size: 384
-    active_contexts: [3]
+    add_border: true
+    active_contexts: [3,5]
     gscam_config: >
       v4l2src device=/dev/usb_wrist io-mode=mmap extra-controls="c,power_line_frequency=2" !
       valve name=gate drop=true !
@@ -80,8 +81,9 @@
       video/x-raw,format=I420,width=384,height=384,pixel-aspect-ratio=1/1 !
       videobalance contrast=1.2 brightness=-0.2 !
       videoconvert n-threads=4 !
-      jpegenc quality=80 idct-method=ifast !
-      image/jpeg
+      video/x-raw,format=RGB
+    # jpegenc quality=80 idct-method=ifast !
+    # image/jpeg
     # videocrop left=280 right=280 !
 
 /cameras/usb_side/gscam:

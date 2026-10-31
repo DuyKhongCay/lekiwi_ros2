@@ -8,13 +8,14 @@ neural inference components into a single multi-threaded intra-process container
 """
 
 from launch import LaunchDescription
-from launch.substitutions import PathJoinSubstitution
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
 
 
-def _camera_streamer_component(namespace, params_file):
+def _camera_streamer_component(namespace, params_file, calib_arg):
     """Build ComposableNode description for a GStreamer camera streamer instance.
 
     Args:
@@ -29,7 +30,10 @@ def _camera_streamer_component(namespace, params_file):
         plugin="lekiwi_perception::CameraStreamerComponent",
         name="gscam",
         namespace=namespace,
-        parameters=[params_file],
+        parameters=[
+            params_file,
+            {"calib_mode": calib_arg},
+        ],
         remappings=[
             ("camera/image_raw", "image_raw"),
             ("camera/image_raw/compressed", "image_raw/compressed"),
@@ -54,17 +58,24 @@ def generate_launch_description():
     perception_params_file = PathJoinSubstitution(
         [bringup_share, "config", "perception", "perception_config.yaml"]
     )
+    calib_mode_arg = DeclareLaunchArgument(
+        "calib_mode",
+        default_value="false",
+        description="Force calib_mode streaming on all cameras bypassing orchestrator context gate",
+    )
 
     # 2. Configure 4 GStreamer camera streaming components
+    calib_mode = LaunchConfiguration("calib_mode")
+    
     camera_namespaces = [
         "cameras/stereo_left",
         "cameras/stereo_right",
         "cameras/usb_wrist",
         "cameras/usb_side",
     ]
-
+    
     camera_components = [
-        _camera_streamer_component(ns, gscam_params_file) for ns in camera_namespaces
+        _camera_streamer_component(ns, gscam_params_file, calib_mode) for ns in camera_namespaces
     ]
 
     # 3. Configure Hailo NPU chess inference and chessboard pose estimators
@@ -115,4 +126,7 @@ def generate_launch_description():
         output="screen",
     )
 
-    return LaunchDescription([container])
+    return LaunchDescription([
+        calib_mode_arg, 
+        container
+        ])
