@@ -2,10 +2,10 @@
 <!--
   LeKiwi Sensor Calibration Transforms
   Loads extrinsic calibration parameters from YAML or falls back to nominal
-  calibrated default offsets to attach stereo optical frames to base_footprint.
+  calibrated default offsets to attach stereo and wrist optical frames.
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <!-- Macro to apply hand-eye extrinsics calibration from YAML or calibrated defaults -->
+  <!-- Macro to apply hand-eye extrinsics calibration from YAML or calibrated defaults for stereo left -->
   <xacro:macro name="stereo_camera_calibration" params="calib_file:=''">
     <xacro:if value="${calib_file != ''}">
       <xacro:property name="calib_dict" value="${xacro.load_yaml(calib_file)}"/>
@@ -26,6 +26,34 @@
       <origin xyz="${stereo_left_xyz}" rpy="${stereo_left_rpy}"/>
       <parent link="base_footprint"/>
       <child link="stereo_left_optical"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- Macro to apply hand-eye extrinsics calibration from YAML or calibrated defaults for wrist camera (Eye-in-Hand) -->
+  <xacro:macro name="wrist_camera_calibration" params="calib_file:=''">
+    <xacro:if value="${calib_file != ''}">
+      <xacro:property name="wrist_calib_dict" value="${xacro.load_yaml(calib_file)}"/>
+      <xacro:property name="wrist_xyz" value="${wrist_calib_dict['transform']['translation']['x']} ${wrist_calib_dict['transform']['translation']['y']} ${wrist_calib_dict['transform']['translation']['z']}"/>
+      <xacro:property name="wrist_rpy" value="${wrist_calib_dict['metrics']['rotation_rpy_deg'][0] * 3.141592653589793 / 180.0} ${wrist_calib_dict['metrics']['rotation_rpy_deg'][1] * 3.141592653589793 / 180.0} ${wrist_calib_dict['metrics']['rotation_rpy_deg'][2] * 3.141592653589793 / 180.0}"/>
+      <xacro:property name="parent_link" value="${wrist_calib_dict['header']['parent_frame']}"/>
+      <xacro:property name="child_link" value="${wrist_calib_dict['header']['child_frame']}"/>
+    </xacro:if>
+    <xacro:unless value="${calib_file != ''}">
+      <!-- Default calibrated values from Hand-Eye Park solver (2026-10-31) -->
+      <xacro:property name="wrist_xyz" value="-0.012997 0.072954 -0.018753"/>
+      <xacro:property name="wrist_rpy" value="2.473426 0.015952 0.154020"/>
+      <xacro:property name="parent_link" value="gripper"/>
+      <xacro:property name="child_link" value="wrist_camera_optical"/>
+    </xacro:unless>
+
+    <!-- Dummy link for wrist camera optical frame -->
+    <link name="${child_link}"/>
+
+    <!-- Calibrated optical frame joint connecting parent (gripper) to wrist_camera_optical -->
+    <joint name="${child_link}_joint" type="fixed">
+      <origin xyz="${wrist_xyz}" rpy="${wrist_rpy}"/>
+      <parent link="${parent_link}"/>
+      <child link="${child_link}"/>
     </joint>
   </xacro:macro>
 </robot>

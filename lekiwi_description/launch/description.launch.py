@@ -68,6 +68,30 @@ def generate_launch_description() -> LaunchDescription:
             ),
             description="Path to STS3215 bus servo calibration JSON file",
         ),
+        DeclareLaunchArgument(
+            "camera_calib_file",
+            default_value=PathJoinSubstitution(
+                [
+                    description_share,
+                    "config",
+                    "calibration",
+                    "handeye_calib_stereo_left.yaml",
+                ]
+            ),
+            description="Path to stereo camera hand-eye calibration YAML file",
+        ),
+        DeclareLaunchArgument(
+            "wrist_camera_calib_file",
+            default_value=PathJoinSubstitution(
+                [
+                    description_share,
+                    "config",
+                    "calibration",
+                    "handeye_calib_wrist.yaml",
+                ]
+            ),
+            description="Path to wrist camera hand-eye calibration YAML file",
+        ),
     ]
 
     # Evaluate Xacro into URDF XML string parameter
@@ -82,6 +106,10 @@ def generate_launch_description() -> LaunchDescription:
                 LaunchConfiguration("arm_control_mode"),
                 " servo_calib_file:=",
                 LaunchConfiguration("servo_calib_file"),
+                " camera_calib_file:=",
+                LaunchConfiguration("camera_calib_file"),
+                " wrist_camera_calib_file:=",
+                LaunchConfiguration("wrist_camera_calib_file"),
             ]
         ),
         value_type=str,

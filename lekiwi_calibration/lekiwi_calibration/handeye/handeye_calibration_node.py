@@ -5,9 +5,12 @@
 """Native OpenCV GUI Hand-Eye Calibration Node for LeKiwi Robot."""
 
 import os
+import select
 import sys
+import termios
 import threading
 import time
+import tty
 import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -15,8 +18,9 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.time import Time, Duration
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from geometry_msgs.msg import TransformStamped
+from std_srvs.srv import Trigger
 from cv_bridge import CvBridge
 import tf2_ros
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
@@ -41,6 +45,7 @@ class HandEyeCalibrationNode(Node):
         self.declare_parameter("base_frame", "base_footprint")
         self.declare_parameter("robot_effector_frame", "gripperframe")
         self.declare_parameter("is_eye_in_hand", False)
+        self.declare_parameter("headless", False)
 
         # ChArUco specs
         self.declare_parameter("squares_x", 3)
@@ -66,6 +71,7 @@ class HandEyeCalibrationNode(Node):
         self._base_frame = self.get_parameter("base_frame").value
         self._effector_frame = self.get_parameter("robot_effector_frame").value
         self.is_eye_in_hand = bool(self.get_parameter("is_eye_in_hand").value)
+        self.headless = bool(self.get_parameter("headless").value)
         self.max_reproj_px = float(self.get_parameter("max_reproj_px").value)
         self.output_yaml = os.path.expanduser(
             self.get_parameter("output_yaml_path").value
@@ -112,22 +118,48 @@ class HandEyeCalibrationNode(Node):
         self.tf_buffer = Buffer(cache_time=Duration(seconds=5), node=self)
         self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True)
 
-        # Subscriptions (Match RELIABLE or BEST_EFFORT)
-        qos_img = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+        # Subscriptions: Sensor data QoS (BEST_EFFORT) for camera & camera_info
+        qos_sensor = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1,
+            depth=5,
         )
-        self.cbg = rclpy.callback_groups.ReentrantCallbackGroup()
         self.create_subscription(
-            Image, self.image_topic, self._on_image, qos_img, callback_group=self.cbg
+            Image, self.image_topic, self._on_image, qos_sensor, callback_group=self.cbg
         )
         self.create_subscription(
             CameraInfo,
             self.camera_info_topic,
             self._on_camera_info,
-            10,
+            qos_sensor,
             callback_group=self.cbg,
+        )
+
+        # Output compressed stream for remote visualization (RViz)
+        qos_pub = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self._compressed_pub = self.create_publisher(
+            CompressedImage, "~/compressed", qos_pub
+        )
+
+        # ROS 2 Trigger services for headless/CLI automation
+        self.create_service(
+            Trigger, "~/take_sample", self._srv_take_sample, callback_group=self.cbg
+        )
+        self.create_service(
+            Trigger, "~/compute", self._srv_compute, callback_group=self.cbg
+        )
+        self.create_service(
+            Trigger, "~/save", self._srv_save, callback_group=self.cbg
+        )
+        self.create_service(
+            Trigger, "~/toggle_torque", self._srv_toggle_torque, callback_group=self.cbg
+        )
+        self.create_service(
+            Trigger, "~/reset", self._srv_reset, callback_group=self.cbg
         )
 
         self.running = True
@@ -138,12 +170,22 @@ class HandEyeCalibrationNode(Node):
             f"  Info topic:  {self.camera_info_topic}\n"
             f"  Base frame:  {self._base_frame}\n"
             f"  Effector:    {self._effector_frame}\n"
-            f"  Eye-in-Hand: {self.is_eye_in_hand}"
+            f"  Eye-in-Hand: {self.is_eye_in_hand}\n"
+            f"  Headless:    {self.headless} (Streaming to ~/compressed)"
         )
 
         # Auto-disable arm torque on startup if configured
+        self._torque_timer = None
         if self.get_parameter("auto_disable_arm_torque").value:
-            threading.Timer(2.5, lambda: self.set_arm_torque(False)).start()
+            self._torque_timer = threading.Timer(2.5, lambda: self.set_arm_torque(False))
+            self._torque_timer.daemon = True
+            self._torque_timer.start()
+
+    def destroy_node(self) -> bool:
+        """Cancel pending startup timers and clean up node resources."""
+        if self._torque_timer is not None:
+            self._torque_timer.cancel()
+        return super().destroy_node()
 
     def set_arm_torque(self, enabled: bool, timeout_sec: float = 3.0) -> None:
         """Send asynchronous torque enable/disable request to TorqueManagerNode.
@@ -248,19 +290,59 @@ class HandEyeCalibrationNode(Node):
 
         self.tf_broadcaster.sendTransform(tfs)
 
-    def _take_sample(self) -> None:
+    def _srv_take_sample(self, _req: Trigger.Request, res: Trigger.Response) -> Trigger.Response:
+        """ROS 2 service handler to capture synchronized calibration sample."""
+        success, msg = self._take_sample()
+        res.success = success
+        res.message = msg
+        return res
+
+    def _srv_compute(self, _req: Trigger.Request, res: Trigger.Response) -> Trigger.Response:
+        """ROS 2 service handler to trigger Hand-Eye mathematical solvers."""
+        success, msg = self._compute_and_report()
+        res.success = success
+        res.message = msg
+        return res
+
+    def _srv_save(self, _req: Trigger.Request, res: Trigger.Response) -> Trigger.Response:
+        """ROS 2 service handler to persist optimal calibration extrinsics to YAML."""
+        success, msg = self._save_result()
+        res.success = success
+        res.message = msg
+        return res
+
+    def _srv_toggle_torque(self, _req: Trigger.Request, res: Trigger.Response) -> Trigger.Response:
+        """ROS 2 service handler to toggle robotic arm motor torque."""
+        self.toggle_arm_torque()
+        res.success = True
+        res.message = f"Torque toggle requested. Current mode: {'LOCKED' if self.arm_torque_enabled else 'FREE'}"
+        return res
+
+    def _srv_reset(self, _req: Trigger.Request, res: Trigger.Response) -> Trigger.Response:
+        """ROS 2 service handler to clear collected samples buffer."""
+        self.solver.clear_samples()
+        self.last_computed_result = None
+        self.status_msg = "Samples cleared."
+        res.success = True
+        res.message = self.status_msg
+        return res
+
+    def _take_sample(self) -> tuple[bool, str]:
         """Capture synchronized pair of robot arm pose and visual tracking pose from TF2.
 
         Queries TF between base_frame and robot_effector_frame, as well as camera_frame
         and target_frame, adding the resulting 4x4 matrix pair to HandEyeSolver.
+
+        Returns:
+            Tuple of (success, status_message).
         """
         if not self._camera_frame:
             self.status_msg = "⚠️ No camera frame received yet!"
-            return
+            return False, self.status_msg
 
         if self.last_rvec is None or self.last_tvec is None:
             self.status_msg = "⚠️ Cannot sample: ChArUco target not detected!"
-            return
+            return False, self.status_msg
 
         try:
             t = Time()
@@ -287,7 +369,7 @@ class HandEyeCalibrationNode(Node):
         ) as e:
             self.status_msg = f"❌ TF Lookup failed: {e}"
             self.get_logger().error(self.status_msg)
-            return
+            return False, self.status_msg
 
         # Convert to 4x4 matrices
         def tf_to_matrix(tf_msg):
@@ -304,9 +386,19 @@ class HandEyeCalibrationNode(Node):
         count = self.solver.add_sample(robot_T, tracking_T)
         self.status_msg = f"✅ Sample #{count} taken! (Total: {count})"
         self.get_logger().info(f"[HandEye] Sample #{count} added successfully.")
+        return True, self.status_msg
 
-    def _compute_and_report(self) -> None:
-        """Execute Hand-Eye solver algorithms on collected samples and report best metrics."""
+    def _compute_and_report(self) -> tuple[bool, str]:
+        """Execute Hand-Eye solver algorithms on collected samples and report best metrics.
+
+        Returns:
+            Tuple of (success, status_message).
+        """
+        if len(self.solver.samples) < 3:
+            self.status_msg = "⚠️ Need at least 3 samples to compute calibration!"
+            self.get_logger().warn(self.status_msg)
+            return False, self.status_msg
+
         try:
             results, best_name, metrics = self.solver.compute()
             self.last_computed_result = (results, best_name, metrics)
@@ -324,38 +416,51 @@ class HandEyeCalibrationNode(Node):
                 self.get_logger().info(
                     f"  {name:12s}: t=({T[0,3]:+.4f}, {T[1,3]:+.4f}, {T[2,3]:+.4f}) rpy=({r[0]:+.1f}, {r[1]:+.1f}, {r[2]:+.1f})°"
                 )
+            return True, self.status_msg
 
         except Exception as e:
             self.status_msg = f"❌ Compute failed: {e}"
             self.get_logger().error(self.status_msg)
+            return False, self.status_msg
 
-    def _save_result(self) -> None:
-        """Serialize optimal Hand-Eye transformation matrix and metadata to YAML."""
+    def _save_result(self) -> tuple[bool, str]:
+        """Serialize optimal Hand-Eye transformation matrix and metadata to YAML.
+
+        Returns:
+            Tuple of (success, status_message).
+        """
         if not self.last_computed_result:
             self.status_msg = "⚠️ Please press [C] to compute calibration first!"
-            return
+            self.get_logger().warn(self.status_msg)
+            return False, self.status_msg
 
-        results, best_name, metrics = self.last_computed_result
-        best_T = results[best_name]
+        try:
+            results, best_name, metrics = self.last_computed_result
+            best_T = results[best_name]
 
-        if self.is_eye_in_hand:
-            parent_frame = self._effector_frame
-            child_frame = self._camera_frame
-        else:
-            parent_frame = self._base_frame
-            child_frame = self._camera_frame
+            if self.is_eye_in_hand:
+                parent_frame = self._effector_frame
+                child_frame = self._camera_frame
+            else:
+                parent_frame = self._base_frame
+                child_frame = self._camera_frame
 
-        self.solver.save_yaml(
-            self.output_yaml, parent_frame, child_frame, best_T, metrics
-        )
-        self.status_msg = f"💾 Saved to {self.output_yaml}"
-        self.get_logger().info(f"Saved calibration YAML to: {self.output_yaml}")
+            self.solver.save_yaml(
+                self.output_yaml, parent_frame, child_frame, best_T, metrics
+            )
+            self.status_msg = f"💾 Saved to {self.output_yaml}"
+            self.get_logger().info(f"Saved calibration YAML to: {self.output_yaml}")
+            return True, self.status_msg
+        except Exception as e:
+            self.status_msg = f"❌ Save failed: {e}"
+            self.get_logger().error(self.status_msg)
+            return False, self.status_msg
 
-    def _gui_tick(self) -> None:
-        """Process OpenCV window redraw, banner telemetry, and handle keyboard controls.
+    def _compose_annotated_frame(self) -> np.ndarray:
+        """Render target ChArUco detection, pose axes, and telemetry status HUD banner.
 
-        Renders target ChArUco detection, reprojection errors, and interactive status.
-        Dispatches hotkey actions for sampling, solving, torque toggling, and file export.
+        Returns:
+            Composed 640x480 BGR image array with camera view and information banner.
         """
         if self.latest_bgr is None:
             # Render waiting screen
@@ -400,7 +505,7 @@ class HandEyeCalibrationNode(Node):
                 1,
             )
         else:
-            frame, rvec, tvec, reproj_err, num_corners = (
+            frame, rvec, tvec, reproj_err, _num_corners = (
                 self.detector.detect_and_estimate_pose(
                     self.latest_bgr, self.K, self.D, self.max_reproj_px
                 )
@@ -440,11 +545,22 @@ class HandEyeCalibrationNode(Node):
             1,
         )
 
+        mode_str = "HEADLESS" if self.headless else "GUI"
+        cv2.putText(
+            banner,
+            f"Mode: {mode_str}",
+            (290, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (200, 200, 0),
+            1,
+        )
+
         if self.last_reproj_err is not None:
             cv2.putText(
                 banner,
                 f"Reproj: {self.last_reproj_err:.2f} px",
-                (420, 25),
+                (440, 25),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
                 (0, 255, 255),
@@ -474,13 +590,25 @@ class HandEyeCalibrationNode(Node):
             1,
         )
 
-        display = np.vstack([frame_resized, banner])
-        win_name = "LeKiwi Hand-Eye Calibration"
-        cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(win_name, 640, 480)
-        cv2.imshow(win_name, display)
+        return np.vstack([frame_resized, banner])
 
-        key = cv2.waitKey(20) & 0xFF
+    def _publish_compressed_frame(self, display_img: np.ndarray) -> None:
+        """Encode composite frame as JPEG and publish onto compressed topic for RViz."""
+        success, enc_buf = cv2.imencode(
+            ".jpg", display_img, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+        )
+        if success:
+            msg = CompressedImage()
+            msg.header.stamp = self.latest_stamp or self.get_clock().now().to_msg()
+            msg.header.frame_id = (
+                self._camera_frame or self._base_frame or "base_footprint"
+            )
+            msg.format = "jpeg"
+            msg.data = enc_buf.tobytes()
+            self._compressed_pub.publish(msg)
+
+    def _handle_action_key(self, key: int) -> None:
+        """Dispatch calibration user action based on hotkey character code."""
         if key == 32:  # SPACE
             self._take_sample()
         elif key in (ord("c"), ord("C")):
@@ -496,6 +624,33 @@ class HandEyeCalibrationNode(Node):
         elif key in (ord("q"), ord("Q"), 27):  # Q or ESC
             self.running = False
 
+    def _gui_tick(self) -> None:
+        """Process display rendering, telemetry compression, and handle keyboard controls."""
+        display = self._compose_annotated_frame()
+
+        # Always publish compressed frame so RViz can subscribe in both modes
+        self._publish_compressed_frame(display)
+
+        if self.headless:
+            # Headless mode: no OpenCV window created, listen to non-blocking TTY stdin
+            if sys.stdin.isatty():
+                rlist, _, _ = select.select([sys.stdin], [], [], 0.03)
+                if rlist:
+                    ch = sys.stdin.read(1)
+                    if ch:
+                        self._handle_action_key(ord(ch))
+            else:
+                time.sleep(0.04)
+        else:
+            # Interactive GUI mode with OpenCV HighGUI window
+            win_name = "LeKiwi Hand-Eye Calibration"
+            cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(win_name, 640, 480)
+            cv2.imshow(win_name, display)
+
+            key = cv2.waitKey(20) & 0xFF
+            self._handle_action_key(key)
+
 
 def main(args=None) -> None:
     """Initialize ROS 2 multithreaded executor and run Hand-Eye GUI loop."""
@@ -509,14 +664,34 @@ def main(args=None) -> None:
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    # Run OpenCV GUI loop in MAIN THREAD
+    # Configure terminal raw mode for non-blocking key capture if running in a TTY in headless mode
+    old_term_settings = None
+    if node.headless and sys.stdin.isatty():
+        try:
+            old_term_settings = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
+        except Exception:
+            old_term_settings = None
+
+    # Run processing loop in MAIN THREAD
     try:
         while node.running and rclpy.ok():
             node._gui_tick()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        cv2.destroyAllWindows()
+        if old_term_settings is not None:
+            try:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_term_settings)
+            except Exception:
+                pass
+
+        if not node.headless:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+
         if rclpy.ok():
             node.destroy_node()
             rclpy.shutdown()
