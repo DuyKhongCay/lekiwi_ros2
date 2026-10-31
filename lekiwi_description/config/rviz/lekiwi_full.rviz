@@ -10,11 +10,11 @@ Panels:
         - /Move Feasibility Plan1/Topic1
         - "/3D Chessboard & Pieces1/Topic1"
         - /Robot Mission Status HUD1/Topic1
-        - /Left Camera1/Topic1
         - /Side Camera1/Topic1
         - /2D Chessboard1/Topic1
         - /2D Chessboard Raw1/Topic1
         - /Right Camera1/Topic1
+        - /Calibrate1/Topic1
       Splitter Ratio: 0.5
     Tree Height: 352
   - Class: rviz_common/Selection
@@ -174,6 +174,8 @@ Visualization Manager:
           Value: false
         gripperframe:
           Value: false
+        handeye_target:
+          Value: true
         icm20948_imu:
           Value: true
         lower_arm:
@@ -235,7 +237,8 @@ Visualization Manager:
                         moving_jaw_so101_v1:
                           {}
                         wrist_camera_optical:
-                          {}
+                          handeye_target:
+                            {}
               stereo_left_optical:
                 {}
       Update Interval: 0
@@ -326,10 +329,7 @@ Visualization Manager:
       Enabled: true
       Name: Move Feasibility Plan
       Namespaces:
-        feasibility/base_footprints: true
-        feasibility/hud_status: true
-        feasibility/reach_envelope: true
-        feasibility/target_points: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Transient Local
@@ -341,9 +341,7 @@ Visualization Manager:
       Enabled: true
       Name: "3D Chessboard & Pieces"
       Namespaces:
-        chess/highlights: true
-        chess/move_arrows: true
-        chess/pieces: true
+        {}
       Topic:
         Depth: 10
         Durability Policy: Transient Local
@@ -355,7 +353,7 @@ Visualization Manager:
       Enabled: true
       Name: Robot Mission Status HUD
       Namespaces:
-        mission/robot_hud: true
+        {}
       Topic:
         Depth: 1
         Durability Policy: Transient Local
@@ -447,6 +445,20 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /cameras/usb_wrist/image_raw/compressed
       Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Calibrate
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /handeye_calibration_node/compressed
+      Value: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -493,30 +505,32 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.6695525646209717
+      Distance: 1.2025468349456787
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -0.1310017853975296
-        Y: 0.1538478434085846
-        Z: -0.19108881056308746
+        X: 0.40664032101631165
+        Y: -0.2511666417121887
+        Z: -0.25902777910232544
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.9047959446907043
+      Pitch: 0.884796679019928
       Target Frame: base_footprint
       Value: Orbit (rviz)
-      Yaw: 4.88356876373291
+      Yaw: 3.203568935394287
     Saved: ~
 Window Geometry:
   2D Chessboard:
     collapsed: false
   2D Chessboard Raw:
+    collapsed: false
+  Calibrate:
     collapsed: false
   Displays:
     collapsed: false
@@ -525,7 +539,7 @@ Window Geometry:
   Hide Right Dock: false
   Left Camera:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd00000003000000000000027800000343fc0200000001fc00000043000003430000005d00fffffffc0100000002fc0000000000000143000000a600fffffffc0200000003fb00000016004c006500660074002000430061006d0065007200610100000043000001170000001b00fffffffb0000001a003200440020004300680065007300730062006f00610072006401000001600000013f0000001b00fffffffb0000001800520069006700680074002000430061006d00650072006101000002a5000000e10000001b00fffffffc000001490000012f000000ca00fffffffc0200000003fb000000160053006900640065002000430061006d00650072006101000000430000011a0000001b00fffffffb00000022003200440020004300680065007300730062006f006100720064002000520061007701000001630000013f0000001b00fffffffb0000001800570072006900730074002000430061006d00650072006101000002a8000000de0000001b00ffffff000000010000020600000343fc0200000004fb0000000a005600690065007700730100000043000000b5000000b500fffffffb000000100044006900730070006c00610079007301000000fe000001a8000000d400fffffffb0000001200530065006c0065006300740069006f006e01000002ac0000006a0000006100fffffffb0000001e0054006f006f006c002000500072006f0070006500720074006900650073010000031c0000006a0000006100ffffff000000030000078000000044fc0100000001fb0000000800540069006d00650100000000000007800000030300ffffff000002f60000034300000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000003000000000000027800000343fc0200000002fc00000043000003430000005d00fffffffc0100000002fc00000000000001a8000000a600fffffffc0200000003fb00000016004c006500660074002000430061006d0065007200610100000043000001fb0000001b00fffffffb0000001a003200440020004300680065007300730062006f0061007200640100000244000000b30000001b00fffffffb0000001800520069006700680074002000430061006d00650072006101000002fd000000890000001b00fffffffc000001ae000000ca000000ca00fffffffc0200000003fb000000160053006900640065002000430061006d0065007200610100000043000000fe0000001b00fffffffb00000022003200440020004300680065007300730062006f006100720064002000520061007701000001470000007c0000001b00fffffffb0000001800570072006900730074002000430061006d00650072006101000001c9000001bd0000001b00fffffffb0000001200430061006c0069006200720061007400650000000165000002210000001b00ffffff000000010000022000000343fc0200000004fb0000000a005600690065007700730100000043000000b5000000b500fffffffb000000100044006900730070006c00610079007301000000fe000001a8000000d400fffffffb0000001200530065006c0065006300740069006f006e01000002ac0000006a0000006100fffffffb0000001e0054006f006f006c002000500072006f0070006500720074006900650073010000031c0000006a0000006100ffffff000000030000078000000044fc0100000001fb0000000800540069006d00650100000000000007800000030300ffffff000002dc0000034300000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Right Camera:
     collapsed: false
   Selection:
