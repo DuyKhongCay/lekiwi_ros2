@@ -145,3 +145,11 @@ pixi run -e lerobot server
 | `engine.preload` | `--engine.preload` | `false` | Preload model weights at startup to eliminate latency |
 | `log_level` | `--log_level` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `--log-level` | `INFO` | `LOGLEVEL` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+
+---
+
+## 5. Model Provenance & Training
+
+The default policy checkpoint [`DuyKhongCay/lekiwi_chess_smolvla`](https://huggingface.co/DuyKhongCay/lekiwi_chess_smolvla) is trained from demonstrations converted by `chess_rosbag_to_lerobot`. To inspect, adapt, or reproduce the training pipeline:
+* 📓 **Training Notebook**: [`notebooks/lerobot_smolvla_training_kaggle.ipynb`](../notebooks/lerobot_smolvla_training_kaggle.ipynb) — Executable distributed fine-tuning pipeline on Kaggle 2x Tesla T4 GPUs with `chess_goal_noise` state perturbation.
+* 📖 **Guide**: [Notebook Setup & Hyperparameters](../notebooks/README.md).

@@ -408,3 +408,12 @@ Expected result:
 ```
 ============================== 20 passed in 0.93s ==============================
 ```
+
+---
+
+## 9. Next Steps: Policy Training
+
+Once your demonstration dataset is converted and uploaded to Hugging Face Hub (e.g. [`DuyKhongCay/lekiwi_chess_v7`](https://huggingface.co/datasets/DuyKhongCay/lekiwi_chess_v7)), proceed to fine-tune your manipulation policy:
+* 📓 **Cloud Training Notebook**: [`notebooks/lerobot_smolvla_training_kaggle.ipynb`](../notebooks/lerobot_smolvla_training_kaggle.ipynb) — Distributed multi-GPU fine-tuning pipeline on Kaggle (2x Tesla T4) with custom `chess_goal_noise` physical perturbation.
+* 📖 **Tutorial Walkthrough**: [Tutorial 4: LeRobot Imitation Learning](../docs/tutorials/04-lerobot-imitation-learning.md).
+* 🌐 **Policy Inference Server**: [lerobot_policy_server](../lerobot_policy_server/README.md) — Host trained checkpoints for real-time ROS 2 streaming.

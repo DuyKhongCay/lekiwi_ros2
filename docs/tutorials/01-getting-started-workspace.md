@@ -26,7 +26,7 @@ Clone the LeKiwi repository with all submodules into your active development wor
 ```bash
 mkdir -p ~/lekiwi_ws/src
 cd ~/lekiwi_ws/src
-git clone --recurse-submodules https://github.com/lekiwi/lekiwi_ros2.git
+git clone --recurse-submodules https://github.com/DuyKhongCay/lekiwi_ros2.git
 ```
 
 Verify your directory structure:
@@ -35,7 +35,7 @@ Verify your directory structure:
 ls ~/lekiwi_ws/src/lekiwi_ros2
 ```
 
-You should see 15 packages including `lekiwi_bringup`, `lekiwi_ftservo_hardware`, `lekiwi_orchestrator`, and `lekiwi_interfaces`.
+You should see 13 ROS 2 packages (including `lekiwi_bringup`, `lekiwi_ftservo_hardware`, `lekiwi_orchestrator`, `lekiwi_inference`, and `lekiwi_interfaces`) alongside the standalone Pixi policy server (`lerobot_policy_server`).
 
 ---
 

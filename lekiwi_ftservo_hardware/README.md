@@ -227,7 +227,7 @@ colcon build --packages-select lekiwi_ftservo_hardware --symlink-install
 
 | Test Suite Target | Source File | Description |
 | :--- | :--- | :--- |
-| `test_velocity_codec` | `test/test_velocity_codec.cpp` | Validates STS tick-to-rad/s conversion, direction polarity, and velocity clamping (3 tests). |
+| `test_joint_codec` | `test/test_joint_codec.cpp` | Validates STS tick-to-rad/s conversion, direction polarity, joint position decoding, and velocity clamping (3 tests). |
 | `test_sts_protocol` | `test/test_sts_protocol.cpp` | Validates packet framing, checksums, preamble hunting, and frame resynchronization (9 tests). |
 | `test_joint_config_parser` | `test/test_joint_config_parser.cpp` | Validates URDF `<ros2_control>` parsing, ID uniqueness, and default parameter fallbacks (7 tests). |
 | `test_feetech_diagnostics` | `test/test_feetech_diagnostics.cpp` | Validates diagnostic statuses, FSM states, DTC codes, and sliding PER warnings (8 tests). |

@@ -345,3 +345,30 @@ The recorder integrates with `diagnostic_updater` to publish real-time health te
   * `PICK Quotas`: e.g. `15 / 120`.
   * `PLACE Quotas`: e.g. `15 / 120`.
 
+---
+
+## Verification & Unit Testing
+
+The package includes 5 GoogleTest unit test suites verifying recording lifecycle, campaign quotas, and dataset storage without requiring physical cameras or robot hardware:
+
+```bash
+# Build package with test targets enabled
+colcon build --packages-select chess_episode_recorder --symlink-install
+
+# Execute all recorder unit tests
+colcon test --packages-select chess_episode_recorder --event-handlers console_direct+
+
+# Inspect test results
+colcon test-result --verbose
+```
+
+### Unit Test Suites Breakdown
+
+| Test Suite Target | Source File | Description |
+| :--- | :--- | :--- |
+| `test_episode_recorder_node` | `test/test_episode_recorder_node.cpp` | Validates node lifecycle, start/stop/save/discard service interactions, and metadata logging. |
+| `test_move_planning_domain` | `test/test_move_planning_domain.cpp` | Validates algebraic move decomposition into atomic manipulation primitives (MOVE, CLEAR, PICK, PLACE). |
+| `test_campaign_quota_domain` | `test/test_campaign_quota_domain.cpp` | Asserts demonstration quota tracking, session limits, and balanced primitive sampling. |
+| `test_dataset_storage` | `test/test_dataset_storage.cpp` | Tests MCAP rosbag serialization, output directory structures, and LeRobot v3.0 metadata JSON integrity. |
+| `test_campaign_conductor` | `test/test_campaign_conductor.cpp` | Verifies automated campaign state transitions, recovery debounces, and orchestrator action client dispatching. |
+

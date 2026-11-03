@@ -1,6 +1,6 @@
 # Packages Catalog
 
-The LeKiwi ROS 2 workspace is organized into 15 active packages across 6 functional domains:
+The LeKiwi workspace is organized into 14 active packages (13 ROS 2 packages and 1 standalone Pixi LeRobot policy server) across 6 functional domains:
 
 ---
 
@@ -18,8 +18,8 @@ The LeKiwi ROS 2 workspace is organized into 15 active packages across 6 functio
 | Package | Language | Build Tool | Description |
 | :--- | :---: | :---: | :--- |
 | `lekiwi_motion` | C++ | `ament_cmake` | Kinematics feasibility checker, workspace reachability validation, system readiness gating, and torque management state. |
-| `lerobot_policy_server` | Python / ZeroMQ | `setuptools` | High-throughput ZeroMQ inference server bridging LeRobot physical-AI policies (ACT, Diffusion, SmolVLA) with ROS 2. |
-| `lekiwi_inference` | Python / C++ | `ament_cmake` | Client runtime for remote asynchronous policy inference (Phase 1) and onboard Hailo-8 NPU execution (Phase 3). |
+| `lerobot_policy_server` | Python / ZeroMQ | `pixi` / `setuptools` | High-throughput ZeroMQ inference server bridging LeRobot physical-AI policies (ACT, Diffusion, SmolVLA) with ROS 2. |
+| `lekiwi_inference` | Python (`rclpy`) | `ament_python` | Physical-AI policy client runtime for asynchronous ZeroMQ policy streaming and Real-Time Chunking (RTC) action execution. |
 
 ---
 
@@ -31,13 +31,12 @@ The LeKiwi ROS 2 workspace is organized into 15 active packages across 6 functio
 
 ---
 
-## 4. Hardware Abstraction & Teleoperation
+## 4. Hardware Abstraction & Actuation
 
 | Package | Language | Build Tool | Description |
 | :--- | :---: | :---: | :--- |
 | `lekiwi_ftservo_hardware` | C++ `ros2_control` | `ament_cmake` | `SystemInterface` hardware plugin for 9 Feetech STS3215 servos over a 1 Mbps serial bus with dedicated asynchronous I/O thread. |
 | `lekiwi_icm20948_hardware` | C++ `ros2_control` | `ament_cmake` | `SensorInterface` hardware plugin for ICM-20948 9-DoF IMU communicating over hardware I2C (`/dev/i2c-1`). |
-| `teleop_zhongli_servo_hw` | C++ Driver | `ament_cmake` | Dedicated protocol driver, calibration CLI, and joint publisher for Zhongli / uArm leader teleoperation arms. |
 
 ---
 

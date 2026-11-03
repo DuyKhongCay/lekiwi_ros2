@@ -51,7 +51,24 @@ Verify that the dataset output contains `meta/info.json`, `data/chunk-000/`, and
 
 ---
 
-## Step 3: Launch the ZeroMQ Policy Server
+## Step 3: Train Policy on Cloud GPU (Kaggle)
+
+Fine-tune the vision-language-action policy using our preconfigured distributed training notebook:
+
+1. Import [`notebooks/lerobot_smolvla_training_kaggle.ipynb`](../../notebooks/lerobot_smolvla_training_kaggle.ipynb) into a new [Kaggle Notebook](https://www.kaggle.com/code).
+2. Configure **Accelerator** to `GPU T4 x2` and attach your `HF_TOKEN` secret (with write permissions).
+3. Execute the notebook to launch multi-GPU training on [`DuyKhongCay/lekiwi_chess_v7`](https://huggingface.co/datasets/DuyKhongCay/lekiwi_chess_v7):
+   - **Distributed Engine**: `accelerate launch --multi_gpu --num_processes=2`
+   - **Effective Batch Size**: 16 (8 per GPU)
+   - **Training Horizon**: 13,000 steps (~8.5 hours)
+   - **Data Augmentation**: Custom `chess_goal_noise` physical state perturbation
+4. The final weights are automatically pushed to the Hugging Face Hub: [`DuyKhongCay/lekiwi_chess_smolvla`](https://huggingface.co/DuyKhongCay/lekiwi_chess_smolvla).
+
+> 👉 For full Kaggle environment configuration and hyperparameter reference, refer to the [Notebook Guide](../../notebooks/README.md).
+
+---
+
+## Step 4: Launch the ZeroMQ Policy Server
 
 Start `lerobot_policy_server` on a host workstation or GPU machine with your trained policy checkpoint:
 
@@ -67,13 +84,19 @@ Verify the server is listening for inference queries on port 8090.
 
 ---
 
-## Step 4: Run Policy Client on LeKiwi
+## Step 5: Run Policy Client on LeKiwi
 
-On the LeKiwi robot, launch the asynchronous inference client to stream synchronized camera images and receive 50Hz action chunk arrays:
+On the LeKiwi robot, launch master bringup with `manipulation:=policy` (or run the standalone inference client node) to stream synchronized camera images and receive 50Hz action chunk arrays:
 
 ```bash
-ros2 launch lekiwi_inference async_inference.launch.py \
-    server_address:="192.168.1.100:8090"
+# Option A: Launch with master robot bringup
+ros2 launch lekiwi_bringup robot.launch.py \
+    hardware_type:=real \
+    manipulation:=policy
+
+# Option B: Run standalone inference client node connecting to policy server
+ros2 run lekiwi_inference async_ros2_client_node --ros-args \
+    -p server_address:="192.168.1.100:8090"
 ```
 
 The robot arm will now execute physical pick-and-place trajectories autonomously via `arm_forward_controller` based on vision predictions!

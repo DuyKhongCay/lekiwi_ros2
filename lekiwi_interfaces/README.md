@@ -130,6 +130,18 @@ Evaluates reachability and calculates multi-segment navigation plans for chess m
   - `geometry_msgs/Point place_point` (chessboard_frame, meters)
   - `string message`
 
+### 4. `GoToNamedPose.srv`
+
+Synchronously transitions the 6-DoF arm to a pre-calibrated landmark pose:
+- **Request**: `string pose_name` (`"approach"`, `"stow"`, `"clear_left"`, `"clear_right"`)
+- **Response**: `bool success`, `string message`
+
+### 5. `SetFen.srv`
+
+Injects or updates the canonical FIDE board state string for game tracking:
+- **Request**: `string fen` (Standard 6-field FEN or 1-field piece placement string)
+- **Response**: `bool success`, `string canonical_fen`, `string active_color`, `string message`
+
 ---
 
 ## Action Definitions (`action/`)
@@ -174,3 +186,35 @@ Coordinates physical piece pick, transport, and place operations via robot arm:
   - `string current_phase` (`"POLICY_ROLLOUT"`, `"APPROACH"`, `"GRASP"`, etc.)
   - `float32 progress_percent` [0.0 to 100.0%]
   - `string instruction`
+
+### 3. `ExecuteCollectionTask.action`
+
+Coordinates automated physical demonstration recording campaigns for chess datasets:
+- **Goal**:
+  - `lekiwi_interfaces/ChessMoveDetails move` (Move metadata including UCI, squares, and piece)
+  - `bool force_pick_place` (Forces decomposition into separate pick and place phases)
+  - `string clear_bin_side` (`"left"` or `"right"`)
+  - `string[] bypass_steps` (Bypasses specific physical steps: `["MOVE", "CLEAR", "PICK", "PLACE"]`)
+- **Result**:
+  - `bool success` (True if task was executed and verified)
+  - `string final_fen` (Verified board FEN from camera post-move)
+  - `string message` (Diagnostic details or error explanation)
+- **Feedback**:
+  - `string current_stage` (`"NAVIGATING"`, `"MANIPULATING"`, `"POST_VERIFYING"`)
+  - `float32 progress_percent` [0.0 to 100.0%]
+
+---
+
+## Build & Interface Verification
+
+Compile the interface package and verify type introspection:
+
+```bash
+# Compile IDL interfaces
+colcon build --packages-select lekiwi_interfaces
+
+# Verify message availability in ROS 2 environment
+ros2 interface show lekiwi_interfaces/action/ExecuteCollectionTask
+ros2 interface show lekiwi_interfaces/srv/GoToNamedPose
+ros2 interface show lekiwi_interfaces/srv/SetFen
+```

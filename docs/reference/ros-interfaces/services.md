@@ -87,4 +87,44 @@ PerceptionContext applied_context    # Active perception context after transitio
 string message                       # Diagnostic status or failure cause
 ```
 
+---
+
+## 4. `GoToNamedPose.srv`
+
+- **Server Node**: `lekiwi_motion` (CartesianJogServerNode, Service: `/cartesian_jog/go_to_named_pose`)
+- **Client Nodes**: `lekiwi_orchestrator`, CLI diagnostic utilities
+- **Purpose**: Synchronously transitions the 6-DoF arm to calibrated landmark poses (`"approach"`, `"stow"`, `"clear_left"`, `"clear_right"`).
+
+### Definition (`lekiwi_interfaces/srv/GoToNamedPose.srv`):
+
+```protobuf
+# Request
+string pose_name                     # Target named pose ("approach", "stow", "clear_left", "clear_right")
+---
+# Response
+bool success                         # True if trajectory reached target pose
+string message                       # Diagnostic detail or error message
+```
+
+---
+
+## 5. `SetFen.srv`
+
+- **Server Node**: `lekiwi_chess_master` (GameStateTracker, Service: `/chess/set_fen`)
+- **Client Nodes**: `lekiwi_orchestrator`, referee debug scripts
+- **Purpose**: Injects or updates the canonical FIDE board state string for game tracking and Stockfish engine synchronization.
+
+### Definition (`lekiwi_interfaces/srv/SetFen.srv`):
+
+```protobuf
+# Request
+string fen                           # Standard 6-field FEN or 1-field piece placement string
+---
+# Response
+bool success                         # True if FEN syntax is valid and accepted
+string canonical_fen                 # Canonical normalized FEN string
+string active_color                  # Active player color ("w" or "b")
+string message                       # Validation status or syntax error details
+```
+
 

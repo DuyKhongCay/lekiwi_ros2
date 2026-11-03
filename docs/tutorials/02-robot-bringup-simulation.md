@@ -20,10 +20,10 @@ source ~/lekiwi_ws/install/setup.bash
 ros2 launch lekiwi_bringup robot.launch.py hardware_type:=mock
 ```
 
-To visualize the robot in RViz2 in a separate terminal:
+To visualize the robot and active sensor frames in RViz2 in a separate terminal:
 
 ```bash
-rviz2 -d $(ros2 pkg prefix lekiwi_description)/share/lekiwi_description/rviz/view_robot.rviz
+ros2 launch lekiwi_description visualizer.launch.py
 ```
 
 ### What is happening behind the scenes?

@@ -8,6 +8,9 @@
 [![Hardware](https://img.shields.io/badge/Hardware-Raspberry%20Pi%205-C51A4A.svg?logo=raspberrypi)](https://www.raspberrypi.com/)
 [![HailoRT](https://img.shields.io/badge/NPU-Hailo--8%2F8L%2026TOPS-00A651.svg)](https://hailo.ai/)
 [![Physical-AI](https://img.shields.io/badge/Physical--AI-LeRobot%20v3.0-FF6F00.svg)](https://github.com/huggingface/lerobot)
+[![Mô hình HF](https://img.shields.io/badge/%F0%9F%A4%97%20M%C3%B4_h%C3%ACnh-lekiwi__chess__smolvla-yellow.svg)](https://huggingface.co/DuyKhongCay/lekiwi_chess_smolvla)
+[![Tập dữ liệu HF](https://img.shields.io/badge/%F0%9F%A4%97%20T%E1%BA%ADp_d%E1%BB%AF_li%E1%BB%87u-lekiwi__chess__v7-blue.svg)](https://huggingface.co/datasets/DuyKhongCay/lekiwi_chess_v7)
+[![Kaggle Notebook](https://img.shields.io/badge/Kaggle-Notebook_Hu%E1%BA%A5n_Luy%E1%BB%87n-20BEFF?logo=kaggle&logoColor=white)](notebooks/lerobot_smolvla_training_kaggle.ipynb)
 [![Middleware](https://img.shields.io/badge/Middleware-Zenoh%20RMW-black.svg)](https://zenoh.io/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 
@@ -23,9 +26,23 @@
 
 > [!IMPORTANT]
 > ### 📚 Cổng Tài Liệu Kỹ Thuật Chuyên Sâu & GitHub Wiki
-> Tệp README này đóng vai trò như trang giới thiệu tổng quan, tầm nhìn dự án và các bước làm quen nhanh. Để tra cứu toàn bộ sổ tay kỹ thuật chuyên sâu — bao gồm **phân tích chi tiết Kiến trúc hệ thống, danh mục 15 Packages hoạt động, chuẩn giao tiếp ROS 2 Action/Service, sơ đồ đấu dây phần cứng, quy trình hiệu chuẩn Hand-Eye và hướng dẫn triển khai Docker phân tán** — xin mời truy cập GitHub Wiki chính thức của dự án:
+> Tệp README này đóng vai trò như trang giới thiệu tổng quan, tầm nhìn dự án và các bước làm quen nhanh. Để tra cứu toàn bộ sổ tay kỹ thuật chuyên sâu — bao gồm **phân tích chi tiết Kiến trúc hệ thống, danh mục 14 Packages hoạt động, chuẩn giao tiếp ROS 2 Action/Service, sơ đồ đấu dây phần cứng, quy trình hiệu chuẩn Hand-Eye và hướng dẫn triển khai Docker phân tán** — xin mời truy cập GitHub Wiki chính thức của dự án:
 > 
 > 👉 **[Khám phá GitHub Wiki Dự Án LeKiwi](https://github.com/DuyKhongCay/lekiwi_ros2/wiki)**
+
+> [!WARNING]
+> ### ⚠️ Nhìn Nhận Kỹ Thuật: Bài Học Rút Ra Về Physical-AI & Giới Hạn Phần Cứng Giá Rẻ
+> **Sự Minh Bạch Trong Kỹ Thuật: Vì Sao Cả Suy Luận Mô Hình VLA Lẫn Động Học Trên Phần Cứng Tự Chế Đều Gặp Trở Ngại**
+> Tinh thần cốt lõi của dự án LeKiwi là sự minh bạch kỹ thuật và học hỏi từ thực nghiệm—công khai cả những kết quả chưa trọn vẹn và các thỏa hiệp kiến trúc để cộng đồng nghiên cứu robotics cùng rút kinh nghiệm:
+> 
+> * ❌ **Bài học 1: Dùng End-to-End VLA (`lerobot_inference_rollout`) Là Sai Phương Pháp Cho Cờ Vua**:
+>   Mục tiêu ban đầu của dự án là khảo sát xem các mô hình Physical-AI hiện đại (Hugging Face SmolVLA / ACT) có thể xử lý việc thao tác gắp nhặt chính xác trên bàn làm việc hay không. Chúng tôi đã thu thập dữ liệu ([`DuyKhongCay/lekiwi_chess_v7`](https://huggingface.co/datasets/DuyKhongCay/lekiwi_chess_v7)) và huấn luyện mô hình ([`DuyKhongCay/lekiwi_chess_smolvla`](https://huggingface.co/DuyKhongCay/lekiwi_chess_smolvla)). Tuy nhiên, khi đưa lên robot thật (`lerobot_inference_rollout.mp4`), việc biến bài toán gắp nhả quân cờ trên lưới rời rạc thành bài toán học bắt chước liên tục end-to-end từ hình ảnh sang lệnh khớp đã bộc lộ sai lầm về mặt kiến trúc. Lưới cờ $8 \times 8$ đòi hỏi độ chính xác tuyệt đối ở cấp độ milimet (ô cờ $47.5\text{ mm}$, đáy quân cờ $\sim 25\text{ mm}$, dung sai kẹp $< 5\text{ mm}$). Chính sách nơ-ron liên tục vốn dĩ chứa sai số tích lũy (drift), rung giật do chia chunk hành động, nhạy cảm với ánh sáng và thiếu các ràng buộc hình học cứng. *(Xem phân tích kỹ thuật chi tiết bên dưới: [Mổ Xẻ Kiến Trúc: Nghịch Lý Quan Sát 12D](#-mổ-xẻ-kiến-trúc-nghịch-lý-vector-quan-sát-observationstate-12d))*.
+> 
+> * ⚠️ **Bài học 2: Động Học Cổ Điển Trên Phần Cứng Giá Rẻ Vẫn Gặp Giới Hạn Vật Lý Khắc Nghiệt**:
+>   Dù động học giải tích (`lekiwi_pure_kinematics.mp4`) là công cụ chuẩn xác về mặt toán học, việc chạy động học vòng hở (open-loop kinematics) trên **phần cứng giá rẻ** gặp phải những rào cản vật lý rất lớn. Động cơ servo Feetech STS3215 giá rẻ có độ rơ bánh răng (gear backlash), kết hợp với độ võng đàn hồi của các khớp tay in 3D nhựa PETG/PLA dưới trọng lực. Qua chuỗi động học nối tiếp 6 bậc tự do, sai số dung sai bị khuếch đại tích lũy (tolerance stacking) khiến tay robot thường xuyên bị gắp trượt nếu không có cảm biến lực vòng kín hoặc hệ thống bám hình ảnh mắt-trên-tay (eye-in-hand visual servoing) đắt tiền.
+> 
+> * 🎯 **Quyết Định Chiến Lược: Dừng Lại & Công Khai Bài Học**:
+>   Bởi vì mục tiêu tối thượng ban đầu của dự án là khám phá tính khả thi của Physical-AI / LeRobot chứ không phải tối ưu hóa một cánh tay công nghiệp gắp nhặt truyền thống, việc tiếp tục dồn công sức tinh chỉnh động học cổ điển trên phần cứng giá rẻ sẽ đi chệch khỏi hướng nghiên cứu ban đầu. Khi nhận thấy hướng tiếp cận bằng LeRobot policy không còn khả thi trên nền tảng này, chúng tôi quyết định **không cố chấp phát triển thêm phần động học bù sai số, mà chủ động đóng băng dự án như một bài học thực tế quý giá**. Toàn bộ mã nguồn, file CAD, đường ống ROS 2, tập dữ liệu và checkpoint mô hình được mở hoàn toàn cho cộng đồng nghiên cứu ranh giới giữa điều khiển cổ điển và Physical-AI.
 
 ---
 
@@ -60,23 +77,23 @@
 
 ## 📸 Hình Ảnh Hoạt Động Thực Tế (Showcase)
 
-Dưới đây là các kịch bản hoạt động tiêu biểu của robot LeKiwi. *(Hình ảnh thực tế, video demo và ảnh động GIF đang liên tục được ghi hình và bổ sung vào các khung bên dưới)*.
+Dưới đây là các kịch bản hoạt động tiêu biểu của robot LeKiwi khi vận hành thực tế, thể hiện phần cứng hoàn thiện, thị giác AI biên tốc độ cao, điều phối cờ vua tự hành và thực thi chính sách học bắt chước hành vi.
 
 ### 1. 🤖 Robot Thật & Khung Gầm 3 Bánh Omni
-Robot sở hữu đế holonomic 3 bánh omni linh hoạt có khả năng tịnh tiến đa hướng và xoay tròn tại chỗ, tích hợp bộ não máy tính Raspberry Pi 5 và hệ thống quản lý nguồn pin.
+Robot sở hữu đế holonomic 3 bánh omni linh hoạt có khả năng tịnh tiến đa hướng và xoay tròn tại chỗ, tích hợp bộ não máy tính Raspberry Pi 5, mạch quản lý nguồn pin và cánh tay 6-DoF.
 
 | Toàn Cảnh Robot Thực Tế | Cấu Trúc Khung Gầm & Cánh Tay |
 | :---: | :---: |
-| ![Tổng quan robot LeKiwi](docs/images/showcase/lekiwi_robot_overview.png)<br>*(Vị trí ảnh: Toàn cảnh robot LeKiwi sẵn sàng trên sàn thử nghiệm)* | ![Chi tiết khung gầm và khớp tay](docs/images/showcase/lekiwi_chassis_arm.png)<br>*(Vị trí ảnh: Chi tiết cơ khí đế 3 bánh omni và cụm 6 khớp tay)* |
+| ![Tổng quan robot LeKiwi](docs/images/showcase/lekiwi_robot_overview.png)<br>**Robot Di Động Thao Tác Tự Hành LeKiwi**<br>*(Robot thực tế hoàn thiện trên sàn thử nghiệm tích hợp Raspberry Pi 5, Hailo-8 M.2 NPU HAT+ và camera stereo dual CSI)* | ![Chi tiết khung gầm và khớp tay](docs/images/showcase/lekiwi_chassis_arm.png)<br>**Khung Gầm Omni & Cụm Cánh Tay 6-DoF**<br>*(Đế 3 bánh omni bố trí góc 120° kết hợp cánh tay 6 bậc tự do sử dụng động cơ servo thông minh Feetech STS3215)* |
 
 ---
 
-### 2. ♟️ Đại Kiện Tướng Cờ Vua Tự Hành & Gắp Nhả 6-DoF
+### 2. ♟️ Đại Kiện Tướng Cờ Vua Tự Hành & Ghi Nhận Thao Tác
 LeKiwi tự động phát hiện ô cờ, nhận diện nước đi của người chơi, tính toán nước cờ tối ưu bằng Stockfish 16, và thực hiện quỹ đạo gắp nhả quân cờ với cơ chế kiểm tra vùng vươn tới (reachability).
 
-| Thị Giác Bàn Cờ & FEN | Thao Tác Gắp Nhả Quân Cờ |
+| Thị Giác Bàn Cờ & FEN | Ghi Nhận Thao Tác Cờ Vua |
 | :---: | :---: |
-| ![Nhận diện bàn cờ](docs/images/showcase/chess_vision_evaluation.png)<br>*(Vị trí ảnh: Nhận diện góc bàn cờ và chuỗi trạng thái FEN qua YOLO)* | ![Gắp nhả quân cờ](docs/images/showcase/chess_piece_manipulation.png)<br>*(Vị trí ảnh: Kẹp tay robot gắp và di chuyển quân cờ chuẩn xác)* |
+| <video src="docs/images/showcase/hailo_yolo_detection.mp4" width="100%" controls playsinline></video><br>**Thị Giác Bàn Cờ (Hailo YOLO)**<br>*(Định vị ô cờ và nhận diện quân cờ thời gian thực tăng tốc bằng NPU Hailo-8 phục vụ cập nhật trạng thái FEN)* | <video src="docs/images/showcase/chess_manipulation_record.mp4" width="100%" controls playsinline></video><br>**Ghi Nhận Thao Tác Cờ Vua (Chess Manipulation Record)**<br>*(Thực thi gắp nhả quân cờ và ghi nhận tập dữ liệu thao tác mẫu thông qua `chess_episode_recorder`)* |
 
 ---
 
@@ -85,16 +102,143 @@ LeKiwi tự động phát hiện ô cờ, nhận diện nước đi của ngư�
 
 | Luồng Xử Lý Camera Stereo | Nhận Diện Bằng NPU Hailo |
 | :---: | :---: |
-| ![Luồng camera stereo](docs/images/showcase/stereo_camera_stream.png)<br>*(Vị trí ảnh: Luồng ảnh stereo hai mắt được nắn thẳng quang học)* | ![Bounding box từ Hailo](docs/images/showcase/hailo_yolo_detection.png)<br>*(Vị trí ảnh: Khung nhận diện vật thể YOLO thời gian thực ở 30 FPS)* |
+| <video src="docs/images/showcase/hailo_yolo_detection.mp4" width="100%" controls playsinline></video><br>**Luồng Xử Lý Camera Stereo**<br>*(Hai camera CSI đồng bộ phần cứng cung cấp luồng ảnh nắn thẳng quang học phục vụ cảm nhận không gian 3D)* | <video src="docs/images/showcase/hailo_yolo_detection.mp4" width="100%" controls playsinline></video><br>**Luồng Suy Luận NPU Hailo**<br>*(Mạng nơ-ron YOLO chạy ở tốc độ ổn định 30+ FPS với tải CPU Raspberry Pi 5 dưới 15%)* |
 
 ---
 
-### 4. 🦾 Điều Khiển Từ Xa & Thu Thập Dữ Liệu Physical-AI
-Thu thập các episode mẫu (demonstrations) thông qua cánh tay Leader Zhongli / uArm hoặc tay cầm Gamepad, ghi nhận rosbag MCAP không nén và chuyển đổi mượt mà sang định dạng Hugging Face LeRobot.
+### 4. 🦾 Động Học Thuần Túy Đối Chiếu Triển Khai Physical-AI: Bài Học Thực Nghiệm
+Thực thi quỹ đạo chuyển động mượt mà đa khớp thông qua mô hình động học giải tích đối chiếu với vòng lặp suy luận chính sách học máy thực nghiệm từ Hugging Face LeRobot, mang lại cái nhìn trực quan về giới hạn phần cứng giá rẻ của điều khiển cổ điển và sai lệch của mô hình học bắt chước.
 
-| Cánh Tay Điều Khiển Teleop | Triển Khai Chính Sách AI (Policy) |
+| 🦾 Động Học Giải Tích (Giới Hạn Phần Cứng Giá Rẻ) | 🧠 Triển Khai Chính Sách LeRobot (Sai Lệch Chính Sách) |
 | :---: | :---: |
-| ![Dạy robot bằng cánh tay leader](docs/images/showcase/teleop_leader_arm.png)<br>*(Vị trí ảnh: Người dạy thao tác cho robot bằng cánh tay đối ứng)* | ![Chính sách AI tự động chạy](docs/images/showcase/lerobot_inference_rollout.png)<br>*(Vị trí ảnh: Robot tự động lặp lại động tác học được từ mô hình AI)* |
+| <video src="docs/images/showcase/lekiwi_pure_kinematics.mp4" width="100%" controls playsinline></video><br>**Điều Khiển Động Học Giải Tích 6-DoF**<br>*(Động học nghịch dạng đóng giải tích & đường cong quintic $C^2$; quỹ đạo mượt mà nhưng chịu ảnh hưởng bởi độ rơ bánh răng servo và độ võng nhựa in 3D gây gắp trượt nếu không có thị giác phản hồi)* | <video src="docs/images/showcase/lerobot_inference_rollout.mp4" width="100%" controls playsinline></video><br>**Triển Khai Chính Sách LeRobot (SmolVLA)**<br>*(Suy luận mạng nơ-ron SmolVLA vòng lặp kín thể hiện khả năng stream liên tục, nhưng bộc lộ trôi dạt không gian, rung lắc chia chunk và thiếu ràng buộc không gian cho bài toán lưới)* |
+
+> [!TIP]
+> **Tài Nguyên Physical-AI Mở Để Nghiên Cứu & Đối Chuẩn (Benchmarking):**
+> * 🧠 **Checkpoint Trọng Số Mô Hình**: [Hugging Face `DuyKhongCay/lekiwi_chess_smolvla`](https://huggingface.co/DuyKhongCay/lekiwi_chess_smolvla) — Trọng số Vision-Language-Action huấn luyện theo chuẩn LeRobot v3.0.
+> * 📦 **Tập Dữ Liệu Biểu Diễn Mẫu**: [Hugging Face `datasets/DuyKhongCay/lekiwi_chess_v7`](https://huggingface.co/datasets/DuyKhongCay/lekiwi_chess_v7) — Tập dữ liệu đa góc quay ghi từ rosbag MCAP phục vụ nghiên cứu Imitation Learning.
+> * 📓 **Notebook Huấn Luyện Cloud**: [`notebooks/lerobot_smolvla_training_kaggle.ipynb`](notebooks/lerobot_smolvla_training_kaggle.ipynb) — Quy trình tinh chỉnh mô hình phân tán chạy trên Kaggle (2x Tesla T4 GPUs) tích hợp plugin bơm nhiễu vật lý `chess_goal_noise`.
+
+---
+
+## 🔬 Mổ Xẻ Kiến Trúc: Nghịch Lý Vector Quan Sát (observation.state) 12D
+
+Một trong những giá trị cốt lõi của kỹ thuật chế tạo robot trung thực là không chỉ ghi nhận những gì chạy được, mà còn phân tích rành mạch các nguyên nhân toán học và cấu trúc dẫn đến thất bại. Phần này mổ xẻ toàn diện kiến trúc đường ống Physical-AI xuyên suốt qua [chess_rosbag_to_lerobot](file:///home/duykhongcay/lerobot_ws/lekiwi_ros2/chess_rosbag_to_lerobot) và [lekiwi_inference](file:///home/duykhongcay/lerobot_ws/lekiwi_ros2/lekiwi_inference)—đặc biệt làm rõ vì sao việc cưỡng ép mở rộng vector trạng thái bản thể từ 6D lên **12D Dynamic Relative Delta** lại là một sai lầm về mặt nguyên lý.
+
+### 1. Đường Ống Dữ Liệu & Vòng Đời Chính Sách
+
+Quy trình huấn luyện và suy luận thực nghiệm hoạt động qua 4 mắt xích liên kết chặt chẽ:
+
+```
+[ ROS 2 Bags (MCAP) ] 
+       │  (Multi-camera JPEG, 50 Hz /joint_states, cây /tf động, trạng thái FSM)
+       ▼
+[ chess_rosbag_to_lerobot ]
+       │  • Bộ đồng bộ nhân quả Anti-Future-Leakage As-Of (xung chuẩn 25 Hz)
+       │  • Tái tạo TF ngoại tuyến (Tính toán FK base_footprint -> gripperframe)
+       │  • Lắp ghép 12D Dynamic Relative Delta: [q_1..6, ee_xyz, delta_xyz]
+       ▼
+[ LeRobot Dataset v3.0 (Hugging Face) ]
+       │  • Bảng Apache Parquet chia chunk + Video MP4 AV1/H.264 đa góc nhìn
+       ▼
+[ Huấn Luyện Tinh Chỉnh SmolVLA ]
+       │  • Sửa lớp chiếu đầu vào: W_state (R^12 -> R^Hidden)
+       ▼
+[ lekiwi_inference (Async ROS 2 Client) ]
+       │  • Client giao vận nhị phân ZeroMQ (1 Mbps)
+       │  • Bộ lọc vùng chết mềm -> Hàng đợi RTC -> Làm mượt JointCommandSmoother
+       ▼
+[ Bus Phần Cứng 9x Feetech STS3215 ]
+```
+
+1. **Ghi Nhận Dữ Liệu Biểu Diễn (`chess_episode_recorder`)**: Thu thập luồng video đa góc nhìn (`usb_wrist` 25 Hz, `usb_side` 30 Hz, `overhead` 25 Hz), góc khớp 50 Hz và cây tọa độ `/tf`.
+2. **Chuyển Đổi Tập Dữ Liệu (`chess_rosbag_to_lerobot`)**:
+   - **Bộ đồng bộ Anti-Future-Leakage**: Khóa nhịp theo camera cổ tay ($t_{\text{sample}} \le t_{\text{ref}}$) nhằm ngăn chặn triệt để hiện tượng rò rỉ tương lai làm hỏng tính nhân quả.
+   - **Tái tạo động học thuận (`TfReplayer`)**: Trích xuất tọa độ đầu gắp $\mathbf{p}_{\text{ee}} = (x_{\text{ee}}, y_{\text{ee}}, z_{\text{ee}})^T$ trong hệ quy chiếu `base_footprint`.
+   - **Lắp ghép quan sát 12D**: Ghép 6 góc khớp, 3D tọa độ TCP và 3D vector độ lệch tới mục tiêu của pha nhiệm vụ thành một vector duy nhất.
+3. **Huấn Luyện Mô Hình**: Tinh chỉnh trọng số SmolVLA trên tập dữ liệu [`DuyKhongCay/lekiwi_chess_v7`](https://huggingface.co/datasets/DuyKhongCay/lekiwi_chess_v7) thông qua notebook đám mây ([`lerobot_smolvla_training_kaggle.ipynb`](notebooks/lerobot_smolvla_training_kaggle.ipynb)) trên cụm 2x Tesla T4 GPUs với cơ chế bơm nhiễu vật lý tự tạo (`chess_goal_noise`).
+4. **Vận Hành Vòng Kín Trên Robot Thật (`lekiwi_inference`)**: Node `AsyncRos2ClientNode` liên tục tính toán vector 12D tại thời gian thực, gửi qua ZeroMQ tới server mô hình và làm mượt góc khớp trả về bằng `JointCommandSmoother`.
+
+---
+
+### 2. Sự Khác Biệt: Trạng Thái 6D Gốc vs 12D Tự Chế
+
+Trong các mô hình thao tác robot chuẩn mực (như cấu hình SO-100 mặc định của LeRobot, OpenVLA, ACT), vector trạng thái bản thể nghiêm ngặt chỉ có **6 chiều**:
+
+$$\mathbf{s}_{\text{standard}} = \begin{bmatrix} q_1 & q_2 & q_3 & q_4 & q_5 & q_6 \end{bmatrix}^T \in \mathbb{R}^6$$
+
+Dưới mô hình này, mạng nơ-ron hoạt động đúng nghĩa là một chính sách **Vision-Language-Action (VLA)**: bộ mã hóa thị giác phân tích điểm ảnh từ camera để xác định vị trí quân cờ và ô đích, mô hình ngôn ngữ hiểu câu lệnh (`"Move white pawn to e4"`), và cơ chế cross-attention tự ánh xạ đặc trưng không gian sang các góc quay khớp.
+
+Để đối phó với sự mập mờ tọa độ trên lưới cờ chật hẹp ($47.5\text{ mm}$), chúng ta đã can thiệp tạo ra vector **12D Dynamic Relative Delta**:
+
+$$\mathbf{s}_{\text{12D}} = \begin{bmatrix} \underbrace{q_1, \dots, q_6}_{\text{6 Góc Khớp Tay (rad)}} & \underbrace{x_{\text{ee}}, y_{\text{ee}}, z_{\text{ee}}}_{\text{Tọa Độ Đầu Gắp (m)}} & \underbrace{\Delta x, \Delta y, \Delta z}_{\text{Vector Lệch Đích (m)}} \end{bmatrix}^T \in \mathbb{R}^{12}$$
+
+trong đó $\boldsymbol{\Delta}_{\text{xyz}} = \mathbf{p}_{\text{goal}} - \mathbf{p}_{\text{ee}}$.
+
+**Ý đồ ban đầu**: Chúng ta muốn "mớm mồi" vector sai lệch cho mạng nơ-ron, kỳ vọng rằng việc chỉ rõ khoảng cách tới đích sẽ giúp mô hình hội tụ nhanh hơn và hoạt động giống như một bộ điều khiển bám sai số (visual-servoing / feedback controller) đưa $\boldsymbol{\Delta} \to \mathbf{0}$.
+
+---
+
+### 3. Năm Hậu Quả Chí Mạng: Vì Sao Kiến Trúc 12D Lại Sai?
+
+Việc nhồi `ee_*` và `delta_*` vào vector trạng thái đã tạo ra những tác dụng phụ có tính phá hoại đối với mô hình học sâu:
+
+#### ❌ 1. Hiện Tượng Shortcut Learning & Triệt Tiêu Thị Giác (Mạng "Ăn Gian")
+Mạng nơ-ron luôn tối ưu theo con đường có gradient dốc nhất và dễ nhất. Việc giải mã tọa độ không gian 3D từ 3 luồng ảnh phân giải cao ($384 \times 384 \times 3$) là bài toán cực kỳ phức tạp. Trong khi đó, vector $\boldsymbol{\Delta}_{\text{xyz}}$ lại có mối tương quan tuyến tính trực tiếp với hành động:
+- $\Delta x > 0 \implies$ duỗi khớp vai/khuỷu tới trước.
+- $\Delta z < 0 \implies$ hạ cánh tay xuống.
+
+Kết quả là trọng số attention sụp đổ: **mạng nơ-ron hoàn toàn bỏ qua hình ảnh camera và câu lệnh văn bản**. Mạng VLA hơn 800 triệu tham số bị suy biến thành một bộ tính động học nghịch (IK) xấp xỉ đầy nhiễu.
+
+#### ❌ 2. Phá Hủy Trọng Số Pretrained Đã Học
+SmolVLA được tiền huấn luyện trên hàng triệu quỹ đạo thao tác với lớp chiếu đầu vào được khớp kích thước 6D ($W_{\text{state}} \in \mathbb{R}^{D \times 6}$). Khi cưỡng ép mở rộng lên $\mathbb{R}^{D \times 12}$, hình dạng ma trận bị vỡ, bắt buộc phải khởi tạo lại ngẫu nhiên lớp này. Điều này xóa sạch toàn bộ hiểu biết về không gian khớp mà mô hình đã tích lũy hàng ngàn giờ GPU, buộc mạng phải học lại biểu diễn trạng thái từ đầu chỉ với tập dữ liệu vài chục episode cờ vua ít ỏi.
+
+#### ❌ 3. Dịch Chuyển Phân Phối (Covariate Shift) & Dao Động Rung Giật (Hunting Loop)
+* **Lúc Huấn Luyện (Biểu Diễn)**: Dữ liệu được ghi từ các quỹ đạo mượt mà lý tưởng, trong đó $\boldsymbol{\Delta}_{\text{xyz}}$ giảm đều đặn từ giá trị ban đầu về $0$.
+* **Lúc Chạy Thực Tế Trên Robot Thật**: Động cơ servo STS3215 giá rẻ có độ rơ bánh răng, và các khớp in 3D bị võng đàn hồi dưới trọng lực. Forward Kinematics ước tính sai lệch tọa độ thực của đầu gắp. Chỉ cần cánh tay lệch $3\text{--}5\text{ mm}$, bộ số $(\mathbf{q}, \mathbf{p}_{\text{ee}}, \boldsymbol{\Delta})$ lập tức rơi vào vùng **ngoài phân phối (Out-of-Distribution - OOD)**.
+* **Hệ quả**: Khi đầu gắp tiến sát quân cờ ($\boldsymbol{\Delta} \to \mathbf{0}$), mạng nơ-ron bắt đầu dự đoán chập chờn, rơi vào trạng thái dao động chu kỳ giới hạn (limit-cycle oscillation / hunting) quanh mục tiêu: vươn quá đà rồi giật lùi, cuối cùng kẹp trượt quân cờ.
+  > *Minh chứng ngay trong mã nguồn*: Tại [`async_ros2_client_node.py` L750-L754](file:///home/duykhongcay/lerobot_ws/lekiwi_ros2/lekiwi_inference/lekiwi_inference/async_ros2_client_node.py#L750-L754), chúng ta đã phải chế tạo hàm `apply_soft_deadband(delta_xyz, ...)` để cố gắng dập tắt hiện tượng rung lắc quanh điểm đích này—một bản vá chữa triệu chứng cho một sai lầm ở cấp kiến trúc.
+
+#### ❌ 4. Bước Nhảy Gián Đoạn (Step Discontinuity) Giữa Các Pha Nhiệm Vụ
+Một nước đi cờ gồm nhiều pha nối tiếp: `Tiếp cận` $\to$ `Kẹp` $\to$ `Nhấc` $\to$ `Di chuyển` $\to$ `Hạ` $\to$ `Thả`.
+Khi bộ điều phối FSM chuyển pha từ `Pick` sang `Place`, tọa độ mục tiêu $\mathbf{p}_{\text{goal}}$ lập tức nhảy từ ô xuất phát sang ô đích. Khi đó, vector $\boldsymbol{\Delta}_{\text{xyz}}$ bị **nhảy bậc tức thời** (từ $0$ nhảy vọt lên $15\text{--}25\text{ cm}$ chỉ trong đúng một chu kỳ $40\text{ ms}$). Mạng nơ-ron học chuyển động liên tục không thể tiếp nhận cú sốc gián đoạn này, dẫn đến hiện tượng văng giật khớp cực kỳ nguy hiểm cho phần cứng.
+> *Minh chứng ngay trong mã nguồn*: Tại [`async_ros2_client_node.py` L744-L746](file:///home/duykhongcay/lerobot_ws/lekiwi_ros2/lekiwi_inference/lekiwi_inference/async_ros2_client_node.py#L744-L746), chúng ta đã buộc phải viết thêm lệnh cưỡng bức xóa sạch hàng đợi hành động (`self.client.flush_action_queue(keep_steps=2)`) và `notify_phase_transition()` để ngăn robot bị giật mạnh khi đổi pha.
+
+#### ❌ 5. Xung Đột Thứ Nguyên & Chuẩn Hóa Dữ Liệu
+Việc nhồi nhét các đại lượng vật lý hoàn toàn khác biệt vào chung một mảng phẳng gây ra bất ổn định số học khi chuẩn hóa:
+- 6 chiều đầu: **Góc quay (Radian)**, phạm vi $[-\pi, \pi]$.
+- 3 chiều giữa: **Tọa độ tuyệt đối (Mét)**, phạm vi $[0.05, 0.35]\text{ m}$.
+- 3 chiều cuối: **Sai số mục tiêu (Mét)**, triệt tiêu dần $[0.25 \to 0.00]\text{ m}$.
+Trong quá trình xử lý tập dữ liệu, LeRobot chuẩn hóa dữ liệu theo trung bình và độ lệch chuẩn từng kênh (`stats.json`). Khi $\boldsymbol{\Delta} \to \mathbf{0}$, phương sai của kênh delta triệt tiêu về gần 0; việc chia cho phương sai siêu nhỏ này khiến **nhiễu đo lường của encoder và rung lắc cơ khí bị khuếch đại lên hàng chục lần**, bơm thẳng vào các lớp nơ-ron đầu tiên.
+
+---
+
+### 4. Nghịch Lý Kiến Trúc & Kết Luận Rút Ra
+
+```
+                  ┌──────────────────────────────────────────────┐
+                  │      Hệ Thống Đã Biết Cả p_ee Và p_goal      │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                 ┌───────────────────────┴───────────────────────┐
+                 ▼                                               ▼
+   [ Hướng Động Học Cổ Điển ]                     [ Hướng Chính Sách VLA 12D ]
+   • IK Giải Tích + Đường Cong Bậc 5 (C^2)        • Mạng Transformer Hơn 800M Tham Số
+   • Độ trễ: < 0.1 ms                             • Độ trễ: 50-100 ms qua ZeroMQ
+   • Độ lặp lại: Xác định 100%                    • Trôi dạt ngẫu nhiên & rung lắc hunting
+   • Tải tính toán: 0 W CPU overhead              • Tải tính toán: Nặng nề trên GPU
+```
+
+Nghịch lý cốt lõi của kiến trúc quan sát 12D có thể tóm gọn lại bằng một câu:
+> **"Dùng một mạng nơ-ron 800 triệu tham số chỉ để làm một phép tính trừ vector."**
+
+Nếu một hệ thống robot đã có thể tính được $\mathbf{p}_{\text{ee}}$ (qua Forward Kinematics) và đã xác định chính xác $\mathbf{p}_{\text{goal}}$ (qua Stockfish và thị giác AprilTag), thì mô hình động học nghịch giải tích dạng đóng kết hợp đường cong bậc năm ($C^2$ quintic splines) giải quyết bài toán đưa đầu gắp tới đích trong **dưới $0.1\text{ ms}$, không có ảo giác và không có sai số trôi dạt ngẫu nhiên**.
+
+Bằng việc ép một mô hình học bắt chước phải hành động dựa trên vector sai số không gian tường minh, chúng ta đã tạo ra một hệ thống mang **nhược điểm của cả hai thế giới**:
+1. Vẫn bị ảnh hưởng nặng nề bởi sai số cơ khí, rơ bánh răng và độ võng nhựa của phần cứng giá rẻ.
+2. Vừa phải gánh thêm độ trễ mạng, hiện tượng rung giật chunking và tính bất định ngẫu nhiên của mô hình nơ-ron khổng lồ.
+
+Nhận thức sâu sắc này là nền tảng cho quyết định chủ động dừng phát triển chính sách tại cột mốc này—giữ nguyên LeKiwi như một bài học thực nghiệm trung thực, sâu sắc và đầy đủ tư liệu nhất cho cộng đồng Robotics và Physical-AI.
 
 ---
 

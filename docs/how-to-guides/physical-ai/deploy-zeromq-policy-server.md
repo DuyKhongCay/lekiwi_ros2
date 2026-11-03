@@ -90,8 +90,15 @@ On the Raspberry Pi 5 onboard the robot:
 
 ```bash
 source ~/lekiwi_ws/install/setup.bash
-ros2 launch lekiwi_inference async_inference.launch.py \
-    server_address:="192.168.1.50:8090"
+
+# Option A: Full robot bringup with LeRobot policy streaming
+ros2 launch lekiwi_bringup robot.launch.py \
+    hardware_type:=real \
+    manipulation:=policy
+
+# Option B: Run inference client node directly
+ros2 run lekiwi_inference async_ros2_client_node --ros-args \
+    -p server_address:="192.168.1.50:8090"
 ```
 
 ---
