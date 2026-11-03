@@ -84,7 +84,7 @@ Robot sở hữu đế holonomic 3 bánh omni linh hoạt có khả năng tịnh
 
 | Toàn Cảnh Robot Thực Tế | Cấu Trúc Khung Gầm & Cánh Tay |
 | :---: | :---: |
-| ![Tổng quan robot LeKiwi](docs/images/showcase/lekiwi_robot_overview.png)<br>**Robot Di Động Thao Tác Tự Hành LeKiwi**<br>*(Robot thực tế hoàn thiện trên sàn thử nghiệm tích hợp Raspberry Pi 5, Hailo-8 M.2 NPU HAT+ và camera stereo dual CSI)* | ![Chi tiết khung gầm và khớp tay](docs/images/showcase/lekiwi_chassis_arm.png)<br>**Khung Gầm Omni & Cụm Cánh Tay 6-DoF**<br>*(Đế 3 bánh omni bố trí góc 120° kết hợp cánh tay 6 bậc tự do sử dụng động cơ servo thông minh Feetech STS3215)* |
+| <img src="./docs/images/showcase/lekiwi_robot_overview.png" width="100%" alt="Robot Di Động Thao Tác Tự Hành LeKiwi" /><br>**Robot Di Động Thao Tác Tự Hành LeKiwi**<br>*(Robot thực tế hoàn thiện trên sàn thử nghiệm tích hợp Raspberry Pi 5, Hailo-8 M.2 NPU HAT+ và camera stereo dual CSI)* | <img src="./docs/images/showcase/lekiwi_chassis_arm.png" width="100%" alt="Khung Gầm Omni & Cụm Cánh Tay 6-DoF" /><br>**Khung Gầm Omni & Cụm Cánh Tay 6-DoF**<br>*(Đế 3 bánh omni bố trí góc 120° kết hợp cánh tay 6 bậc tự do sử dụng động cơ servo thông minh Feetech STS3215)* |
 
 ---
 
@@ -93,7 +93,7 @@ LeKiwi tự động phát hiện ô cờ, nhận diện nước đi của ngư�
 
 | Thị Giác Bàn Cờ & FEN | Ghi Nhận Thao Tác Cờ Vua |
 | :---: | :---: |
-| <video src="docs/images/showcase/hailo_yolo_detection.mp4" width="100%" controls playsinline></video><br>**Thị Giác Bàn Cờ (Hailo YOLO)**<br>*(Định vị ô cờ và nhận diện quân cờ thời gian thực tăng tốc bằng NPU Hailo-8 phục vụ cập nhật trạng thái FEN)* | <video src="docs/images/showcase/chess_manipulation_record.mp4" width="100%" controls playsinline></video><br>**Ghi Nhận Thao Tác Cờ Vua (Chess Manipulation Record)**<br>*(Thực thi gắp nhả quân cờ và ghi nhận tập dữ liệu thao tác mẫu thông qua `chess_episode_recorder`)* |
+| <img src="./docs/images/showcase/hailo_yolo_detection.gif" width="100%" alt="Thị Giác Bàn Cờ (Hailo YOLO)" /><br>**Thị Giác Bàn Cờ (Hailo YOLO)**<br>*(Định vị ô cờ và nhận diện quân cờ thời gian thực tăng tốc bằng NPU Hailo-8 phục vụ cập nhật trạng thái FEN)* | <img src="./docs/images/showcase/chess_manipulation_record.gif" width="100%" alt="Ghi Nhận Thao Tác Cờ Vua (Chess Manipulation Record)" /><br>**Ghi Nhận Thao Tác Cờ Vua (Chess Manipulation Record)**<br>*(Thực thi gắp nhả quân cờ và ghi nhận tập dữ liệu thao tác mẫu thông qua `chess_episode_recorder`)* |
 
 ---
 
@@ -102,7 +102,7 @@ LeKiwi tự động phát hiện ô cờ, nhận diện nước đi của ngư�
 
 | Luồng Xử Lý Camera Stereo | Nhận Diện Bằng NPU Hailo |
 | :---: | :---: |
-| <video src="docs/images/showcase/hailo_yolo_detection.mp4" width="100%" controls playsinline></video><br>**Luồng Xử Lý Camera Stereo**<br>*(Hai camera CSI đồng bộ phần cứng cung cấp luồng ảnh nắn thẳng quang học phục vụ cảm nhận không gian 3D)* | <video src="docs/images/showcase/hailo_yolo_detection.mp4" width="100%" controls playsinline></video><br>**Luồng Suy Luận NPU Hailo**<br>*(Mạng nơ-ron YOLO chạy ở tốc độ ổn định 30+ FPS với tải CPU Raspberry Pi 5 dưới 15%)* |
+| <img src="./docs/images/showcase/hailo_yolo_detection.gif" width="100%" alt="Luồng Xử Lý Camera Stereo" /><br>**Luồng Xử Lý Camera Stereo**<br>*(Hai camera CSI đồng bộ phần cứng cung cấp luồng ảnh nắn thẳng quang học phục vụ cảm nhận không gian 3D)* | <img src="./docs/images/showcase/hailo_yolo_detection.gif" width="100%" alt="Luồng Suy Luận NPU Hailo" /><br>**Luồng Suy Luận NPU Hailo**<br>*(Mạng nơ-ron YOLO chạy ở tốc độ ổn định 30+ FPS với tải CPU Raspberry Pi 5 dưới 15%)* |
 
 ---
 
@@ -111,7 +111,7 @@ Thực thi quỹ đạo chuyển động mượt mà đa khớp thông qua mô h
 
 | 🦾 Động Học Giải Tích (Giới Hạn Phần Cứng Giá Rẻ) | 🧠 Triển Khai Chính Sách LeRobot (Sai Lệch Chính Sách) |
 | :---: | :---: |
-| <video src="docs/images/showcase/lekiwi_pure_kinematics.mp4" width="100%" controls playsinline></video><br>**Điều Khiển Động Học Giải Tích 6-DoF**<br>*(Động học nghịch dạng đóng giải tích & đường cong quintic $C^2$; quỹ đạo mượt mà nhưng chịu ảnh hưởng bởi độ rơ bánh răng servo và độ võng nhựa in 3D gây gắp trượt nếu không có thị giác phản hồi)* | <video src="docs/images/showcase/lerobot_inference_rollout.mp4" width="100%" controls playsinline></video><br>**Triển Khai Chính Sách LeRobot (SmolVLA)**<br>*(Suy luận mạng nơ-ron SmolVLA vòng lặp kín thể hiện khả năng stream liên tục, nhưng bộc lộ trôi dạt không gian, rung lắc chia chunk và thiếu ràng buộc không gian cho bài toán lưới)* |
+| <img src="./docs/images/showcase/lekiwi_pure_kinematics.gif" width="100%" alt="Điều Khiển Động Học Giải Tích 6-DoF" /><br>**Điều Khiển Động Học Giải Tích 6-DoF**<br>*(Động học nghịch dạng đóng giải tích & đường cong quintic $C^2$; quỹ đạo mượt mà nhưng chịu ảnh hưởng bởi độ rơ bánh răng servo và độ võng nhựa in 3D gây gắp trượt nếu không có thị giác phản hồi)* | <img src="./docs/images/showcase/lerobot_inference_rollout.gif" width="100%" alt="Triển Khai Chính Sách LeRobot (SmolVLA)" /><br>**Triển Khai Chính Sách LeRobot (SmolVLA)**<br>*(Suy luận mạng nơ-ron SmolVLA vòng lặp kín thể hiện khả năng stream liên tục, nhưng bộc lộ trôi dạt không gian, rung lắc chia chunk và thiếu ràng buộc không gian cho bài toán lưới)* |
 
 > [!TIP]
 > **Tài Nguyên Physical-AI Mở Để Nghiên Cứu & Đối Chuẩn (Benchmarking):**

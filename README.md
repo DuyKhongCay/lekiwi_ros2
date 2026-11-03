@@ -84,7 +84,7 @@ The platform features an agile 3-wheel holonomic base capable of omnidirectional
 
 | Robot Overview | Hardware Architecture |
 | :---: | :---: |
-| ![LeKiwi Physical Robot Overview](docs/images/showcase/lekiwi_robot_overview.png)<br>**LeKiwi Autonomous Mobile Manipulator**<br>*(Physical robot standing on the arena with Raspberry Pi 5, Hailo-8 M.2 NPU HAT+, and dual CSI cameras)* | ![Chassis & Arm Assembly](docs/images/showcase/lekiwi_chassis_arm.png)<br>**Chassis & 6-DoF Arm Assembly**<br>*(Holonomic 3-wheel omni base with 120° configuration and 6-DoF serial arm driven by Feetech STS3215 servos)* |
+| <img src="./docs/images/showcase/lekiwi_robot_overview.png" width="100%" alt="LeKiwi Physical Robot Overview" /><br>**LeKiwi Autonomous Mobile Manipulator**<br>*(Physical robot standing on the arena with Raspberry Pi 5, Hailo-8 M.2 NPU HAT+, and dual CSI cameras)* | <img src="./docs/images/showcase/lekiwi_chassis_arm.png" width="100%" alt="Chassis & Arm Assembly" /><br>**Chassis & 6-DoF Arm Assembly**<br>*(Holonomic 3-wheel omni base with 120° configuration and 6-DoF serial arm driven by Feetech STS3215 servos)* |
 
 ---
 
@@ -93,7 +93,7 @@ LeKiwi detects chessboard squares, identifies opponent piece moves, calculates o
 
 | Visual Board Evaluation | Chess Manipulation Record |
 | :---: | :---: |
-| <video src="docs/images/showcase/hailo_yolo_detection.mp4" width="100%" controls playsinline></video><br>**Visual Board Evaluation (Hailo YOLO)**<br>*(Real-time square localization and piece detection accelerated on Hailo-8 NPU for live FEN board tracking)* | <video src="docs/images/showcase/chess_manipulation_record.mp4" width="100%" controls playsinline></video><br>**Chess Manipulation Record**<br>*(Physical chess piece manipulation and demonstration episode recording via `chess_episode_recorder`)* |
+| <img src="./docs/images/showcase/hailo_yolo_detection.gif" width="100%" alt="Visual Board Evaluation (Hailo YOLO)" /><br>**Visual Board Evaluation (Hailo YOLO)**<br>*(Real-time square localization and piece detection accelerated on Hailo-8 NPU for live FEN board tracking)* | <img src="./docs/images/showcase/chess_manipulation_record.gif" width="100%" alt="Chess Manipulation Record" /><br>**Chess Manipulation Record**<br>*(Physical chess piece manipulation and demonstration episode recording via `chess_episode_recorder`)* |
 
 ---
 
@@ -102,7 +102,7 @@ Equipped with dual IMX CSI cameras and the 26 TOPS Hailo-8 NPU, LeKiwi processes
 
 | Stereo Camera Pipeline | Hailo NPU Inference Stream |
 | :---: | :---: |
-| <video src="docs/images/showcase/hailo_yolo_detection.mp4" width="100%" controls playsinline></video><br>**Stereo Camera Pipeline**<br>*(Hardware-synchronized dual IMX CSI video streams delivering optical rectification and spatial perception)* | <video src="docs/images/showcase/hailo_yolo_detection.mp4" width="100%" controls playsinline></video><br>**Hailo NPU Inference Stream**<br>*(High-throughput YOLO neural inference executing at sustained 30+ FPS with <15% Raspberry Pi 5 CPU overhead)* |
+| <img src="./docs/images/showcase/hailo_yolo_detection.gif" width="100%" alt="Stereo Camera Pipeline" /><br>**Stereo Camera Pipeline**<br>*(Hardware-synchronized dual IMX CSI video streams delivering optical rectification and spatial perception)* | <img src="./docs/images/showcase/hailo_yolo_detection.gif" width="100%" alt="Hailo NPU Inference Stream" /><br>**Hailo NPU Inference Stream**<br>*(High-throughput YOLO neural inference executing at sustained 30+ FPS with <15% Raspberry Pi 5 CPU overhead)* |
 
 ---
 
@@ -111,7 +111,7 @@ Execute smooth multi-axis trajectory motions via analytical kinematics alongside
 
 | 🦾 Analytical Kinematics (Hardware Tolerance Limits) | 🧠 LeRobot Policy Serving (Imitation Learning Drift) |
 | :---: | :---: |
-| <video src="docs/images/showcase/lekiwi_pure_kinematics.mp4" width="100%" controls playsinline></video><br>**6-DoF Analytical Kinematics**<br>*(Mathematically deterministic closed-form IK & $C^2$ quintic splines; smooth trajectories but subject to servo gear backlash and 3D-printed flex causing grasp misses without closed-loop visual servoing)* | <video src="docs/images/showcase/lerobot_inference_rollout.mp4" width="100%" controls playsinline></video><br>**LeRobot Policy Serving (SmolVLA)**<br>*(Closed-loop SmolVLA neural rollout demonstrating continuous multi-modal streaming, but suffering from spatial drift, chunking jitter, and lack of discrete spatial constraints on a precision grid)* |
+| <img src="./docs/images/showcase/lekiwi_pure_kinematics.gif" width="100%" alt="6-DoF Analytical Kinematics" /><br>**6-DoF Analytical Kinematics**<br>*(Mathematically deterministic closed-form IK & $C^2$ quintic splines; smooth trajectories but subject to servo gear backlash and 3D-printed flex causing grasp misses without closed-loop visual servoing)* | <img src="./docs/images/showcase/lerobot_inference_rollout.gif" width="100%" alt="LeRobot Policy Serving (SmolVLA)" /><br>**LeRobot Policy Serving (SmolVLA)**<br>*(Closed-loop SmolVLA neural rollout demonstrating continuous multi-modal streaming, but suffering from spatial drift, chunking jitter, and lack of discrete spatial constraints on a precision grid)* |
 
 > [!TIP]
 > **Open Physical-AI Artifacts for Research & Benchmarking:**
